@@ -2,7 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-Capability = Literal["chat", "reasoning", "json", "vision", "tools", "code", "coding", "summarization", "document", "transcription", "speech", "long_context", "fast"]
+Capability = Literal["chat", "reasoning", "json", "vision", "tools", "code", "coding", "summarization", "document", "transcription", "speech", "image_generation", "image_editing", "long_context", "fast"]
 
 @dataclass(frozen=True)
 class ProviderCredential:

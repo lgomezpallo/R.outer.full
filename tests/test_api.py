@@ -46,3 +46,34 @@ def test_health_reports_runtime_metrics():
     assert body["providers"][0]["provider"] == "groq"
     assert body["providers"][0]["health_ok"] is True
     assert body["providers"][0]["latency_ms"] == 120.0
+
+
+def test_catalog_lists_builtin_providers():
+    module.router = Router()
+    client = TestClient(module.app)
+    body = client.get("/catalog").json()
+    ids = {item["id"] for item in body["providers"]}
+    assert "groq" in ids
+    assert "openrouter" in ids
+
+def test_catalog_can_add_provider_without_secret(monkeypatch):
+    module.router = Router()
+    monkeypatch.delenv("ROUTER_SERVICE_TOKEN", raising=False)
+    client = TestClient(module.app)
+    response = client.post("/catalog/providers", json={
+        "id":"exampleai",
+        "aliases":["example ai"],
+        "base_url":"https://example.invalid/v1",
+        "protocol":"openai-compatible",
+        "models":[{
+            "id":"example-model",
+            "capabilities":["chat","json"],
+            "model_class":"standard",
+            "priority":55
+        }]
+    })
+    assert response.status_code == 200
+    catalog = client.get("/catalog").json()["providers"]
+    item = next(provider for provider in catalog if provider["id"] == "exampleai")
+    assert item["models"][0]["declared_capabilities"] == ["chat", "json"]
+    assert "api_key" not in str(item).lower()

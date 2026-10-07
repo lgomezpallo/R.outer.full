@@ -61,6 +61,16 @@ class RouterStore:
                     ON request_metrics(provider_id, model_id, created_at);
                 CREATE INDEX IF NOT EXISTS request_metrics_request_idx
                     ON request_metrics(request_id);
+                CREATE TABLE IF NOT EXISTS provider_runtime (
+                    provider_id TEXT PRIMARY KEY,
+                    success_count INTEGER NOT NULL DEFAULT 0,
+                    failure_count INTEGER NOT NULL DEFAULT 0,
+                    ewma_latency_ms REAL,
+                    cooldown_until REAL NOT NULL DEFAULT 0,
+                    last_error TEXT,
+                    health_ok INTEGER,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
                 CREATE TABLE IF NOT EXISTS app_tokens (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL UNIQUE,
@@ -225,3 +235,49 @@ class RouterStore:
                 "SELECT name,preview,active,last_used_at,created_at FROM app_tokens ORDER BY id"
             ).fetchall()
         return [dict(row) for row in rows]
+
+
+    def save_provider_runtime(self, provider_id: str, state) -> None:
+        health_value = None if state.health_ok is None else (1 if state.health_ok else 0)
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO provider_runtime(
+                    provider_id,success_count,failure_count,ewma_latency_ms,
+                    cooldown_until,last_error,health_ok
+                ) VALUES(?,?,?,?,?,?,?)
+                ON CONFLICT(provider_id) DO UPDATE SET
+                    success_count=excluded.success_count,
+                    failure_count=excluded.failure_count,
+                    ewma_latency_ms=excluded.ewma_latency_ms,
+                    cooldown_until=excluded.cooldown_until,
+                    last_error=excluded.last_error,
+                    health_ok=excluded.health_ok,
+                    updated_at=CURRENT_TIMESTAMP
+                """,
+                (
+                    provider_id,
+                    state.success_count,
+                    state.failure_count,
+                    state.ewma_latency_ms,
+                    state.cooldown_until,
+                    state.last_error,
+                    health_value,
+                ),
+            )
+
+    def load_provider_runtime(self, provider_id: str) -> dict | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT success_count,failure_count,ewma_latency_ms,cooldown_until,last_error,health_ok
+                FROM provider_runtime WHERE provider_id=?
+                """,
+                (provider_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        if result["health_ok"] is not None:
+            result["health_ok"] = bool(result["health_ok"])
+        return result

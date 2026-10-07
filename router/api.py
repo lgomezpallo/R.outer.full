@@ -43,6 +43,9 @@ class ProviderInput(BaseModel):
     name: str = Field(min_length=1)
     api_key: str = Field(min_length=1)
 
+class ProviderTestInput(BaseModel):
+    provider: str
+
 class CatalogModelInput(BaseModel):
     id: str = Field(min_length=1)
     capabilities: list[str] = Field(default_factory=lambda: ["chat"])
@@ -202,6 +205,13 @@ def add_provider(payload: ProviderInput):
         "models": [m.id for m in registered.spec.models],
         "credential_persisted": store.can_persist_secrets,
     }
+
+@app.post("/providers/test", dependencies=[Depends(require_admin)])
+def test_provider(payload: ProviderTestInput):
+    try:
+        return router.test_provider(payload.provider)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 @app.post("/capabilities/probe", dependencies=[Depends(require_admin)])
 def probe_capability(payload: CapabilityProbeInput):

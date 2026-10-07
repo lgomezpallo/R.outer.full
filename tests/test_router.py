@@ -220,3 +220,18 @@ def test_discovered_specialists_are_classified_without_becoming_generic_chat():
     assert infer_discovered_capabilities("my-vision-model") == frozenset({"chat", "vision"})
     assert infer_discovered_capabilities("flux-2-dev") == frozenset({"image_generation", "image_editing"})
     assert infer_discovered_capabilities("prompt-guard-2") == frozenset()
+
+
+class FakeProbeClient(FakeClient):
+    def probe_capability(self, provider, model, capability):
+        return {"status": "verified", "evidence": "fake_probe", "http_status": 200}
+
+def test_provider_wide_capability_audit_records_evidence():
+    router = Router(FakeProbeClient([]), max_retries=0)
+    router.add_provider("Groq", "a", discover=False)
+    result = router.audit_provider_capabilities("groq")
+    assert result["verified"] > 0
+    assert result["unsupported"] == 0
+    assert result["inconclusive"] == 0
+    provider = router.catalog.get("groq")
+    assert any(model.verified_capabilities for model in provider.models)

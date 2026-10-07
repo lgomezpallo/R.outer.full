@@ -99,3 +99,26 @@ def test_model_specific_failure_can_try_another_model_same_provider():
     assert result.provider == "groq"
     assert len(result.attempts) == 2
     assert result.attempts[0].model != result.attempts[1].model
+
+
+def test_success_learns_verified_capabilities():
+    fake = FakeClient(["ok"])
+    router = Router(fake, max_retries=0)
+    router.add_provider("Groq", "a")
+    req = RouteRequest("tarea", required_capabilities=frozenset({"chat", "json"}))
+    result = router.route(req)
+    assert result.ok
+    provider = router.catalog.get("groq")
+    model = next(m for m in provider.models if m.id == result.model)
+    assert {"chat", "json"}.issubset(model.verified_capabilities)
+
+def test_learned_model_metrics_affect_ranking():
+    fake = FakeClient(["ok"])
+    router = Router(fake, max_retries=0)
+    router.add_provider("Groq", "a")
+    provider = router.registry.all()[0]
+    provider.state.model("llama-3.3-70b-versatile").failure_count = 4
+    provider.state.model("openai/gpt-oss-20b").success_count = 4
+    result = router.route(RouteRequest("tarea"))
+    assert result.ok
+    assert result.model == "openai/gpt-oss-20b"

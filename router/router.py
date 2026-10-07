@@ -43,8 +43,16 @@ class Router:
                         retryable = exc.response.status_code in {408, 429, 500, 502, 503, 504}
                     if retryable and attempt_index < self.max_retries:
                         continue
-                    cooldown = 30.0 if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429 else 10.0
+                    provider_wide = isinstance(exc, (httpx.TimeoutException, httpx.TransportError))
+                    cooldown = 0.0
+                    if isinstance(exc, httpx.HTTPStatusError):
+                        status = exc.response.status_code
+                        provider_wide = status in {401, 403, 408, 429, 500, 502, 503, 504}
+                        cooldown = 30.0 if status == 429 else (10.0 if provider_wide else 0.0)
+                    elif provider_wide:
+                        cooldown = 10.0
                     provider.state.mark_failure(error, cooldown)
-                    blocked_providers.add(decision.provider)
+                    if provider_wide:
+                        blocked_providers.add(decision.provider)
                     break
         return RouteResponse(False, None, None, None, attempts, decisions, "all_attempts_failed")

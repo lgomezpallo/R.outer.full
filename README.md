@@ -48,3 +48,17 @@ print(respuesta.text)
 ```
 
 Las claves se pasan en tiempo de ejecución; nunca se guardan en el repositorio.
+
+
+## Servicio HTTP
+
+```bash
+export GROQ_API_KEY='...'
+uvicorn router.api:app --host 0.0.0.0 --port 8010
+```
+
+- `GET /health` — estado y proveedores cargados.
+- `POST /providers` — alta por nombre + API key.
+- `POST /route` — entrada uniforme para las aplicaciones.
+
+También puede ejecutarse con `docker build -t router-ia .`.

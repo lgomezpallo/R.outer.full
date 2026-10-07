@@ -5,11 +5,13 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 from .catalog import ModelSpec, ProviderCatalog, ProviderSpec
 from .router import Router
-from .types import ProviderCredential, RouteRequest
+from .storage import RouterStore
+from .types import RouteRequest
 
-app = FastAPI(title="Router IA", version="1.0.0")
-catalog = ProviderCatalog(storage_path=os.getenv("ROUTER_CATALOG_FILE") or None)
-router = Router(max_retries=int(os.getenv("ROUTER_MAX_RETRIES", "1")), catalog=catalog)
+app = FastAPI(title="Router IA", version="2.0.0")
+catalog = ProviderCatalog(storage_path=os.getenv("ROUTER_CATALOG_FILE") or "router-catalog.json")
+store = RouterStore(path=os.getenv("ROUTER_DB_FILE", "router.db"), master_key=os.getenv("ROUTER_MASTER_KEY"))
+router = Router(max_retries=int(os.getenv("ROUTER_MAX_RETRIES", "1")), catalog=catalog, store=store)
 
 def require_auth(authorization: str | None = Header(default=None)) -> None:
     expected = os.getenv("ROUTER_SERVICE_TOKEN", "").strip()
@@ -38,24 +40,32 @@ class CatalogProviderInput(BaseModel):
     models: list[CatalogModelInput] = []
 
 class RouteInput(BaseModel):
-    task: str = Field(min_length=1, max_length=30000)
+    task: str = Field(min_length=1, max_length=100000)
     context: str = ""
-    requirements: list[str] = []
-    required_capabilities: list[str] = ["chat"]
+    requirements: list[str] = Field(default_factory=list)
+    required_capabilities: list[str] = Field(default_factory=lambda: ["chat"])
     preferred_model_class: str | None = None
     timeout_s: float = 45.0
+    application_name: str = "unknown"
+    decompose: bool | None = None
+    max_subtasks: int = Field(default=8, ge=1, le=12)
 
 @app.on_event("startup")
 def load_environment_providers() -> None:
+    router.load_persisted_providers()
     configured = [
         ("Groq", os.getenv("GROQ_API_KEY")),
         ("OpenRouter", os.getenv("OPENROUTER_API_KEY")),
+        ("NVIDIA", os.getenv("NVIDIA_API_KEY")),
+        ("Mistral", os.getenv("MISTRAL_API_KEY")),
+        ("Cerebras", os.getenv("CEREBRAS_API_KEY")),
+        ("SambaNova", os.getenv("SAMBANOVA_API_KEY")),
     ]
     known = {p.spec.id for p in router.registry.all()}
     for name, key in configured:
         if key and name.lower() not in known:
             try:
-                router.add_provider(name, key)
+                router.add_provider(name, key, persist=store.can_persist_secrets, discover=True)
             except ValueError:
                 pass
 
@@ -122,8 +132,11 @@ def route(payload: RouteInput):
         required_capabilities=frozenset(payload.required_capabilities),
         preferred_model_class=payload.preferred_model_class,
         timeout_s=payload.timeout_s,
+        application_name=payload.application_name,
+        decompose=payload.decompose,
+        max_subtasks=payload.max_subtasks,
     )
-    result = router.route(req)
+    result = router.process(req)
     return {
         "ok": result.ok,
         "text": result.text,
@@ -132,4 +145,5 @@ def route(payload: RouteInput):
         "error": result.error,
         "attempts": [a.__dict__ for a in result.attempts],
         "decisions": [d.__dict__ for d in result.decisions],
+        "orchestration": (result.raw or {}).get("orchestration"),
     }

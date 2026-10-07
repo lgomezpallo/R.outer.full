@@ -1,68 +1,67 @@
 # R.outer.full
 
-Router de IA desacoplado y reutilizable.
+Router de IA común para IAchat, Forja y futuras aplicaciones.
 
-## Objetivo
-Recibir una tarea, seleccionar el proveedor/modelo más conveniente según capacidades y estado real, ejecutar con fallback y devolver un resultado uniforme.
+## Qué hace
 
-## Regla de alta de proveedores
-Para el usuario, agregar un proveedor requiere solamente:
+Recibe una tarea completa, decide si conviene resolverla directamente o descomponerla, ejecuta subtareas con los recursos suficientes de menor costo estratégico, aplica retry/fallback, verifica cuando corresponde y recompone una única respuesta.
 
-- nombre
-- API key
+Las aplicaciones no conocen Groq, OpenRouter, NVIDIA, Mistral, Cerebras, SambaNova ni ningún proveedor concreto.
 
-El Router debe resolver automáticamente el resto cuando el proveedor pueda identificarse:
+## Criterio de costo
 
-- proveedor canónico
-- endpoint
-- protocolo
-- modelos disponibles
-- capacidades
-- límites relevantes
-- health
-- latencia
-- cooldown
-- fallback
+Para este proyecto los proveedores se consideran de costo monetario cero. El costo que optimiza Router es estratégico: rareza, importancia, reemplazabilidad y conveniencia de reservar un recurso.
 
-El nombre funciona como orientación semántica y admite variantes y errores razonables de escritura (por ejemplo, `Groc` -> Groq).
+Entre candidatos saludables y suficientes, usa primero el menos valioso. Los modelos fuertes/escasos quedan para tareas que realmente los necesiten.
 
-## Principios
-- Ninguna aplicación cliente conoce proveedores concretos.
-- Los secretos nunca se guardan en el repositorio.
-- Agregar o cambiar proveedor no debe requerir modificar las aplicaciones consumidoras.
-- La selección debe ser auditable.
-- El Router no divide tareas ni dirige proyectos: sólo selecciona y usa recursos.
+## Arquitectura
 
+- Catálogo proveedor -> múltiples modelos.
+- Capacidades declaradas y evidencia verified / unsupported / inconclusive.
+- Descubrimiento dinámico de /models cuando el proveedor lo permite.
+- Métricas por proveedor/modelo.
+- Estado, cooldown, retries y fallback clasificado.
+- Persistencia local sin servicios pagos.
+- Credenciales opcionalmente cifradas con AES-GCM.
+- Orquestación adaptativa inspirada en 5+1 x 2.
+- Contrato nativo /route.
+- Fachada compatible con OpenAI /v1/chat/completions.
 
-## Estado v1
-La implementación incluye selección por capacidades y estado, reintentos acotados ante fallas transitorias, cooldown por proveedor, fallback entre proveedores, métricas de éxito/latencia y registro auditable de cada decisión e intento.
+El diseño canónico está en docs/CANONICAL_ROUTER.md.
 
-## Uso mínimo
-```python
-from router import Router, RouteRequest
+## Proveedores bootstrap
 
-router = Router()
-router.add_provider("Groq", api_key="...")
-respuesta = router.route(RouteRequest("Explicá este código", required_capabilities=frozenset({"code"})))
-print(respuesta.text)
-```
+El catálogo ya reconoce Groq, OpenRouter, NVIDIA NIM, Mistral, Cerebras y SambaNova.
 
-Las claves se pasan en tiempo de ejecución; nunca se guardan en el repositorio.
+Variables de entorno reconocidas: GROQ_API_KEY, OPENROUTER_API_KEY, NVIDIA_API_KEY, MISTRAL_API_KEY, CEREBRAS_API_KEY y SAMBANOVA_API_KEY.
 
+Al cargar una clave, Router intenta consultar /models y enriquecer el catálogo. Una falla de descubrimiento no impide usar los modelos bootstrap.
 
-## Servicio HTTP
+## Ejecutar
 
-```bash
-export GROQ_API_KEY='...'
-export ROUTER_SERVICE_TOKEN='...'
-uvicorn router.api:app --host 0.0.0.0 --port 8010
-```
+Ejemplo: definir GROQ_API_KEY y ROUTER_SERVICE_TOKEN, opcionalmente ROUTER_MASTER_KEY para persistir claves cifradas, y ejecutar uvicorn router.api:app --host 0.0.0.0 --port 8010.
 
-- `GET /health` — estado y proveedores cargados.
-- `POST /providers` — alta por nombre + API key.
-- `POST /route` — entrada uniforme para las aplicaciones.
+También puede construirse con Docker mediante docker build -t router-ia .
 
-También puede ejecutarse con `docker build -t router-ia .`.
+## API
 
+- GET /health
+- GET /catalog
+- POST /providers
+- POST /capabilities/probe
+- POST /route
+- POST /v1/chat/completions
 
-Si `ROUTER_SERVICE_TOKEN` está definido, `POST /providers` y `POST /route` requieren `Authorization: Bearer <token>`. `GET /health` permanece público para health checks.
+POST /route acepta task, context, requirements, capacidades, decompose opcional y max_subtasks. Si decompose no se indica, Router decide.
+
+## Seguridad
+
+- Ninguna API key en Git.
+- Catálogo y respuestas nunca exponen claves.
+- ROUTER_SERVICE_TOKEN protege endpoints sensibles.
+- ROUTER_MASTER_KEY habilita persistencia cifrada de credenciales.
+- Una respuesta normal correcta no convierte automáticamente una capacidad en verificada: sólo un probe específico genera evidencia.
+
+## Estado
+
+La v2 busca ser una base usable, no una demo: CI, tests, Docker, catálogo, orquestación, persistencia, métricas, fallback y compatibilidad HTTP están en el repositorio.

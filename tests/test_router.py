@@ -78,3 +78,13 @@ def test_non_retryable_error_falls_back_immediately():
     assert len(result.attempts) == 2
     assert result.attempts[0].provider == "groq"
     assert result.attempts[1].provider == "openrouter"
+
+
+def test_retry_then_fallback_sequence():
+    fake = FakeClient([httpx.ReadTimeout("1"), httpx.ReadTimeout("2"), "ok"])
+    router = Router(fake, max_retries=1)
+    router.add_provider("Groq", "a")
+    router.add_provider("OpenRouter", "b")
+    result = router.route(RouteRequest("x"))
+    assert result.ok
+    assert [a.provider for a in result.attempts] == ["groq", "groq", "openrouter"]

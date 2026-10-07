@@ -195,40 +195,77 @@ class Router:
         if not any(model.id == model_id for model in provider.spec.models):
             raise ValueError("model_not_cataloged")
 
-        probes = {
-            "chat": ("Reply with exactly ROUTER_OK", lambda text: text.strip() == "ROUTER_OK"),
-            "json": ('Return exactly this JSON object: {"router_ok":true}', lambda text: json.loads(text).get("router_ok") is True),
-        }
-        if capability not in probes:
-            updated = self.catalog.record_capability(provider_id, model_id, capability, "inconclusive", "no_specific_probe_defined")
-            provider.spec = updated
-            return {"provider": provider_id, "model": model_id, "capability": capability, "status": "inconclusive"}
-
-        prompt, validator = probes[capability]
-        req = RouteRequest(
-            task=prompt,
-            required_capabilities=frozenset({"chat"}),
-            decompose=False,
-            application_name="router-capability-probe",
-            timeout_s=20,
-        )
         started = perf_counter()
-        try:
-            text, _ = self.client.complete(provider, model_id, req)
-            ok = bool(validator(text))
-            status = "verified" if ok else "unsupported"
-            evidence = "specific_probe_passed" if ok else "specific_probe_failed"
-        except Exception as exc:
-            status = "inconclusive"
-            evidence = f"probe_error:{type(exc).__name__}"
+        if hasattr(self.client, "probe_capability"):
+            try:
+                probe = self.client.probe_capability(provider, model_id, capability)
+                status = str(probe.get("status", "inconclusive"))
+                if status not in {"verified", "unsupported", "inconclusive"}:
+                    status = "inconclusive"
+                evidence = str(probe.get("evidence", "active_probe"))[:500]
+                http_status = probe.get("http_status")
+            except Exception as exc:
+                status = "inconclusive"
+                evidence = f"probe_error:{type(exc).__name__}"
+                http_status = None
+        else:
+            probes = {
+                "chat": ("Reply with exactly ROUTER_OK", lambda text: text.strip() == "ROUTER_OK"),
+                "json": ('Return exactly this JSON object: {"router_ok":true}', lambda text: json.loads(text).get("router_ok") is True),
+            }
+            if capability not in probes:
+                status = "inconclusive"
+                evidence = "no_specific_probe_defined"
+                http_status = None
+            else:
+                prompt, validator = probes[capability]
+                req = RouteRequest(
+                    task=prompt,
+                    required_capabilities=frozenset({"chat"}),
+                    decompose=False,
+                    application_name="router-capability-probe",
+                    timeout_s=20,
+                )
+                try:
+                    text, _ = self.client.complete(provider, model_id, req)
+                    ok = bool(validator(text))
+                    status = "verified" if ok else "unsupported"
+                    evidence = "specific_probe_passed" if ok else "specific_probe_failed"
+                except Exception as exc:
+                    status = "inconclusive"
+                    evidence = f"probe_error:{type(exc).__name__}"
+                http_status = None
+
         latency = int((perf_counter() - started) * 1000)
         updated = self.catalog.record_capability(provider_id, model_id, capability, status, evidence)
         provider.spec = updated
-        return {
+        result = {
             "provider": provider_id,
             "model": model_id,
             "capability": capability,
             "status": status,
             "latency_ms": latency,
             "evidence": evidence,
+        }
+        if isinstance(http_status, int):
+            result["http_status"] = http_status
+        return result
+
+    def audit_provider_capabilities(self, provider_id: str, *, inconclusive_only: bool = False) -> dict:
+        provider = next((item for item in self.registry.all() if item.spec.id == provider_id), None)
+        if provider is None:
+            raise ValueError("provider_not_registered")
+        checks: list[dict] = []
+        for model in provider.spec.models:
+            existing = {item.capability: item.status for item in model.evidence}
+            for capability in sorted(model.capabilities):
+                if inconclusive_only and existing.get(capability) != "inconclusive":
+                    continue
+                checks.append(self.verify_capability(provider_id, model.id, capability))
+        return {
+            "provider": provider_id,
+            "checks": checks,
+            "verified": sum(1 for item in checks if item["status"] == "verified"),
+            "unsupported": sum(1 for item in checks if item["status"] == "unsupported"),
+            "inconclusive": sum(1 for item in checks if item["status"] == "inconclusive"),
         }

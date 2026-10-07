@@ -1,0 +1,8 @@
+FROM python:3.12-slim
+WORKDIR /app
+COPY pyproject.toml ./
+COPY router ./router
+RUN python -m pip install --no-cache-dir .
+ENV PYTHONUNBUFFERED=1
+EXPOSE 8010
+CMD ["uvicorn", "router.api:app", "--host", "0.0.0.0", "--port", "8010"]

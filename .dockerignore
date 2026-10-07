@@ -1,0 +1,9 @@
+.git
+.github
+__pycache__
+.pytest_cache
+*.pyc
+*.db
+router-catalog.json
+.env
+.venv

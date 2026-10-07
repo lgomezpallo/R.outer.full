@@ -7,7 +7,9 @@ def test_health():
     client = TestClient(module.app)
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json()["status"] == "ok"
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["providers"] == []
 
 def test_add_provider_without_exposing_key():
     module.router = Router()
@@ -32,3 +34,15 @@ def test_service_token_protects_route(monkeypatch):
     )
     assert allowed.status_code == 200
     assert allowed.json()["error"] == "no_eligible_provider"
+
+
+def test_health_reports_runtime_metrics():
+    module.router = Router()
+    module.router.add_provider("Groq", "secret")
+    provider = module.router.registry.all()[0]
+    provider.state.mark_success(120)
+    client = TestClient(module.app)
+    body = client.get("/health").json()
+    assert body["providers"][0]["provider"] == "groq"
+    assert body["providers"][0]["health_ok"] is True
+    assert body["providers"][0]["latency_ms"] == 120.0

@@ -32,3 +32,19 @@ El nombre funciona como orientación semántica y admite variantes y errores raz
 - Agregar o cambiar proveedor no debe requerir modificar las aplicaciones consumidoras.
 - La selección debe ser auditable.
 - El Router no divide tareas ni dirige proyectos: sólo selecciona y usa recursos.
+
+
+## Estado v1
+La implementación incluye selección por capacidades y estado, reintentos acotados ante fallas transitorias, cooldown por proveedor, fallback entre proveedores, métricas de éxito/latencia y registro auditable de cada decisión e intento.
+
+## Uso mínimo
+```python
+from router import Router, RouteRequest
+
+router = Router()
+router.add_provider("Groq", api_key="...")
+respuesta = router.route(RouteRequest("Explicá este código", required_capabilities=frozenset({"code"})))
+print(respuesta.text)
+```
+
+Las claves se pasan en tiempo de ejecución; nunca se guardan en el repositorio.

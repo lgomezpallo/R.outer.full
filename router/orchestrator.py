@@ -39,7 +39,11 @@ class Orchestrator:
         raw = text[start:end + 1] if start >= 0 and end > start else text
         data = json.loads(raw)
         allowed_roles = set(ANALYSIS_ROLES + EXECUTION_ROLES)
-        allowed_caps = {"chat","reasoning","json","vision","tools","code","summarization","document"}
+        allowed_caps = {
+            "chat","reasoning","json","vision","tools","code","coding",
+            "summarization","document","transcription","speech",
+            "image_generation","image_editing","long_context","fast",
+        }
         subtasks = []
         for index, item in enumerate((data.get("subtasks") or [])[: min(req.max_subtasks, 12)], 1):
             task = str(item.get("task", "")).strip()

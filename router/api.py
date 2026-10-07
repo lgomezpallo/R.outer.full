@@ -3,7 +3,7 @@ import os
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from .router import Router
-from .types import RouteRequest
+from .types import ProviderCredential, RouteRequest
 
 app = FastAPI(title="Router IA", version="1.0.0")
 router = Router(max_retries=int(os.getenv("ROUTER_MAX_RETRIES", "1")))
@@ -41,7 +41,7 @@ def health():
 @app.post("/providers")
 def add_provider(payload: ProviderInput):
     try:
-        registered = router.registry.add(__import__("router.types", fromlist=["ProviderCredential"]).ProviderCredential(payload.name, payload.api_key))
+        registered = router.registry.add(ProviderCredential(payload.name, payload.api_key))
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"provider": registered.spec.id, "models": [m.id for m in registered.spec.models]}

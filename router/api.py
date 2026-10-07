@@ -1,12 +1,22 @@
 from __future__ import annotations
 import os
-from fastapi import FastAPI, HTTPException
+import secrets
+from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 from .router import Router
 from .types import ProviderCredential, RouteRequest
 
 app = FastAPI(title="Router IA", version="1.0.0")
 router = Router(max_retries=int(os.getenv("ROUTER_MAX_RETRIES", "1")))
+
+def require_auth(authorization: str | None = Header(default=None)) -> None:
+    expected = os.getenv("ROUTER_SERVICE_TOKEN", "").strip()
+    if not expected:
+        return
+    prefix = "Bearer "
+    supplied = authorization[len(prefix):] if authorization and authorization.startswith(prefix) else ""
+    if not supplied or not secrets.compare_digest(supplied, expected):
+        raise HTTPException(401, "unauthorized")
 
 class ProviderInput(BaseModel):
     name: str = Field(min_length=1)
@@ -38,7 +48,7 @@ def load_environment_providers() -> None:
 def health():
     return {"status": "ok", "providers": [p.spec.id for p in router.registry.all()]}
 
-@app.post("/providers")
+@app.post("/providers", dependencies=[Depends(require_auth)])
 def add_provider(payload: ProviderInput):
     try:
         registered = router.registry.add(ProviderCredential(payload.name, payload.api_key))
@@ -46,7 +56,7 @@ def add_provider(payload: ProviderInput):
         raise HTTPException(400, str(exc)) from exc
     return {"provider": registered.spec.id, "models": [m.id for m in registered.spec.models]}
 
-@app.post("/route")
+@app.post("/route", dependencies=[Depends(require_auth)])
 def route(payload: RouteInput):
     req = RouteRequest(
         task=payload.task,

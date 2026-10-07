@@ -33,7 +33,17 @@ class Router:
                 try:
                     text, raw = self.client.complete(provider, decision.model, req)
                     latency = int((perf_counter() - started) * 1000)
-                    provider.state.mark_success(latency)
+                    provider.state.mark_success(decision.model, latency)
+                    updated_spec = self.catalog.verify_capabilities(
+                        decision.provider,
+                        decision.model,
+                        next(
+                            model.verified_capabilities | req.required_capabilities
+                            for model in provider.spec.models
+                            if model.id == decision.model
+                        ),
+                    )
+                    provider.spec = updated_spec
                     attempts.append(Attempt(decision.provider, decision.model, True, latency))
                     return RouteResponse(True, text, decision.provider, decision.model, attempts, decisions, raw=raw)
                 except (httpx.TimeoutException, httpx.HTTPError, RuntimeError, KeyError, IndexError, TypeError, ValueError) as exc:
@@ -53,7 +63,7 @@ class Router:
                         cooldown = 30.0 if status == 429 else (10.0 if provider_wide else 0.0)
                     elif provider_wide:
                         cooldown = 10.0
-                    provider.state.mark_failure(error, cooldown)
+                    provider.state.mark_failure(decision.model, error, cooldown)
                     if provider_wide:
                         blocked_providers.add(decision.provider)
                     break

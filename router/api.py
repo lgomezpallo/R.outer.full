@@ -46,7 +46,17 @@ def load_environment_providers() -> None:
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "providers": [p.spec.id for p in router.registry.all()]}
+    providers = []
+    for item in router.registry.all():
+        providers.append({
+            "provider": item.spec.id,
+            "available": item.state.available,
+            "health_ok": item.state.health_ok,
+            "success_rate": item.state.success_rate,
+            "latency_ms": item.state.ewma_latency_ms,
+            "last_error": item.state.last_error,
+        })
+    return {"status": "ok", "providers": providers}
 
 @app.post("/providers", dependencies=[Depends(require_auth)])
 def add_provider(payload: ProviderInput):

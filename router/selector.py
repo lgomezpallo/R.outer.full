@@ -11,15 +11,21 @@ def _score(provider: RegisteredProvider, model, req: RouteRequest) -> Decision |
     reasons: list[str] = []
     score = float(model.priority)
     reasons.append(f"model_priority={model.priority}")
-    score += provider.state.success_rate * 25.0
-    reasons.append(f"success_rate={provider.state.success_rate:.2f}")
-    if provider.state.ewma_latency_ms is not None:
-        latency_bonus = max(0.0, 20.0 - provider.state.ewma_latency_ms / 100.0)
+    model_state = provider.state.models.get(model.id)
+    success_rate = model_state.success_rate if model_state else provider.state.success_rate
+    score += success_rate * 25.0
+    reasons.append(f"success_rate={success_rate:.2f}")
+    latency = model_state.ewma_latency_ms if model_state and model_state.ewma_latency_ms is not None else provider.state.ewma_latency_ms
+    if latency is not None:
+        latency_bonus = max(0.0, 20.0 - latency / 100.0)
         score += latency_bonus
         reasons.append(f"latency_bonus={latency_bonus:.2f}")
     else:
         score += 10.0
         reasons.append("latency_unknown_bonus=10")
+    if model.verified_capabilities.issuperset(req.required_capabilities):
+        score += 15.0
+        reasons.append("verified_capabilities=match")
     if req.preferred_model_class and model.model_class == req.preferred_model_class:
         score += 30.0
         reasons.append("preferred_model_class=match")

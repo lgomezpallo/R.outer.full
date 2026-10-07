@@ -39,6 +39,11 @@ class CatalogProviderInput(BaseModel):
     protocol: str = "openai-compatible"
     models: list[CatalogModelInput] = []
 
+class CapabilityProbeInput(BaseModel):
+    provider: str
+    model: str
+    capability: str
+
 class RouteInput(BaseModel):
     task: str = Field(min_length=1, max_length=100000)
     context: str = ""
@@ -131,6 +136,13 @@ def add_provider(payload: ProviderInput):
         "models": [m.id for m in registered.spec.models],
         "credential_persisted": store.can_persist_secrets,
     }
+
+@app.post("/capabilities/probe", dependencies=[Depends(require_auth)])
+def probe_capability(payload: CapabilityProbeInput):
+    try:
+        return router.verify_capability(payload.provider, payload.model, payload.capability)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 @app.post("/route", dependencies=[Depends(require_auth)])
 def route(payload: RouteInput):

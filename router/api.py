@@ -14,14 +14,29 @@ catalog = ProviderCatalog(storage_path=os.getenv("ROUTER_CATALOG_FILE") or "rout
 store = RouterStore(path=os.getenv("ROUTER_DB_FILE", "router.db"), master_key=os.getenv("ROUTER_MASTER_KEY"))
 router = Router(max_retries=int(os.getenv("ROUTER_MAX_RETRIES", "1")), catalog=catalog, store=store)
 
-def require_auth(authorization: str | None = Header(default=None)) -> None:
+def require_auth(authorization: str | None = Header(default=None)) -> str:
     expected = os.getenv("ROUTER_SERVICE_TOKEN", "").strip()
-    if not expected:
-        return
     prefix = "Bearer "
     supplied = authorization[len(prefix):] if authorization and authorization.startswith(prefix) else ""
-    if not supplied or not secrets.compare_digest(supplied, expected):
-        raise HTTPException(401, "unauthorized")
+    if expected and supplied and secrets.compare_digest(supplied, expected):
+        return "service"
+    if supplied:
+        app_name = store.verify_app_token(supplied)
+        if app_name:
+            return app_name
+    if not expected and not store.list_app_tokens():
+        return "development"
+    raise HTTPException(401, "unauthorized")
+
+def require_admin(authorization: str | None = Header(default=None)) -> None:
+    expected = os.getenv("ROUTER_SERVICE_TOKEN", "").strip()
+    prefix = "Bearer "
+    supplied = authorization[len(prefix):] if authorization and authorization.startswith(prefix) else ""
+    if not expected or not supplied or not secrets.compare_digest(supplied, expected):
+        raise HTTPException(401, "admin_token_required")
+
+class TokenInput(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
 
 class ProviderInput(BaseModel):
     name: str = Field(min_length=1)
@@ -130,6 +145,14 @@ def health():
             },
         })
     return {"status": "ok", "providers": providers}
+
+@app.post("/tokens", dependencies=[Depends(require_admin)])
+def create_token(payload: TokenInput):
+    return {"name": payload.name, "token": store.create_app_token(payload.name)}
+
+@app.get("/tokens", dependencies=[Depends(require_admin)])
+def list_tokens():
+    return {"tokens": store.list_app_tokens()}
 
 @app.post("/providers", dependencies=[Depends(require_auth)])
 def add_provider(payload: ProviderInput):

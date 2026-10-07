@@ -2,33 +2,35 @@
 
 Router de IA desacoplado y reutilizable.
 
-## Objetivo
-Recibir una tarea, seleccionar el proveedor/modelo más conveniente según capacidades y estado real, ejecutar con fallback y devolver un resultado uniforme.
+## Instalación
 
-## Regla de alta de proveedores
-Para el usuario, agregar un proveedor requiere solamente:
+```bash
+pip install -e .
+```
 
-- nombre
-- API key
+## Uso
 
-El Router debe resolver automáticamente el resto cuando el proveedor pueda identificarse:
+```python
+from router_v1.router import Router
 
-- proveedor canónico
-- endpoint
-- protocolo
-- modelos disponibles
-- capacidades
-- límites relevantes
-- health
-- latencia
-- cooldown
-- fallback
+router = Router()
+router.register_provider("groq", api_key="<YOUR_GROQ_KEY>")
+router.register_provider("openrouter", api_key="<YOUR_OPENROUTER_KEY>")
 
-El nombre funciona como orientación semántica y admite variantes y errores razonables de escritura (por ejemplo, `Groc` -> Groq).
+response = router.route(
+    task="translate",
+    context={"text": "Hello world"},
+    requirements={"model": "llama3-8b", "temperature": 0.7}
+)
+print(response)
+```
 
-## Principios
-- Ninguna aplicación cliente conoce proveedores concretos.
-- Los secretos nunca se guardan en el repositorio.
-- Agregar o cambiar proveedor no debe requerir modificar las aplicaciones consumidoras.
-- La selección debe ser auditable.
-- El Router no divide tareas ni dirige proyectos: sólo selecciona y usa recursos.
+## Configuración de proveedores
+
+Solo se necesita el nombre y la API key. El Router resuelve automáticamente el resto.
+
+## Pruebas
+
+```bash
+pytest
+```

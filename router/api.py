@@ -3,6 +3,7 @@ import os
 import secrets
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
+from .catalog import ModelSpec, ProviderSpec
 from .router import Router
 from .types import ProviderCredential, RouteRequest
 
@@ -21,6 +22,19 @@ def require_auth(authorization: str | None = Header(default=None)) -> None:
 class ProviderInput(BaseModel):
     name: str = Field(min_length=1)
     api_key: str = Field(min_length=1)
+
+class CatalogModelInput(BaseModel):
+    id: str = Field(min_length=1)
+    capabilities: list[str] = ["chat"]
+    model_class: str = "standard"
+    priority: int = 50
+
+class CatalogProviderInput(BaseModel):
+    id: str = Field(min_length=1)
+    aliases: list[str] = []
+    base_url: str = Field(min_length=1)
+    protocol: str = "openai-compatible"
+    models: list[CatalogModelInput] = []
 
 class RouteInput(BaseModel):
     task: str = Field(min_length=1, max_length=30000)
@@ -43,6 +57,30 @@ def load_environment_providers() -> None:
                 router.add_provider(name, key)
             except ValueError:
                 pass
+
+@app.get("/catalog")
+def catalog():
+    return {"providers": router.catalog.snapshot()}
+
+@app.post("/catalog/providers", dependencies=[Depends(require_auth)])
+def catalog_provider(payload: CatalogProviderInput):
+    provider = ProviderSpec(
+        id=payload.id.strip().lower(),
+        aliases=tuple(alias.strip() for alias in payload.aliases if alias.strip()),
+        base_url=payload.base_url.rstrip("/"),
+        protocol=payload.protocol,
+        models=tuple(
+            ModelSpec(
+                id=model.id,
+                capabilities=frozenset(model.capabilities),
+                model_class=model.model_class,
+                priority=model.priority,
+            )
+            for model in payload.models
+        ),
+    )
+    router.catalog.put(provider)
+    return {"provider": provider.id, "cataloged": True}
 
 @app.get("/health")
 def health():

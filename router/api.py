@@ -1,6 +1,7 @@
 from __future__ import annotations
 import os
 import secrets
+import time
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 from .catalog import ModelSpec, ProviderCatalog, ProviderSpec
@@ -38,6 +39,16 @@ class CatalogProviderInput(BaseModel):
     base_url: str = Field(min_length=1)
     protocol: str = "openai-compatible"
     models: list[CatalogModelInput] = []
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+class OpenAIChatInput(BaseModel):
+    model: str = "router-ia-auto"
+    messages: list[ChatMessage]
+    stream: bool = False
+    task_type: str | None = None
 
 class CapabilityProbeInput(BaseModel):
     provider: str
@@ -167,4 +178,47 @@ def route(payload: RouteInput):
         "attempts": [a.__dict__ for a in result.attempts],
         "decisions": [d.__dict__ for d in result.decisions],
         "orchestration": (result.raw or {}).get("orchestration"),
+    }
+
+
+@app.post("/v1/chat/completions", dependencies=[Depends(require_auth)])
+def openai_chat(payload: OpenAIChatInput):
+    if payload.stream:
+        raise HTTPException(400, "streaming_not_supported")
+    if not payload.messages:
+        raise HTTPException(400, "messages_required")
+    users = [item.content for item in payload.messages if item.role == "user"]
+    if not users:
+        raise HTTPException(400, "user_message_required")
+    context = "\n".join(
+        f"{item.role}: {item.content}"
+        for item in payload.messages[:-1]
+    )
+    capabilities = {"chat"}
+    if payload.task_type in {"code", "coding"}:
+        capabilities.add("code")
+    elif payload.task_type == "reasoning":
+        capabilities.add("reasoning")
+    elif payload.task_type == "summarization":
+        capabilities.add("summarization")
+    result = router.process(RouteRequest(
+        task=users[-1],
+        context=context,
+        required_capabilities=frozenset(capabilities),
+        application_name="openai-compatible-client",
+    ))
+    if not result.ok or not result.text:
+        raise HTTPException(502, result.error or "router_failed")
+    return {
+        "id": "chatcmpl-router-" + str(int(time.time() * 1000)),
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": "router-ia-auto",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": result.text},
+            "finish_reason": "stop",
+        }],
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        "router": {"provider": result.provider, "model": result.model},
     }

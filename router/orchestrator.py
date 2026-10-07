@@ -72,3 +72,74 @@ class Orchestrator:
         if importance <= 65:
             return None, 100
         return "strong", None
+
+
+    def _planning_request(self, req: RouteRequest) -> RouteRequest:
+        schema = {
+            "summary": "short summary",
+            "requires_verification": True,
+            "subtasks": [{
+                "id": "s1",
+                "role": "understand",
+                "task": "self-contained work item",
+                "capabilities": ["chat", "reasoning"],
+                "importance": 20,
+            }],
+        }
+        task = (
+            "Break the task into only the work items that are actually needed. "
+            "Use roles from analysis or execution lanes. "
+            "Importance is 0-100. Return JSON only. Maximum subtasks: "
+            + str(max(1, min(req.max_subtasks, 12)))
+            + "\nSchema: " + json.dumps(schema)
+            + "\nTask: " + req.task
+            + "\nContext: " + req.context
+            + "\nRequirements: " + json.dumps(list(req.requirements), ensure_ascii=False)
+        )
+        return RouteRequest(
+            task=task,
+            required_capabilities=frozenset({"chat", "json", "reasoning"}),
+            preferred_model_class="standard",
+            timeout_s=req.timeout_s,
+            application_name=req.application_name,
+            decompose=False,
+            max_strategic_cost=70,
+        )
+
+    def _verification_request(self, req: RouteRequest, results: list[dict]) -> RouteRequest:
+        task = (
+            "Check the partial results against the original task. "
+            "Return OK or a concise list of concrete gaps or contradictions."
+            + "\nOriginal task: " + req.task
+            + "\nResults: " + json.dumps(results, ensure_ascii=False)
+        )
+        return RouteRequest(
+            task=task,
+            required_capabilities=frozenset({"chat", "reasoning"}),
+            preferred_model_class="standard",
+            application_name=req.application_name,
+            decompose=False,
+            max_strategic_cost=85,
+        )
+
+    def _composition_request(self, req: RouteRequest, results: list[dict], verification: str) -> RouteRequest:
+        task = (
+            "Build one final answer for the original task from the partial results. "
+            "Resolve contradictions and satisfy the original requirements. "
+            "Return only the final answer."
+            + "\nOriginal task: " + req.task
+            + "\nRequirements: " + json.dumps(list(req.requirements), ensure_ascii=False)
+            + "\nPartial results: " + json.dumps(results, ensure_ascii=False)
+            + "\nVerification: " + verification
+        )
+        high_importance = any(int(item.get("importance", 0)) >= 70 for item in results)
+        return RouteRequest(
+            task=task,
+            context=req.context,
+            requirements=req.requirements,
+            required_capabilities=frozenset({"chat", "reasoning"}),
+            preferred_model_class="strong" if high_importance else None,
+            timeout_s=req.timeout_s,
+            application_name=req.application_name,
+            decompose=False,
+        )

@@ -7,9 +7,10 @@ from .selector import rank
 from .types import Attempt, ProviderCredential, RouteRequest, RouteResponse
 
 class Router:
-    def __init__(self, client: OpenAICompatibleClient | None = None) -> None:
+    def __init__(self, client: OpenAICompatibleClient | None = None, max_retries: int = 1) -> None:
         self.registry = ProviderRegistry()
         self.client = client or OpenAICompatibleClient()
+        self.max_retries = max(0, max_retries)
 
     def add_provider(self, name: str, api_key: str) -> None:
         self.registry.add(ProviderCredential(name, api_key))
@@ -20,19 +21,30 @@ class Router:
             return RouteResponse(False, None, None, None, [], [], "no_eligible_provider")
         attempts: list[Attempt] = []
         by_id = {p.spec.id: p for p in self.registry.all()}
+        blocked_providers: set[str] = set()
         for decision in decisions:
+            if decision.provider in blocked_providers:
+                continue
             provider = by_id[decision.provider]
-            started = perf_counter()
-            try:
-                text, raw = self.client.complete(provider, decision.model, req)
-                latency = int((perf_counter() - started) * 1000)
-                provider.state.mark_success(latency)
-                attempts.append(Attempt(decision.provider, decision.model, True, latency))
-                return RouteResponse(True, text, decision.provider, decision.model, attempts, decisions, raw=raw)
-            except (httpx.TimeoutException, httpx.HTTPError, RuntimeError, KeyError, IndexError, TypeError, ValueError) as exc:
-                latency = int((perf_counter() - started) * 1000)
-                error = f"{type(exc).__name__}: {exc}"
-                cooldown = 30.0 if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429 else 10.0
-                provider.state.mark_failure(error, cooldown)
-                attempts.append(Attempt(decision.provider, decision.model, False, latency, error))
+            for attempt_index in range(self.max_retries + 1):
+                started = perf_counter()
+                try:
+                    text, raw = self.client.complete(provider, decision.model, req)
+                    latency = int((perf_counter() - started) * 1000)
+                    provider.state.mark_success(latency)
+                    attempts.append(Attempt(decision.provider, decision.model, True, latency))
+                    return RouteResponse(True, text, decision.provider, decision.model, attempts, decisions, raw=raw)
+                except (httpx.TimeoutException, httpx.HTTPError, RuntimeError, KeyError, IndexError, TypeError, ValueError) as exc:
+                    latency = int((perf_counter() - started) * 1000)
+                    error = f"{type(exc).__name__}: {exc}"
+                    attempts.append(Attempt(decision.provider, decision.model, False, latency, error))
+                    retryable = isinstance(exc, (httpx.TimeoutException, httpx.TransportError))
+                    if isinstance(exc, httpx.HTTPStatusError):
+                        retryable = exc.response.status_code in {408, 429, 500, 502, 503, 504}
+                    if retryable and attempt_index < self.max_retries:
+                        continue
+                    cooldown = 30.0 if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429 else 10.0
+                    provider.state.mark_failure(error, cooldown)
+                    blocked_providers.add(decision.provider)
+                    break
         return RouteResponse(False, None, None, None, attempts, decisions, "all_attempts_failed")

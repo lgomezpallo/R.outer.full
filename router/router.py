@@ -62,6 +62,14 @@ class Router:
     def _hydrate_provider_metrics(self, provider: RegisteredProvider) -> None:
         if self.store is None:
             return
+        runtime = self.store.load_provider_runtime(provider.spec.id)
+        if runtime:
+            provider.state.success_count = int(runtime["success_count"])
+            provider.state.failure_count = int(runtime["failure_count"])
+            provider.state.ewma_latency_ms = runtime["ewma_latency_ms"]
+            provider.state.cooldown_until = float(runtime["cooldown_until"] or 0)
+            provider.state.last_error = runtime["last_error"]
+            provider.state.health_ok = runtime["health_ok"]
         stats = self.store.recent_model_stats()
         for model in provider.spec.models:
             item = stats.get((provider.spec.id, model.id))
@@ -123,6 +131,8 @@ class Router:
                     text, raw = self.client.complete(provider, decision.model, req)
                     latency = int((perf_counter() - started) * 1000)
                     provider.state.mark_success(decision.model, latency)
+                    if self.store is not None:
+                        self.store.save_provider_runtime(provider.spec.id, provider.state)
                     attempts.append(Attempt(decision.provider, decision.model, True, latency, phase=phase))
                     if self.store is not None:
                         self.store.record_metric(
@@ -157,6 +167,8 @@ class Router:
                     if retryable and attempt_index < self.max_retries:
                         continue
                     provider.state.mark_failure(decision.model, error, cooldown)
+                    if self.store is not None:
+                        self.store.save_provider_runtime(provider.spec.id, provider.state)
                     if provider_wide:
                         blocked_providers.add(decision.provider)
                     break

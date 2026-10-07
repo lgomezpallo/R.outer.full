@@ -44,16 +44,20 @@ class ProviderInput(BaseModel):
 
 class CatalogModelInput(BaseModel):
     id: str = Field(min_length=1)
-    capabilities: list[str] = ["chat"]
+    capabilities: list[str] = Field(default_factory=lambda: ["chat"])
     model_class: str = "standard"
     priority: int = 50
+    strategic_cost: int = 50
 
 class CatalogProviderInput(BaseModel):
     id: str = Field(min_length=1)
-    aliases: list[str] = []
+    aliases: list[str] = Field(default_factory=list)
     base_url: str = Field(min_length=1)
     protocol: str = "openai-compatible"
-    models: list[CatalogModelInput] = []
+    priority: int = 50
+    strategic_cost: int = 50
+    discover_models: bool = True
+    models: list[CatalogModelInput] = Field(default_factory=list)
 
 class ChatMessage(BaseModel):
     role: str
@@ -111,12 +115,16 @@ def catalog_provider(payload: CatalogProviderInput):
         aliases=tuple(alias.strip() for alias in payload.aliases if alias.strip()),
         base_url=payload.base_url.rstrip("/"),
         protocol=payload.protocol,
+        priority=payload.priority,
+        strategic_cost=payload.strategic_cost,
+        discover_models=payload.discover_models,
         models=tuple(
             ModelSpec(
                 id=model.id,
                 capabilities=frozenset(model.capabilities),
                 model_class=model.model_class,
                 priority=model.priority,
+                strategic_cost=model.strategic_cost,
             )
             for model in payload.models
         ),
@@ -130,6 +138,7 @@ def health():
     for item in router.registry.all():
         providers.append({
             "provider": item.spec.id,
+            "health_status": item.state.health_status,
             "available": item.state.available,
             "health_ok": item.state.health_ok,
             "success_rate": item.state.success_rate,

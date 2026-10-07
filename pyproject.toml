@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "router_v1"
+version = "0.1.0"
+description = "Router de IA desacoplado y reutilizable"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "requests>=2.28",
+    "python-Levenshtein>=0.12"
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+python_files = "test_*.py"

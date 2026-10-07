@@ -1,12 +1,10 @@
 # Contrato de proveedores v1
 
 ## Entrada mínima
-```text
+```
 name: string
 api_key: secret
 ```
-
-No se le pide al usuario endpoint, modelo, headers, protocolo ni configuración adicional como flujo normal.
 
 ## Resolución del nombre
 El Router intenta, en este orden:

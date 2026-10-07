@@ -219,8 +219,8 @@ def audit_capabilities(payload: CapabilityAuditInput):
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
-@app.post("/route", dependencies=[Depends(require_auth)])
-def route(payload: RouteInput):
+@app.post("/route")
+def route(payload: RouteInput, app_identity: str = Depends(require_auth)):
     req = RouteRequest(
         task=payload.task,
         context=payload.context,
@@ -228,7 +228,11 @@ def route(payload: RouteInput):
         required_capabilities=frozenset(payload.required_capabilities),
         preferred_model_class=payload.preferred_model_class,
         timeout_s=payload.timeout_s,
-        application_name=payload.application_name,
+        application_name=(
+            payload.application_name
+            if app_identity == "service" and payload.application_name != "unknown"
+            else app_identity
+        ),
         decompose=payload.decompose,
         max_subtasks=payload.max_subtasks,
     )
@@ -245,8 +249,8 @@ def route(payload: RouteInput):
     }
 
 
-@app.post("/v1/chat/completions", dependencies=[Depends(require_auth)])
-def openai_chat(payload: OpenAIChatInput):
+@app.post("/v1/chat/completions")
+def openai_chat(payload: OpenAIChatInput, app_identity: str = Depends(require_auth)):
     if payload.stream:
         raise HTTPException(400, "streaming_not_supported")
     if not payload.messages:
@@ -269,7 +273,7 @@ def openai_chat(payload: OpenAIChatInput):
         task=users[-1],
         context=context,
         required_capabilities=frozenset(capabilities),
-        application_name="openai-compatible-client",
+        application_name=app_identity,
     ))
     if not result.ok or not result.text:
         raise HTTPException(502, result.error or "router_failed")

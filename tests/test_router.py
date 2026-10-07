@@ -212,3 +212,11 @@ def test_inconclusive_capability_ranks_below_unknown():
     result = router.route(RouteRequest("hola"))
     assert result.ok
     assert result.model == "unknown"
+
+
+def test_discovered_specialists_are_classified_without_becoming_generic_chat():
+    from router.catalog import infer_discovered_capabilities
+    assert infer_discovered_capabilities("whisper-large-v3") == frozenset({"transcription"})
+    assert infer_discovered_capabilities("my-vision-model") == frozenset({"chat", "vision"})
+    assert infer_discovered_capabilities("flux-2-dev") == frozenset({"image_generation", "image_editing"})
+    assert infer_discovered_capabilities("prompt-guard-2") == frozenset()

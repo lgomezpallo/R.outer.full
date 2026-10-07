@@ -54,6 +54,7 @@ Las claves se pasan en tiempo de ejecución; nunca se guardan en el repositorio.
 
 ```bash
 export GROQ_API_KEY='...'
+export ROUTER_SERVICE_TOKEN='...'
 uvicorn router.api:app --host 0.0.0.0 --port 8010
 ```
 
@@ -62,3 +63,6 @@ uvicorn router.api:app --host 0.0.0.0 --port 8010
 - `POST /route` — entrada uniforme para las aplicaciones.
 
 También puede ejecutarse con `docker build -t router-ia .`.
+
+
+Si `ROUTER_SERVICE_TOKEN` está definido, `POST /providers` y `POST /route` requieren `Authorization: Bearer <token>`. `GET /health` permanece público para health checks.

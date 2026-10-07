@@ -74,6 +74,10 @@ class CapabilityProbeInput(BaseModel):
     model: str
     capability: str
 
+class CapabilityAuditInput(BaseModel):
+    provider: str
+    inconclusive_only: bool = False
+
 class RouteInput(BaseModel):
     task: str = Field(min_length=1, max_length=100000)
     context: str = ""
@@ -202,6 +206,16 @@ def add_provider(payload: ProviderInput):
 def probe_capability(payload: CapabilityProbeInput):
     try:
         return router.verify_capability(payload.provider, payload.model, payload.capability)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+@app.post("/capabilities/audit", dependencies=[Depends(require_admin)])
+def audit_capabilities(payload: CapabilityAuditInput):
+    try:
+        return router.audit_provider_capabilities(
+            payload.provider,
+            inconclusive_only=payload.inconclusive_only,
+        )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 

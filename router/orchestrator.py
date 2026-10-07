@@ -143,3 +143,98 @@ class Orchestrator:
             application_name=req.application_name,
             decompose=False,
         )
+
+
+    def process(self, req: RouteRequest) -> RouteResponse:
+        if not self.should_decompose(req):
+            return self.router.route(req, phase="direct")
+
+        planning = self.router.route(self._planning_request(req), phase="plan")
+        try:
+            plan = self._parse_plan(planning.text or "", req) if planning.ok else self._fallback_plan(req)
+        except Exception:
+            plan = self._fallback_plan(req)
+
+        all_attempts = list(planning.attempts)
+        all_decisions = list(planning.decisions)
+        results: list[dict] = []
+
+        for subtask in plan.subtasks:
+            model_class, max_cost = self._budget(subtask.importance)
+            subreq = RouteRequest(
+                task=subtask.task,
+                context=req.context,
+                requirements=req.requirements,
+                required_capabilities=subtask.capabilities,
+                preferred_model_class=model_class,
+                timeout_s=req.timeout_s,
+                application_name=req.application_name,
+                decompose=False,
+                max_strategic_cost=max_cost,
+            )
+            result = self.router.route(subreq, phase=f"subtask:{subtask.role}")
+            all_attempts.extend(result.attempts)
+            all_decisions.extend(result.decisions)
+            results.append({
+                "id": subtask.id,
+                "role": subtask.role,
+                "importance": subtask.importance,
+                "ok": result.ok,
+                "text": result.text,
+                "provider": result.provider,
+                "model": result.model,
+                "error": result.error,
+            })
+
+        successful = [item for item in results if item["ok"] and item["text"]]
+        if not successful:
+            return RouteResponse(
+                False, None, None, None, all_attempts, all_decisions,
+                "all_subtasks_failed",
+                raw={"orchestration": {"plan": plan.summary, "subtasks": results}},
+            )
+
+        verification_text = ""
+        if plan.requires_verification and len(successful) > 1:
+            checked = self.router.route(
+                self._verification_request(req, successful),
+                phase="verify",
+            )
+            all_attempts.extend(checked.attempts)
+            all_decisions.extend(checked.decisions)
+            verification_text = checked.text or ""
+
+        final = self.router.route(
+            self._composition_request(req, successful, verification_text),
+            phase="compose",
+        )
+        all_attempts.extend(final.attempts)
+        all_decisions.extend(final.decisions)
+
+        trace = {
+            "plan": plan.summary,
+            "subtasks": results,
+            "verification": verification_text,
+        }
+        if not final.ok:
+            trace["composition_fallback"] = True
+            fallback_text = "\n\n".join(str(item["text"]) for item in successful)
+            return RouteResponse(
+                True,
+                fallback_text,
+                successful[-1]["provider"],
+                successful[-1]["model"],
+                all_attempts,
+                all_decisions,
+                raw={"orchestration": trace},
+            )
+
+        return RouteResponse(
+            True,
+            final.text,
+            final.provider,
+            final.model,
+            all_attempts,
+            all_decisions,
+            raw={"orchestration": trace},
+        )

@@ -122,3 +122,23 @@ def test_learned_model_metrics_affect_ranking():
     result = router.route(RouteRequest("tarea"))
     assert result.ok
     assert result.model == "openai/gpt-oss-20b"
+
+
+def test_catalog_persists_custom_provider_and_verified_capabilities(tmp_path):
+    from router.catalog import ModelSpec, ProviderCatalog, ProviderSpec
+    path = tmp_path / "catalog.json"
+    catalog = ProviderCatalog(storage_path=path)
+    catalog.put(ProviderSpec(
+        id="custom",
+        aliases=("custom ai",),
+        base_url="https://example.invalid/v1",
+        models=(ModelSpec("model-a", frozenset({"chat","json"}), "standard", 60),),
+    ))
+    catalog.verify_capabilities("custom", "model-a", frozenset({"chat"}))
+
+    loaded = ProviderCatalog(storage_path=path)
+    provider = loaded.get("custom")
+    assert provider is not None
+    model = provider.models[0]
+    assert model.capabilities == frozenset({"chat","json"})
+    assert model.verified_capabilities == frozenset({"chat"})

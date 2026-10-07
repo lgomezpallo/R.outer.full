@@ -9,6 +9,7 @@ class RuntimeState:
     ewma_latency_ms: float | None = None
     cooldown_until: float = 0.0
     last_error: str | None = None
+    health_ok: bool | None = None
 
     @property
     def success_rate(self) -> float:
@@ -22,9 +23,11 @@ class RuntimeState:
     def mark_success(self, latency_ms: int) -> None:
         self.success_count += 1
         self.last_error = None
+        self.health_ok = True
         self.ewma_latency_ms = float(latency_ms) if self.ewma_latency_ms is None else self.ewma_latency_ms * 0.7 + latency_ms * 0.3
 
     def mark_failure(self, error: str, cooldown_s: float = 15.0) -> None:
         self.failure_count += 1
         self.last_error = error
+        self.health_ok = False
         self.cooldown_until = monotonic() + cooldown_s

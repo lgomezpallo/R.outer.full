@@ -52,6 +52,22 @@ class ProviderSpec:
 def _m(model_id: str, caps: set[str], model_class: str, priority: int, cost: int) -> ModelSpec:
     return ModelSpec(model_id, frozenset(caps), model_class, priority, cost)
 
+def infer_discovered_capabilities(model_id: str) -> frozenset[str]:
+    name = model_id.lower()
+    if any(token in name for token in ("prompt-guard", "safeguard", "moderation", "safety", "rerank", "embed")):
+        return frozenset()
+    if "whisper" in name or "transcri" in name:
+        return frozenset({"transcription"})
+    if "orpheus" in name or "tts" in name or "text-to-speech" in name:
+        return frozenset({"speech"})
+    capabilities = {"chat"}
+    if any(token in name for token in ("coder", "code", "codestral")):
+        capabilities.add("code")
+        capabilities.add("coding")
+    if any(token in name for token in ("reason", "qwq", "r1", "gpt-oss")):
+        capabilities.add("reasoning")
+    return frozenset(capabilities)
+
 # The built-ins are a safe bootstrap. When a configured provider exposes /models,
 # discovery enriches this catalog without requiring changes in client applications.
 BUILTINS: tuple[ProviderSpec, ...] = (
@@ -64,7 +80,11 @@ BUILTINS: tuple[ProviderSpec, ...] = (
         models=(
             _m("openai/gpt-oss-20b", {"chat","reasoning","json","code"}, "standard", 75, 8),
             _m("openai/gpt-oss-120b", {"chat","reasoning","json","code"}, "strong", 92, 28),
-            _m("qwen/qwen3.8-27b", {"chat","reasoning","json","code"}, "standard", 80, 12),
+            _m("qwen/qwen3.8-27b", {"chat","reasoning","json","code","coding"}, "standard", 80, 12),
+            _m("whisper-large-v3", {"transcription"}, "specialist", 70, 5),
+            _m("whisper-large-v3-turbo", {"transcription","fast"}, "specialist", 82, 7),
+            _m("canopylabs/orpheus-v1-english", {"speech"}, "specialist", 68, 7),
+            _m("canopylabs/orpheus-arabic-saudi", {"speech"}, "specialist", 66, 7),
         ),
     ),
     ProviderSpec(
@@ -153,7 +173,7 @@ class ProviderCatalog:
                 if model_id not in existing:
                     existing[model_id] = ModelSpec(
                         id=model_id,
-                        capabilities=frozenset({"chat"}),
+                        capabilities=infer_discovered_capabilities(model_id),
                         model_class="unknown",
                         priority=45,
                         strategic_cost=provider.strategic_cost,

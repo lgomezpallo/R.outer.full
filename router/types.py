@@ -2,7 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-Capability = Literal["chat", "reasoning", "json", "vision", "tools", "code"]
+Capability = Literal["chat", "reasoning", "json", "vision", "tools", "code", "summarization", "document"]
 
 @dataclass(frozen=True)
 class ProviderCredential:
@@ -17,6 +17,10 @@ class RouteRequest:
     required_capabilities: frozenset[Capability] = frozenset({"chat"})
     preferred_model_class: str | None = None
     timeout_s: float = 45.0
+    application_name: str = "unknown"
+    decompose: bool | None = None
+    max_subtasks: int = 8
+    max_strategic_cost: int | None = None
 
 @dataclass
 class Decision:
@@ -32,6 +36,7 @@ class Attempt:
     ok: bool
     latency_ms: int
     error: str | None = None
+    phase: str = "execute"
 
 @dataclass
 class RouteResponse:

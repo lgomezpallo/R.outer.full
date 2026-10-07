@@ -269,3 +269,39 @@ class Router:
             "unsupported": sum(1 for item in checks if item["status"] == "unsupported"),
             "inconclusive": sum(1 for item in checks if item["status"] == "inconclusive"),
         }
+
+
+    def test_provider(self, provider_id: str) -> dict:
+        provider = next((item for item in self.registry.all() if item.spec.id == provider_id), None)
+        if provider is None:
+            raise ValueError("provider_not_registered")
+        candidates = [
+            model for model in provider.spec.models
+            if "chat" in model.capabilities and "chat" not in model.unsupported_capabilities
+        ]
+        if not candidates:
+            return {
+                "provider": provider_id,
+                "status": "inconclusive",
+                "reason": "no_chat_model",
+                "health_status": provider.state.health_status,
+            }
+        candidates.sort(key=lambda model: (model.strategic_cost, -model.priority))
+        model = candidates[0]
+        result = self.verify_capability(provider_id, model.id, "chat")
+        if result["status"] == "verified":
+            provider.state.mark_success(model.id, int(result.get("latency_ms", 0)))
+        else:
+            provider.state.mark_failure(
+                model.id,
+                result.get("evidence", result["status"]),
+                60.0 if result["status"] == "inconclusive" else 120.0,
+                failure_kind="provider_test",
+            )
+        if self.store is not None:
+            self.store.save_provider_runtime(provider_id, provider.state)
+        return {
+            **result,
+            "health_status": provider.state.health_status,
+            "success_rate": provider.state.success_rate,
+        }

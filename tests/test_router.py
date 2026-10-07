@@ -35,15 +35,17 @@ def test_capability_filtering_rejects_ineligible():
     assert result.error == "no_eligible_provider"
 
 def test_fallback_after_timeout():
-    fake = FakeClient([httpx.ReadTimeout("late"), "second works"])
-    router = Router(fake)
+    fake = FakeClient([httpx.ReadTimeout("late"), httpx.ReadTimeout("late again"), "second works"])
+    router = Router(fake, max_retries=1)
     router.add_provider("Groq", "a")
     router.add_provider("OpenRouter", "b")
     result = router.route(RouteRequest("tarea"))
     assert result.ok
-    assert len(result.attempts) == 2
-    assert result.attempts[0].ok is False
-    assert result.attempts[1].ok is True
+    assert len(result.attempts) == 3
+    assert result.attempts[0].provider == "groq"
+    assert result.attempts[1].provider == "groq"
+    assert result.attempts[2].provider == "openrouter"
+    assert result.attempts[2].ok is True
 
 def test_decision_is_auditable():
     router = Router(FakeClient(["ok"]))
@@ -63,3 +65,15 @@ def test_state_affects_ranking_after_failure():
     second = router.route(RouteRequest("otra"))
     assert second.ok
     assert second.provider == "openrouter"
+
+
+def test_non_retryable_error_falls_back_immediately():
+    fake = FakeClient([RuntimeError("bad payload"), "fallback works"])
+    router = Router(fake, max_retries=3)
+    router.add_provider("Groq", "a")
+    router.add_provider("OpenRouter", "b")
+    result = router.route(RouteRequest("tarea"))
+    assert result.ok
+    assert len(result.attempts) == 2
+    assert result.attempts[0].provider == "groq"
+    assert result.attempts[1].provider == "openrouter"

@@ -31,6 +31,8 @@ class RuntimeState:
     cooldown_until: float = 0.0
     last_error: str | None = None
     health_ok: bool | None = None
+    cooldown_strikes: int = 0
+    last_failure_kind: str | None = None
     models: dict[str, ModelRuntimeState] = field(default_factory=dict)
 
     @property
@@ -58,12 +60,17 @@ class RuntimeState:
         self.last_error = None
         self.health_ok = True
         self.cooldown_until = 0.0
+        self.cooldown_strikes = 0
+        self.last_failure_kind = None
         self.ewma_latency_ms = float(latency_ms) if self.ewma_latency_ms is None else self.ewma_latency_ms * 0.7 + latency_ms * 0.3
         self.model(model_id).mark_success(latency_ms)
 
-    def mark_failure(self, model_id: str, error: str, cooldown_s: float = 15.0) -> None:
+    def mark_failure(self, model_id: str, error: str, cooldown_s: float = 15.0, failure_kind: str | None = None) -> None:
         self.failure_count += 1
         self.last_error = error
         self.health_ok = False
-        self.cooldown_until = time() + max(0.0, cooldown_s)
+        if cooldown_s > 0:
+            self.cooldown_strikes = min(self.cooldown_strikes + 1, 4)
+            self.cooldown_until = time() + cooldown_s * self.cooldown_strikes
+        self.last_failure_kind = failure_kind
         self.model(model_id).mark_failure(error)

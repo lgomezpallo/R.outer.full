@@ -3,12 +3,13 @@ import os
 import secrets
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
-from .catalog import ModelSpec, ProviderSpec
+from .catalog import ModelSpec, ProviderCatalog, ProviderSpec
 from .router import Router
 from .types import ProviderCredential, RouteRequest
 
 app = FastAPI(title="Router IA", version="1.0.0")
-router = Router(max_retries=int(os.getenv("ROUTER_MAX_RETRIES", "1")))
+catalog = ProviderCatalog(storage_path=os.getenv("ROUTER_CATALOG_FILE") or None)
+router = Router(max_retries=int(os.getenv("ROUTER_MAX_RETRIES", "1")), catalog=catalog)
 
 def require_auth(authorization: str | None = Header(default=None)) -> None:
     expected = os.getenv("ROUTER_SERVICE_TOKEN", "").strip()

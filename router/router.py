@@ -70,6 +70,8 @@ class Router:
             provider.state.cooldown_until = float(runtime["cooldown_until"] or 0)
             provider.state.last_error = runtime["last_error"]
             provider.state.health_ok = runtime["health_ok"]
+            provider.state.cooldown_strikes = int(runtime.get("cooldown_strikes", 0) or 0)
+            provider.state.last_failure_kind = runtime.get("last_failure_kind")
         stats = self.store.recent_model_stats()
         for model in provider.spec.models:
             item = stats.get((provider.spec.id, model.id))
@@ -88,27 +90,33 @@ class Router:
     def _classify_failure(self, exc: Exception) -> tuple[bool, bool, str, int | None, float]:
         retryable = isinstance(exc, (httpx.TimeoutException, httpx.TransportError))
         provider_wide = retryable
-        error_type = "provider_unavailable" if retryable else "provider_error"
+        error_type = "unreachable" if isinstance(exc, httpx.TransportError) else "provider_error"
         error_code: int | None = None
-        cooldown = 10.0 if provider_wide else 0.0
+        cooldown = 60.0 if retryable else 0.0
+
         if isinstance(exc, httpx.TimeoutException):
             error_type = "timeout"
             error_code = 408
+            cooldown = 60.0
+
         if isinstance(exc, httpx.HTTPStatusError):
             status = exc.response.status_code
             error_code = status
-            retryable = status in {408, 429, 500, 502, 503, 504}
-            provider_wide = status in {401, 403, 408, 429, 500, 502, 503, 504}
+            retryable = status in {400, 401, 402, 403, 404, 405, 408, 409, 413, 415, 422, 429, 500, 502, 503, 504}
+            provider_wide = status in {401, 402, 403, 408, 429, 500, 502, 503, 504}
             if status == 429:
-                error_type, cooldown = "rate_limit", 30.0
+                error_type, cooldown = "quota", 15 * 60.0
+            elif status == 402:
+                error_type, cooldown = "payment", 30 * 60.0
             elif status in {408, 504}:
-                error_type, cooldown = "timeout", 10.0
+                error_type, cooldown = "timeout", 60.0
             elif status >= 500:
-                error_type, cooldown = "provider_unavailable", 10.0
+                error_type, cooldown = "server", 2 * 60.0
             elif status in {401, 403}:
-                error_type, cooldown = "authentication", 120.0
+                error_type, cooldown = "rejected", 10 * 60.0
             else:
-                error_type, cooldown = "provider_error", 0.0
+                error_type, cooldown = "invalid", 2 * 60.0
+
         return retryable, provider_wide, error_type, error_code, cooldown
 
     def route(self, req: RouteRequest, phase: str = "execute") -> RouteResponse:
@@ -166,7 +174,12 @@ class Router:
                         )
                     if retryable and attempt_index < self.max_retries:
                         continue
-                    provider.state.mark_failure(decision.model, error, cooldown)
+                    provider.state.mark_failure(
+                        decision.model,
+                        error,
+                        cooldown,
+                        failure_kind=error_type,
+                    )
                     if self.store is not None:
                         self.store.save_provider_runtime(provider.spec.id, provider.state)
                     if provider_wide:

@@ -28,6 +28,8 @@ def _score(provider: RegisteredProvider, model, req: RouteRequest) -> Decision |
         else provider.state.ewma_latency_ms
     )
     strategic_cost = provider.spec.strategic_cost + model.strategic_cost
+    if req.max_strategic_cost is not None and strategic_cost > req.max_strategic_cost:
+        return None
 
     # Health comes first. Among healthy/sufficient candidates, the resource with
     # the lowest strategic cost wins. Performance and administrative priority

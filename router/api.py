@@ -6,6 +6,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 from .catalog import ModelSpec, ProviderCatalog, ProviderSpec
 from .router import Router
+from .security import validate_provider_base_url
 from .storage import RouterStore
 from .types import RouteRequest
 
@@ -135,7 +136,7 @@ def catalog_provider(payload: CatalogProviderInput):
     provider = ProviderSpec(
         id=payload.id.strip().lower(),
         aliases=tuple(alias.strip() for alias in payload.aliases if alias.strip()),
-        base_url=payload.base_url.rstrip("/"),
+        base_url=validate_provider_base_url(payload.base_url),
         protocol=payload.protocol,
         priority=payload.priority,
         strategic_cost=payload.strategic_cost,

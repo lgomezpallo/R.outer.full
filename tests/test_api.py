@@ -11,10 +11,15 @@ def test_health():
     assert body["status"] == "ok"
     assert body["providers"] == []
 
-def test_add_provider_without_exposing_key():
+def test_add_provider_without_exposing_key(monkeypatch):
     module.router = Router()
+    monkeypatch.setenv("ROUTER_SERVICE_TOKEN", "admin-token")
     client = TestClient(module.app)
-    response = client.post("/providers", json={"name":"Groc","api_key":"supersecret"})
+    response = client.post(
+        "/providers",
+        headers={"Authorization":"Bearer admin-token"},
+        json={"name":"Groc","api_key":"supersecret"},
+    )
     assert response.status_code == 200
     body = response.json()
     assert body["provider"] == "groq"
@@ -40,13 +45,14 @@ def test_health_reports_runtime_metrics():
     module.router = Router()
     module.router.add_provider("Groq", "secret")
     provider = module.router.registry.all()[0]
-    provider.state.mark_success("llama-3.3-70b-versatile", 120)
+    provider.state.mark_success("openai/gpt-oss-20b", 120)
     client = TestClient(module.app)
     body = client.get("/health").json()
     assert body["providers"][0]["provider"] == "groq"
     assert body["providers"][0]["health_ok"] is True
     assert body["providers"][0]["latency_ms"] == 120.0
-    model = body["providers"][0]["models"]["llama-3.3-70b-versatile"]
+    assert body["providers"][0]["health_status"] == "available"
+    model = body["providers"][0]["models"]["openai/gpt-oss-20b"]
     assert model["success_rate"] == 1.0
     assert model["latency_ms"] == 120.0
 
@@ -61,9 +67,12 @@ def test_catalog_lists_builtin_providers():
 
 def test_catalog_can_add_provider_without_secret(monkeypatch):
     module.router = Router()
-    monkeypatch.delenv("ROUTER_SERVICE_TOKEN", raising=False)
+    monkeypatch.setenv("ROUTER_SERVICE_TOKEN", "admin-token")
     client = TestClient(module.app)
-    response = client.post("/catalog/providers", json={
+    response = client.post(
+        "/catalog/providers",
+        headers={"Authorization":"Bearer admin-token"},
+        json={
         "id":"exampleai",
         "aliases":["example ai"],
         "base_url":"https://example.invalid/v1",

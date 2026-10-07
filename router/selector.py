@@ -4,7 +4,7 @@ from .types import Decision, RouteRequest
 
 SPECIALIZED_CAPABILITIES = frozenset({
     "vision", "code", "coding", "reasoning", "document",
-    "transcription", "speech", "long_context",
+    "transcription", "speech", "image_generation", "image_editing", "long_context",
 })
 GENERIC_EXTRAS = frozenset({"chat", "json", "tools", "fast", "summarization"})
 

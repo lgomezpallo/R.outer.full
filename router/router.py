@@ -1,14 +1,16 @@
 from __future__ import annotations
 from time import perf_counter
 import httpx
+from .catalog import ProviderCatalog
 from .client import OpenAICompatibleClient
 from .registry import ProviderRegistry
 from .selector import rank
 from .types import Attempt, ProviderCredential, RouteRequest, RouteResponse
 
 class Router:
-    def __init__(self, client: OpenAICompatibleClient | None = None, max_retries: int = 1) -> None:
-        self.registry = ProviderRegistry()
+    def __init__(self, client: OpenAICompatibleClient | None = None, max_retries: int = 1, catalog: ProviderCatalog | None = None) -> None:
+        self.registry = ProviderRegistry(catalog)
+        self.catalog = self.registry.catalog
         self.client = client or OpenAICompatibleClient()
         self.max_retries = max(0, max_retries)
 

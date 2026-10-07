@@ -78,8 +78,8 @@ BUILTINS: tuple[ProviderSpec, ...] = (
         strategic_cost=10,
         priority=90,
         models=(
-            _m("openai/gpt-oss-20b", {"chat","reasoning","json","code"}, "standard", 75, 8),
-            _m("openai/gpt-oss-120b", {"chat","reasoning","json","code"}, "strong", 92, 28),
+            _m("openai/gpt-oss-20b", {"chat","reasoning","json","code","coding"}, "standard", 75, 8),
+            _m("openai/gpt-oss-120b", {"chat","reasoning","json","code","coding"}, "strong", 92, 28),
             _m("qwen/qwen3.8-27b", {"chat","reasoning","json","code","coding"}, "standard", 80, 12),
             _m("whisper-large-v3", {"transcription"}, "specialist", 70, 5),
             _m("whisper-large-v3-turbo", {"transcription","fast"}, "specialist", 82, 7),
@@ -94,7 +94,7 @@ BUILTINS: tuple[ProviderSpec, ...] = (
         strategic_cost=18,
         priority=80,
         models=(
-            _m("openrouter/auto", {"chat","reasoning","json","code"}, "auto", 70, 22),
+            _m("openrouter/auto", {"chat","reasoning","json","code","coding"}, "auto", 70, 22),
         ),
     ),
     ProviderSpec(
@@ -104,7 +104,7 @@ BUILTINS: tuple[ProviderSpec, ...] = (
         strategic_cost=35,
         priority=65,
         models=(
-            _m("meta/llama-3.1-70b-instruct", {"chat","reasoning","json","code"}, "strong", 78, 38),
+            _m("meta/llama-3.1-70b-instruct", {"chat","reasoning","json","code","coding"}, "strong", 78, 38),
         ),
     ),
     ProviderSpec(
@@ -114,7 +114,7 @@ BUILTINS: tuple[ProviderSpec, ...] = (
         strategic_cost=30,
         priority=65,
         models=(
-            _m("mistral-small-latest", {"chat","reasoning","json","code"}, "standard", 72, 26),
+            _m("mistral-small-latest", {"chat","reasoning","json","code","coding"}, "standard", 72, 26),
         ),
     ),
     ProviderSpec(
@@ -124,7 +124,7 @@ BUILTINS: tuple[ProviderSpec, ...] = (
         strategic_cost=45,
         priority=60,
         models=(
-            _m("zai-glm-4.7", {"chat","reasoning","json","code"}, "strong", 82, 48),
+            _m("zai-glm-4.7", {"chat","reasoning","json","code","coding"}, "strong", 82, 48),
         ),
     ),
     ProviderSpec(
@@ -134,7 +134,7 @@ BUILTINS: tuple[ProviderSpec, ...] = (
         strategic_cost=48,
         priority=58,
         models=(
-            _m("Meta-Llama-3.1-405B-Instruct", {"chat","reasoning","json","code"}, "strong", 84, 52),
+            _m("Meta-Llama-3.1-405B-Instruct", {"chat","reasoning","json","code","coding"}, "strong", 84, 52),
         ),
     ),
 )

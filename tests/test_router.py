@@ -53,7 +53,11 @@ def test_decision_is_auditable():
     result = router.route(RouteRequest("tarea", preferred_model_class="strong"))
     assert result.ok
     assert result.decisions
-    assert any("preferred_model_class=match" in reason for reason in result.decisions[0].reasons)
+    assert any(
+        "preferred_model_class=match" in reason
+        for decision in result.decisions
+        for reason in decision.reasons
+    )
 
 def test_state_affects_ranking_after_failure():
     fake = FakeClient([httpx.ReadTimeout("late"), "fallback ok", "second ok"])
@@ -77,7 +81,8 @@ def test_non_retryable_error_falls_back_immediately():
     assert result.ok
     assert len(result.attempts) == 2
     assert result.attempts[0].provider == "groq"
-    assert result.attempts[1].provider == "openrouter"
+    assert result.attempts[1].provider == "groq"
+    assert result.attempts[0].model != result.attempts[1].model
 
 
 def test_retry_then_fallback_sequence():
@@ -101,16 +106,16 @@ def test_model_specific_failure_can_try_another_model_same_provider():
     assert result.attempts[0].model != result.attempts[1].model
 
 
-def test_success_learns_verified_capabilities():
-    fake = FakeClient(["ok"])
+def test_capability_is_verified_only_by_specific_probe():
+    fake = FakeClient(["ROUTER_OK"])
     router = Router(fake, max_retries=0)
     router.add_provider("Groq", "a")
-    req = RouteRequest("tarea", required_capabilities=frozenset({"chat", "json"}))
-    result = router.route(req)
-    assert result.ok
+    result = router.verify_capability("groq", "openai/gpt-oss-20b", "chat")
+    assert result["status"] == "verified"
     provider = router.catalog.get("groq")
-    model = next(m for m in provider.models if m.id == result.model)
-    assert {"chat", "json"}.issubset(model.verified_capabilities)
+    model = next(m for m in provider.models if m.id == "openai/gpt-oss-20b")
+    assert "chat" in model.verified_capabilities
+    assert "json" not in model.verified_capabilities
 
 def test_learned_model_metrics_affect_ranking():
     fake = FakeClient(["ok"])
@@ -134,7 +139,7 @@ def test_catalog_persists_custom_provider_and_verified_capabilities(tmp_path):
         base_url="https://example.invalid/v1",
         models=(ModelSpec("model-a", frozenset({"chat","json"}), "standard", 60),),
     ))
-    catalog.verify_capabilities("custom", "model-a", frozenset({"chat"}))
+    catalog.record_capability("custom", "model-a", "chat", "verified", "test_probe")
 
     loaded = ProviderCatalog(storage_path=path)
     provider = loaded.get("custom")
@@ -142,3 +147,24 @@ def test_catalog_persists_custom_provider_and_verified_capabilities(tmp_path):
     model = provider.models[0]
     assert model.capabilities == frozenset({"chat","json"})
     assert model.verified_capabilities == frozenset({"chat"})
+
+
+def test_strategic_cost_prefers_cheaper_sufficient_model():
+    fake = FakeClient(["ok"])
+    router = Router(fake, max_retries=0)
+    router.add_provider("Groq", "a")
+    result = router.route(RouteRequest("simple"))
+    assert result.ok
+    assert result.model == "openai/gpt-oss-20b"
+
+def test_complex_request_can_raise_strategic_cost_ceiling():
+    fake = FakeClient(["ok"])
+    router = Router(fake, max_retries=0)
+    router.add_provider("Groq", "a")
+    result = router.route(RouteRequest(
+        "hard",
+        preferred_model_class="strong",
+        max_strategic_cost=100,
+    ))
+    assert result.ok
+    assert any("strategic_cost=" in reason for reason in result.decisions[0].reasons)

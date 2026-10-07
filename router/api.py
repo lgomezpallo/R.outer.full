@@ -88,6 +88,24 @@ class RouteInput(BaseModel):
 @app.on_event("startup")
 def load_environment_providers() -> None:
     router.load_persisted_providers()
+    cf_base = os.getenv("CLOUDFLARE_WORKERS_AI_BASE_URL", "").strip()
+    cf_token = os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
+    if cf_base and cf_token:
+        router.catalog.put(ProviderSpec(
+            id="cloudflare",
+            aliases=("cloudflare", "workers ai"),
+            base_url=cf_base.rstrip("/"),
+            protocol="openai-compatible",
+            priority=72,
+            strategic_cost=12,
+            discover_models=True,
+            models=(),
+        ))
+        try:
+            router.add_provider("cloudflare", cf_token, persist=store.can_persist_secrets, discover=True)
+        except (ValueError, RuntimeError):
+            pass
+
     configured = [
         ("Groq", os.getenv("GROQ_API_KEY")),
         ("OpenRouter", os.getenv("OPENROUTER_API_KEY")),

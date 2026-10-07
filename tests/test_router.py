@@ -168,3 +168,47 @@ def test_complex_request_can_raise_strategic_cost_ceiling():
     ))
     assert result.ok
     assert any("strategic_cost=" in reason for reason in result.decisions[0].reasons)
+
+
+def test_generic_task_conserves_specialist_models():
+    from router.catalog import ModelSpec, ProviderCatalog, ProviderSpec
+    catalog = ProviderCatalog(providers=(
+        ProviderSpec(
+            id="test",
+            aliases=("test",),
+            base_url="https://example.invalid/v1",
+            strategic_cost=10,
+            models=(
+                ModelSpec("generic", frozenset({"chat"}), "standard", 50, 10),
+                ModelSpec("vision-specialist", frozenset({"chat","vision"}), "standard", 50, 10),
+            ),
+        ),
+    ))
+    fake = FakeClient(["ok"])
+    router = Router(fake, max_retries=0, catalog=catalog)
+    router.add_provider("test", "a", discover=False)
+    result = router.route(RouteRequest("hola"))
+    assert result.ok
+    assert result.model == "generic"
+    assert any("specialization_penalty=1" in reason for reason in result.decisions[1].reasons)
+
+def test_inconclusive_capability_ranks_below_unknown():
+    from router.catalog import ModelSpec, ProviderCatalog, ProviderSpec
+    catalog = ProviderCatalog(providers=(
+        ProviderSpec(
+            id="test",
+            aliases=("test",),
+            base_url="https://example.invalid/v1",
+            models=(
+                ModelSpec("unknown", frozenset({"chat"}), "standard", 50, 10),
+                ModelSpec("inconclusive", frozenset({"chat"}), "standard", 50, 10),
+            ),
+        ),
+    ))
+    catalog.record_capability("test", "inconclusive", "chat", "inconclusive", "probe_timeout")
+    fake = FakeClient(["ok"])
+    router = Router(fake, max_retries=0, catalog=catalog)
+    router.add_provider("test", "a", discover=False)
+    result = router.route(RouteRequest("hola"))
+    assert result.ok
+    assert result.model == "unknown"

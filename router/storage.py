@@ -69,6 +69,8 @@ class RouterStore:
                     cooldown_until REAL NOT NULL DEFAULT 0,
                     last_error TEXT,
                     health_ok INTEGER,
+                    cooldown_strikes INTEGER NOT NULL DEFAULT 0,
+                    last_failure_kind TEXT,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
                 CREATE TABLE IF NOT EXISTS app_tokens (
@@ -82,6 +84,11 @@ class RouterStore:
                 );
                 """
             )
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(provider_runtime)").fetchall()}
+            if "cooldown_strikes" not in columns:
+                conn.execute("ALTER TABLE provider_runtime ADD COLUMN cooldown_strikes INTEGER NOT NULL DEFAULT 0")
+            if "last_failure_kind" not in columns:
+                conn.execute("ALTER TABLE provider_runtime ADD COLUMN last_failure_kind TEXT")
 
     def _key_bytes(self) -> bytes:
         if not self.master_key:
@@ -244,8 +251,8 @@ class RouterStore:
                 """
                 INSERT INTO provider_runtime(
                     provider_id,success_count,failure_count,ewma_latency_ms,
-                    cooldown_until,last_error,health_ok
-                ) VALUES(?,?,?,?,?,?,?)
+                    cooldown_until,last_error,health_ok,cooldown_strikes,last_failure_kind
+                ) VALUES(?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(provider_id) DO UPDATE SET
                     success_count=excluded.success_count,
                     failure_count=excluded.failure_count,
@@ -253,6 +260,8 @@ class RouterStore:
                     cooldown_until=excluded.cooldown_until,
                     last_error=excluded.last_error,
                     health_ok=excluded.health_ok,
+                    cooldown_strikes=excluded.cooldown_strikes,
+                    last_failure_kind=excluded.last_failure_kind,
                     updated_at=CURRENT_TIMESTAMP
                 """,
                 (
@@ -263,6 +272,8 @@ class RouterStore:
                     state.cooldown_until,
                     state.last_error,
                     health_value,
+                    state.cooldown_strikes,
+                    state.last_failure_kind,
                 ),
             )
 
@@ -270,7 +281,7 @@ class RouterStore:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT success_count,failure_count,ewma_latency_ms,cooldown_until,last_error,health_ok
+                SELECT success_count,failure_count,ewma_latency_ms,cooldown_until,last_error,health_ok,cooldown_strikes,last_failure_kind
                 FROM provider_runtime WHERE provider_id=?
                 """,
                 (provider_id,),

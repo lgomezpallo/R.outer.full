@@ -88,3 +88,14 @@ def test_retry_then_fallback_sequence():
     result = router.route(RouteRequest("x"))
     assert result.ok
     assert [a.provider for a in result.attempts] == ["groq", "groq", "openrouter"]
+
+
+def test_model_specific_failure_can_try_another_model_same_provider():
+    fake = FakeClient([RuntimeError("model rejected request"), "second model works"])
+    router = Router(fake, max_retries=0)
+    router.add_provider("Groq", "a")
+    result = router.route(RouteRequest("tarea"))
+    assert result.ok
+    assert result.provider == "groq"
+    assert len(result.attempts) == 2
+    assert result.attempts[0].model != result.attempts[1].model

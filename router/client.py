@@ -4,6 +4,19 @@ import httpx
 from .registry import RegisteredProvider
 from .types import RouteRequest
 
+CLOUDFLARE_PAID_ONLY = frozenset({
+    "@cf/moonshotai/kimi-k2.6",
+    "@cf/moonshotai/kimi-k2.7-code",
+    "@cf/zai-org/glm-5.2",
+    "@cf/zai-org/glm-5.3",
+    "@cf/zai-org/glm-5.3-flash",
+    "@cf/deepseek-ai/deepseek-v4-flash-0731",
+    "@cf/deepseek-ai/deepseek-v4-pro-0813",
+})
+
+def _is_cloudflare_workers_ai(base_url: str) -> bool:
+    return base_url.startswith("https://api.cloudflare.com/client/v4/accounts/") and base_url.rstrip("/").endswith("/ai")
+
 class ProviderClient:
     def complete(self, provider: RegisteredProvider, model: str, req: RouteRequest) -> tuple[str, dict]:
         protocol = provider.spec.protocol
@@ -18,9 +31,35 @@ class ProviderClient:
     def discover_models(self, provider: RegisteredProvider, timeout_s: float = 12.0) -> list[str]:
         if provider.spec.protocol != "openai-compatible":
             return []
+        base = provider.spec.base_url.rstrip("/")
+        if _is_cloudflare_workers_ai(base):
+            result: list[str] = []
+            with httpx.Client(timeout=timeout_s, follow_redirects=False) as client:
+                for page in range(1, 6):
+                    response = client.get(
+                        base + f"/models/search?hide_experimental=true&include_deprecated=false&per_page=100&page={page}",
+                        headers={"Authorization": f"Bearer {provider.api_key}", "Accept": "application/json"},
+                    )
+                    response.raise_for_status()
+                    payload = response.json()
+                    source = payload.get("result", []) if isinstance(payload, dict) else []
+                    if not isinstance(source, list):
+                        break
+                    for item in source:
+                        model_id = item.get("name") if isinstance(item, dict) else None
+                        if (
+                            isinstance(model_id, str)
+                            and model_id.startswith("@cf/")
+                            and model_id not in CLOUDFLARE_PAID_ONLY
+                        ):
+                            result.append(model_id)
+                    if len(source) < 100:
+                        break
+            return list(dict.fromkeys(result))
+
         with httpx.Client(timeout=timeout_s, follow_redirects=False) as client:
             response = client.get(
-                provider.spec.base_url.rstrip("/") + "/models",
+                base + "/models",
                 headers={"Authorization": f"Bearer {provider.api_key}", "Accept": "application/json"},
             )
             response.raise_for_status()
@@ -49,9 +88,11 @@ class ProviderClient:
 
     def _openai_compatible(self, provider: RegisteredProvider, model: str, req: RouteRequest) -> tuple[str, dict]:
         payload = {"model": model, "messages": self._messages(req), "temperature": 0.2}
+        base = provider.spec.base_url.rstrip("/")
+        chat_path = "/v1/chat/completions" if _is_cloudflare_workers_ai(base) else "/chat/completions"
         with httpx.Client(timeout=req.timeout_s, follow_redirects=False) as client:
             response = client.post(
-                provider.spec.base_url.rstrip("/") + "/chat/completions",
+                base + chat_path,
                 headers={"Authorization": f"Bearer {provider.api_key}", "Content-Type": "application/json"},
                 json=payload,
             )

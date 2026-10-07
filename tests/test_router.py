@@ -235,3 +235,13 @@ def test_provider_wide_capability_audit_records_evidence():
     assert result["inconclusive"] == 0
     provider = router.catalog.get("groq")
     assert any(model.verified_capabilities for model in provider.models)
+
+
+def test_active_provider_health_test_updates_state():
+    router = Router(FakeProbeClient([]), max_retries=0)
+    router.add_provider("Groq", "a", discover=False)
+    result = router.test_provider("groq")
+    assert result["status"] == "verified"
+    assert result["health_status"] == "available"
+    provider = router.registry.all()[0]
+    assert provider.state.health_ok is True

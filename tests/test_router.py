@@ -56,12 +56,13 @@ def test_decision_is_auditable():
     assert any("preferred_model_class=match" in reason for reason in result.decisions[0].reasons)
 
 def test_state_affects_ranking_after_failure():
-    fake = FakeClient([httpx.ReadTimeout("late"), "ok"])
-    router = Router(fake)
+    fake = FakeClient([httpx.ReadTimeout("late"), "fallback ok", "second ok"])
+    router = Router(fake, max_retries=0)
     router.add_provider("Groq", "a")
     router.add_provider("OpenRouter", "b")
     first = router.route(RouteRequest("tarea"))
     assert first.ok
+    assert first.provider == "openrouter"
     second = router.route(RouteRequest("otra"))
     assert second.ok
     assert second.provider == "openrouter"

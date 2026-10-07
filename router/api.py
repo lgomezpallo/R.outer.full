@@ -118,10 +118,19 @@ def health():
 @app.post("/providers", dependencies=[Depends(require_auth)])
 def add_provider(payload: ProviderInput):
     try:
-        registered = router.registry.add(ProviderCredential(payload.name, payload.api_key))
+        registered = router.add_provider(
+            payload.name,
+            payload.api_key,
+            persist=store.can_persist_secrets,
+            discover=True,
+        )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    return {"provider": registered.spec.id, "models": [m.id for m in registered.spec.models]}
+    return {
+        "provider": registered.spec.id,
+        "models": [m.id for m in registered.spec.models],
+        "credential_persisted": store.can_persist_secrets,
+    }
 
 @app.post("/route", dependencies=[Depends(require_auth)])
 def route(payload: RouteInput):

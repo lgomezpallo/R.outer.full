@@ -104,7 +104,7 @@ def load_environment_providers() -> None:
 def catalog():
     return {"providers": router.catalog.snapshot()}
 
-@app.post("/catalog/providers", dependencies=[Depends(require_auth)])
+@app.post("/catalog/providers", dependencies=[Depends(require_admin)])
 def catalog_provider(payload: CatalogProviderInput):
     provider = ProviderSpec(
         id=payload.id.strip().lower(),
@@ -154,7 +154,7 @@ def create_token(payload: TokenInput):
 def list_tokens():
     return {"tokens": store.list_app_tokens()}
 
-@app.post("/providers", dependencies=[Depends(require_auth)])
+@app.post("/providers", dependencies=[Depends(require_admin)])
 def add_provider(payload: ProviderInput):
     try:
         registered = router.add_provider(
@@ -171,7 +171,7 @@ def add_provider(payload: ProviderInput):
         "credential_persisted": store.can_persist_secrets,
     }
 
-@app.post("/capabilities/probe", dependencies=[Depends(require_auth)])
+@app.post("/capabilities/probe", dependencies=[Depends(require_admin)])
 def probe_capability(payload: CapabilityProbeInput):
     try:
         return router.verify_capability(payload.provider, payload.model, payload.capability)

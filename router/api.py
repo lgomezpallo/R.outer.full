@@ -93,6 +93,14 @@ def health():
             "success_rate": item.state.success_rate,
             "latency_ms": item.state.ewma_latency_ms,
             "last_error": item.state.last_error,
+            "models": {
+                model_id: {
+                    "success_rate": state.success_rate,
+                    "latency_ms": state.ewma_latency_ms,
+                    "last_error": state.last_error,
+                }
+                for model_id, state in item.state.models.items()
+            },
         })
     return {"status": "ok", "providers": providers}
 

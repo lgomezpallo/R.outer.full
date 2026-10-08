@@ -51,3 +51,55 @@ def test_subtasks_use_strategic_cost_budgets():
     assert low.preferred_model_class == "standard"
     assert high.max_strategic_cost is None
     assert high.preferred_model_class == "strong"
+
+
+class DependencyRouter(FakeRouter):
+    def route(self, req, phase="execute"):
+        self.calls.append((phase, req))
+        if phase == "plan":
+            return RouteResponse(
+                True,
+                '{"summary":"dep","requires_verification":false,"subtasks":['
+                '{"id":"a","role":"understand","task":"first","capabilities":["chat"],"importance":20,"depends_on":[],"critical":false},'
+                '{"id":"b","role":"execute","task":"second","capabilities":["chat"],"importance":50,"depends_on":["a"],"critical":true}'
+                ']}',
+                "provider","planner",[],[],
+            )
+        if phase == "subtask:understand":
+            return RouteResponse(True, "FIRST_RESULT", "p1", "m1", [], [])
+        if phase == "subtask:execute":
+            assert "FIRST_RESULT" in req.context
+            return RouteResponse(True, "SECOND_RESULT", "p2", "m2", [], [])
+        if phase == "compose":
+            return RouteResponse(True, "FINAL_DEP", "p3", "m3", [], [])
+        return RouteResponse(True, "OK", "p", "m", [], [])
+
+def test_dependency_results_are_passed_forward():
+    fake = DependencyRouter()
+    result = Orchestrator(fake).process(RouteRequest("complex", decompose=True))
+    assert result.ok
+    assert result.text == "FINAL_DEP"
+    phases = [phase for phase, _ in fake.calls]
+    assert phases == ["plan", "subtask:understand", "subtask:execute", "compose"]
+
+class CriticalFailureRouter(FakeRouter):
+    def route(self, req, phase="execute"):
+        self.calls.append((phase, req))
+        if phase == "plan":
+            return RouteResponse(
+                True,
+                '{"summary":"critical","requires_verification":false,"subtasks":['
+                '{"id":"a","role":"execute","task":"must work","capabilities":["chat"],"importance":90,"depends_on":[],"critical":true}'
+                ']}',
+                "provider","planner",[],[],
+            )
+        if phase.startswith("subtask:"):
+            return RouteResponse(False, None, None, None, [], [], "failed")
+        return RouteResponse(True, "SHOULD_NOT_RUN", "p", "m", [], [])
+
+def test_critical_subtask_failure_stops_composition():
+    fake = CriticalFailureRouter()
+    result = Orchestrator(fake).process(RouteRequest("complex", decompose=True))
+    assert not result.ok
+    assert result.error == "critical_subtask_failed"
+    assert "compose" not in [phase for phase, _ in fake.calls]

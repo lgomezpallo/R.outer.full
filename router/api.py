@@ -2,6 +2,7 @@ from __future__ import annotations
 import os
 import secrets
 import time
+import threading
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 from .catalog import ModelSpec, ProviderCatalog, ProviderSpec
@@ -151,6 +152,9 @@ def load_environment_providers() -> None:
                     f"error={type(exc).__name__}"
                 )
 
+    if os.getenv("ROUTER_STARTUP_CAPABILITY_PROFILE", "").strip() == "1":
+        threading.Thread(target=_startup_capability_profile, daemon=True).start()
+
 def _startup_capability_profile() -> None:
     if os.getenv("ROUTER_STARTUP_CAPABILITY_PROFILE", "").strip() != "1":
         return
@@ -170,7 +174,6 @@ def _startup_capability_profile() -> None:
                     break
             print(f"ROUTER_CAPABILITY_PROFILE provider={item.spec.id} capability={capability} candidates={len(candidates)} checked={checked} verified={verified or '-'}")
 
-_startup_capability_profile()
 
 @app.get("/catalog")
 def catalog():

@@ -35,7 +35,8 @@ def _specialization_penalty(model, required: frozenset[str]) -> int:
 def _score(provider: RegisteredProvider, model, req: RouteRequest) -> Decision | None:
     if req.required_capabilities & model.unsupported_capabilities:
         return None
-    if req.required_capabilities - model.capabilities:
+    effective_capabilities = model.capabilities | model.verified_capabilities
+    if req.required_capabilities - effective_capabilities:
         return None
     if not provider.state.available:
         return None

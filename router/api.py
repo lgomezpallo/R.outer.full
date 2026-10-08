@@ -151,6 +151,27 @@ def load_environment_providers() -> None:
                     f"error={type(exc).__name__}"
                 )
 
+def _startup_capability_profile() -> None:
+    if os.getenv("ROUTER_STARTUP_CAPABILITY_PROFILE", "").strip() != "1":
+        return
+    for item in router.registry.all():
+        for capability in ("reasoning", "code", "summarization", "document", "vision", "transcription", "speech", "image_generation"):
+            candidates = [m for m in item.spec.models if ("chat" in m.capabilities if capability in {"reasoning","code","summarization","document"} else capability in m.capabilities)]
+            verified = None
+            checked = 0
+            for model in candidates[:4]:
+                checked += 1
+                try:
+                    result = router.verify_capability(item.spec.id, model.id, capability)
+                except Exception:
+                    continue
+                if result.get("status") == "verified":
+                    verified = model.id
+                    break
+            print(f"ROUTER_CAPABILITY_PROFILE provider={item.spec.id} capability={capability} candidates={len(candidates)} checked={checked} verified={verified or '-'}")
+
+_startup_capability_profile()
+
 @app.get("/catalog")
 def catalog():
     return {"providers": router.catalog.snapshot()}

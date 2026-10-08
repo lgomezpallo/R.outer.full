@@ -54,7 +54,7 @@ def _m(model_id: str, caps: set[str], model_class: str, priority: int, cost: int
 
 def infer_discovered_capabilities(model_id: str) -> frozenset[str]:
     name = model_id.lower()
-    if any(token in name for token in ("prompt-guard", "safeguard", "moderation", "safety", "rerank", "embed")):
+    if any(token in name for token in ("prompt-guard", "safeguard", "moderation", "safety", "rerank", "embed", "smart-turn", "turn-detection", "vad")):
         return frozenset()
     if "whisper" in name or "transcri" in name or "/asr" in name:
         return frozenset({"transcription"})
@@ -101,7 +101,7 @@ BUILTINS: tuple[ProviderSpec, ...] = (
         strategic_cost=18,
         priority=80,
         models=(
-            _m("openrouter/auto", {"chat","reasoning","json","code","coding"}, "auto", 70, 22),
+            _m("openrouter/free", {"chat","reasoning","json","code","coding"}, "auto", 70, 22),
         ),
     ),
     ProviderSpec(

@@ -90,8 +90,6 @@ BUILTINS: tuple[ProviderSpec, ...] = (
             _m("qwen/qwen3.8-27b", {"chat","reasoning","json","code","coding"}, "standard", 80, 12),
             _m("whisper-large-v3", {"transcription"}, "specialist", 70, 5),
             _m("whisper-large-v3-turbo", {"transcription","fast"}, "specialist", 82, 7),
-            _m("canopylabs/orpheus-v1-english", {"speech"}, "specialist", 68, 7),
-            _m("canopylabs/orpheus-arabic-saudi", {"speech"}, "specialist", 66, 7),
         ),
     ),
     ProviderSpec(
@@ -111,7 +109,9 @@ BUILTINS: tuple[ProviderSpec, ...] = (
         strategic_cost=35,
         priority=65,
         models=(
-            _m("meta/llama-3.1-70b-instruct", {"chat","reasoning","json","code","coding"}, "strong", 78, 38),
+            _m("nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", {"chat","reasoning","json","code","coding","vision"}, "strong", 90, 35),
+            _m("google/gemma-4-31b-it", {"chat","reasoning","json","vision"}, "strong", 85, 35),
+            _m("moonshotai/kimi-k3", {"chat","reasoning","json","code","coding","vision"}, "strong", 88, 35),
         ),
     ),
     ProviderSpec(

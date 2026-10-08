@@ -153,6 +153,59 @@ class ProviderClient:
 
         headers = {"Authorization": f"Bearer {provider.api_key}"}
         try:
+            if capability == "tools":
+                payload = {
+                    "model": model,
+                    "messages": [{"role": "user", "content": "Call the get_probe_value tool with key router_ok. Do not answer normally."}],
+                    "tools": [{
+                        "type": "function",
+                        "function": {
+                            "name": "get_probe_value",
+                            "description": "Return a probe value for a key.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"key": {"type": "string"}},
+                                "required": ["key"],
+                                "additionalProperties": False,
+                            },
+                        },
+                    }],
+                    "tool_choice": "auto",
+                    "temperature": 0,
+                    "max_tokens": 128,
+                }
+                path = "/v1/chat/completions" if _is_cloudflare_workers_ai(base) else "/chat/completions"
+                with httpx.Client(timeout=30, follow_redirects=False) as client:
+                    response = client.post(base + path, headers={**headers, "Content-Type": "application/json"}, json=payload)
+                if not (200 <= response.status_code < 300):
+                    return self._probe_http_result(response, "active_tools_probe")
+                try:
+                    data = response.json()
+                    message = data["choices"][0]["message"]
+                    calls = message.get("tool_calls") or []
+                    ok = bool(calls and calls[0].get("function", {}).get("name") == "get_probe_value")
+                except Exception:
+                    ok = False
+                return {
+                    "status": "verified" if ok else "unsupported",
+                    "evidence": "active_tools_probe",
+                    "http_status": response.status_code,
+                }
+
+            if capability == "long_context":
+                marker = "ROUTER_LONG_CONTEXT_84721"
+                filler = ("alpha beta gamma delta epsilon zeta eta theta " * 1100)
+                task = filler + "\nIMPORTANT MARKER: " + marker + "\nReply with exactly the marker and nothing else."
+                text, _ = self.complete(
+                    provider,
+                    model,
+                    RouteRequest(task=task, required_capabilities=frozenset({"chat"}), decompose=False, timeout_s=45),
+                )
+                return {
+                    "status": "verified" if text.strip() == marker else "unsupported",
+                    "evidence": "active_long_context_probe_approx_10k_tokens",
+                }
+
             if capability == "vision":
                 pixel = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII="
                 image_url = (

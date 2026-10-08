@@ -71,11 +71,22 @@ class ProviderClient:
             return []
         result: list[str] = []
         is_openrouter = base == "https://openrouter.ai/api/v1"
+        is_nvidia_catalog = base == "https://integrate.api.nvidia.com/v1"
+        nvidia_confirmed_free = {
+            "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+            "google/gemma-4-31b-it",
+            "moonshotai/kimi-k3",
+            "meta/llama-3.2-11b-vision-instruct",
+            "meta/llama-3.2-90b-vision-instruct",
+            "google/diffusiongemma-26b-a4b-it",
+        }
         for item in source[:2000]:
             model_id = item if isinstance(item, str) else item.get("id") if isinstance(item, dict) else None
             if not isinstance(model_id, str) or not model_id.strip() or len(model_id) > 200:
                 continue
             model_id = model_id.strip()
+            if is_nvidia_catalog and model_id not in nvidia_confirmed_free:
+                continue
             if is_openrouter:
                 pricing = item.get("pricing") if isinstance(item, dict) and isinstance(item.get("pricing"), dict) else {}
                 prompt_price = pricing.get("prompt")

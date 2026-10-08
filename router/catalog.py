@@ -210,8 +210,12 @@ class ProviderCatalog:
                     continue
                 found = True
                 retained = tuple(item for item in model.evidence if item.capability != capability)
+                capabilities = model.capabilities
+                if status == "verified":
+                    capabilities = frozenset(set(capabilities) | {capability})
                 models.append(replace(
                     model,
+                    capabilities=capabilities,
                     evidence=retained + (CapabilityEvidence.now(capability, status, evidence),),
                 ))
             if not found:

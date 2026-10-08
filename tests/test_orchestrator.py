@@ -47,10 +47,10 @@ def test_subtasks_use_strategic_cost_budgets():
     Orchestrator(fake).process(RouteRequest("complex", decompose=True))
     low = next(req for phase, req in fake.calls if phase == "subtask:understand")
     high = next(req for phase, req in fake.calls if phase == "subtask:execute")
-    assert low.max_strategic_cost == 55
+    assert low.max_strategic_cost == 20
     assert low.preferred_model_class == "standard"
-    assert high.max_strategic_cost is None
-    assert high.preferred_model_class == "strong"
+    assert high.max_strategic_cost == 30
+    assert high.preferred_model_class == "standard"
 
 
 class DependencyRouter(FakeRouter):
@@ -103,3 +103,12 @@ def test_critical_subtask_failure_stops_composition():
     assert not result.ok
     assert result.error == "critical_subtask_failed"
     assert "compose" not in [phase for phase, _ in fake.calls]
+
+
+def test_decomposition_never_auto_escalates_subtasks_to_strong_models():
+    fake = FakeRouter()
+    Orchestrator(fake).process(RouteRequest("complex", decompose=True))
+    subreqs = [req for phase, req in fake.calls if phase.startswith("subtask:")]
+    assert subreqs
+    assert all(req.preferred_model_class == "standard" for req in subreqs)
+    assert all(req.max_strategic_cost is not None and req.max_strategic_cost <= 30 for req in subreqs)

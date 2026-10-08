@@ -156,6 +156,49 @@ def load_environment_providers() -> None:
         threading.Thread(target=_startup_capability_profile, daemon=True).start()
     if os.getenv("ROUTER_STARTUP_ROUTING_SMOKE", "").strip() == "1":
         threading.Thread(target=_startup_routing_smoke, daemon=True).start()
+    if os.getenv("ROUTER_STARTUP_ORCHESTRATION_SMOKE", "").strip() == "1":
+        threading.Thread(target=_startup_orchestration_smoke, daemon=True).start()
+
+def _startup_orchestration_smoke() -> None:
+    if os.getenv("ROUTER_STARTUP_ORCHESTRATION_SMOKE", "").strip() != "1":
+        return
+    task = (
+        "Analiza este problema en pasos dependientes y devolvé una única respuesta final: "
+        "Una cuadrilla tiene que reparar tres sumideros. El primero demora 2 horas, "
+        "el segundo 3 horas y el tercero 1 hora. Solo hay dos equipos disponibles. "
+        "Proponé un orden de trabajo que minimice el tiempo total, justificá el criterio "
+        "y terminá con el tiempo mínimo total estimado."
+    )
+    try:
+        result = router.process(RouteRequest(
+            task=task,
+            required_capabilities=frozenset({"chat","reasoning"}),
+            application_name="router-orchestration-smoke",
+            decompose=True,
+            max_subtasks=6,
+            timeout_s=35,
+        ))
+        trace = (result.raw or {}).get("orchestration", {})
+        subtasks = trace.get("subtasks", [])
+        phases = ",".join(a.phase for a in result.attempts)
+        providers = ",".join(
+            f"{item.get('id')}:{item.get('provider') or '-'}"
+            for item in subtasks
+        )
+        print(
+            "ROUTER_ORCHESTRATION_SMOKE "
+            f"ok={result.ok} subtasks={len(subtasks)} "
+            f"providers={providers or '-'} phases={phases or '-'} "
+            f"verification={'yes' if trace.get('verification') else 'no'} "
+            f"error={result.error or '-'}",
+            flush=True,
+        )
+    except Exception as exc:
+        print(
+            "ROUTER_ORCHESTRATION_SMOKE "
+            f"ok=False error={type(exc).__name__}",
+            flush=True,
+        )
 
 def _startup_routing_smoke() -> None:
     if os.getenv("ROUTER_STARTUP_ROUTING_SMOKE", "").strip() != "1":

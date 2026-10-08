@@ -221,8 +221,12 @@ class Router:
                 http_status = probe.get("http_status")
             except Exception as exc:
                 status = "inconclusive"
-                evidence = f"probe_error:{type(exc).__name__}"
-                http_status = None
+                if isinstance(exc, httpx.HTTPStatusError):
+                    http_status = exc.response.status_code
+                    evidence = f"probe_http_status:{http_status}"
+                else:
+                    evidence = f"probe_error:{type(exc).__name__}"
+                    http_status = None
         else:
             probes = {
                 "chat": ("Reply with exactly ROUTER_OK", lambda text: text.strip() == "ROUTER_OK"),

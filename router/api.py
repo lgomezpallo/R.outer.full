@@ -164,12 +164,19 @@ def _startup_capability_profile() -> None:
             verified = None
             checked = 0
             print(f"ROUTER_CAPABILITY_CANDIDATES provider={item.spec.id} capability={capability} candidates={len(candidates)}", flush=True)
-            for model in candidates[:2]:
+            limit = 2 if capability in {"reasoning","code","summarization","document"} else 6
+            for model in candidates[:limit]:
                 checked += 1
                 try:
                     result = router.verify_capability(item.spec.id, model.id, capability)
                 except Exception:
                     continue
+                print(
+                    f"ROUTER_CAPABILITY_DETAIL provider={item.spec.id} capability={capability} "
+                    f"model={model.id} status={result.get('status')} "
+                    f"http={result.get('http_status', '-')} evidence={result.get('evidence', '-')}",
+                    flush=True,
+                )
                 if result.get("status") == "verified":
                     verified = model.id
                     break

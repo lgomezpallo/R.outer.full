@@ -56,9 +56,9 @@ def infer_discovered_capabilities(model_id: str) -> frozenset[str]:
     name = model_id.lower()
     if any(token in name for token in ("prompt-guard", "safeguard", "moderation", "safety", "rerank", "embed", "smart-turn", "turn-detection", "vad")):
         return frozenset()
-    if "whisper" in name or "transcri" in name or "/asr" in name:
+    if "whisper" in name or "transcri" in name or "/asr" in name or "nova-3" in name:
         return frozenset({"transcription"})
-    if "orpheus" in name or "tts" in name or "text-to-speech" in name:
+    if "orpheus" in name or "tts" in name or "text-to-speech" in name or "aura-" in name or "melotts" in name:
         return frozenset({"speech"})
     if any(token in name for token in ("flux", "stable-diffusion", "sdxl", "imagen")):
         caps = {"image_generation"}

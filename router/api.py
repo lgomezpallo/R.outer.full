@@ -35,6 +35,9 @@ def require_auth(authorization: str | None = Header(default=None)) -> str:
     supplied = authorization[len(prefix):] if authorization and authorization.startswith(prefix) else ""
     if expected and supplied and secrets.compare_digest(supplied, expected):
         return "service"
+    iachat_token = os.getenv("ROUTER_IACHAT_TOKEN", "").strip()
+    if iachat_token and supplied and secrets.compare_digest(supplied, iachat_token):
+        return "iachat"
     if supplied:
         app_name = store.verify_app_token(supplied)
         if app_name:

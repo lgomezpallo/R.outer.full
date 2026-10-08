@@ -143,10 +143,15 @@ class ProviderClient:
         headers = {"Authorization": f"Bearer {provider.api_key}"}
         try:
             if capability == "vision":
-                pixel = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII="
+                pixel = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII="
+                image_url = (
+                    "https://assets.ngc.nvidia.com/products/api-catalog/phi-3-5-vision/example1a.jpg"
+                    if base == "https://integrate.api.nvidia.com/v1"
+                    else "data:image/png;base64," + pixel
+                )
                 content = [
                     {"type": "text", "text": "Describe the image in one word."},
-                    {"type": "image_url", "image_url": {"url": "data:image/png;base64," + pixel}},
+                    {"type": "image_url", "image_url": {"url": image_url}},
                 ]
                 payload = {"model": model, "messages": [{"role": "user", "content": content}], "max_tokens": 12}
                 path = "/v1/chat/completions" if _is_cloudflare_workers_ai(base) else "/chat/completions"

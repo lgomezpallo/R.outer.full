@@ -70,10 +70,29 @@ class ProviderClient:
         if not isinstance(source, list):
             return []
         result: list[str] = []
+        is_openrouter = base == "https://openrouter.ai/api/v1"
         for item in source[:2000]:
             model_id = item if isinstance(item, str) else item.get("id") if isinstance(item, dict) else None
-            if isinstance(model_id, str) and model_id.strip() and len(model_id) <= 200:
-                result.append(model_id.strip())
+            if not isinstance(model_id, str) or not model_id.strip() or len(model_id) > 200:
+                continue
+            model_id = model_id.strip()
+            if is_openrouter:
+                pricing = item.get("pricing") if isinstance(item, dict) and isinstance(item.get("pricing"), dict) else {}
+                prompt_price = pricing.get("prompt")
+                completion_price = pricing.get("completion")
+                zero_priced = False
+                try:
+                    zero_priced = (
+                        prompt_price is not None
+                        and completion_price is not None
+                        and float(prompt_price) == 0.0
+                        and float(completion_price) == 0.0
+                    )
+                except (TypeError, ValueError):
+                    zero_priced = False
+                if not (model_id.endswith(":free") or model_id == "openrouter/free" or zero_priced):
+                    continue
+            result.append(model_id)
         return list(dict.fromkeys(result))
 
     def probe_capability(self, provider: RegisteredProvider, model: str, capability: str) -> dict:

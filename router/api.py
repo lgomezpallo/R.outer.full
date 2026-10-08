@@ -163,7 +163,8 @@ def _startup_capability_profile() -> None:
             candidates = [m for m in item.spec.models if ("chat" in m.capabilities if capability in {"reasoning","code","summarization","document"} else capability in m.capabilities)]
             verified = None
             checked = 0
-            for model in candidates[:4]:
+            print(f"ROUTER_CAPABILITY_CANDIDATES provider={item.spec.id} capability={capability} candidates={len(candidates)}", flush=True)
+            for model in candidates[:2]:
                 checked += 1
                 try:
                     result = router.verify_capability(item.spec.id, model.id, capability)
@@ -172,7 +173,7 @@ def _startup_capability_profile() -> None:
                 if result.get("status") == "verified":
                     verified = model.id
                     break
-            print(f"ROUTER_CAPABILITY_PROFILE provider={item.spec.id} capability={capability} candidates={len(candidates)} checked={checked} verified={verified or '-'}")
+            print(f"ROUTER_CAPABILITY_PROFILE provider={item.spec.id} capability={capability} candidates={len(candidates)} checked={checked} verified={verified or '-'}", flush=True)
 
 
 @app.get("/catalog")

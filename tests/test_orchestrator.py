@@ -112,3 +112,20 @@ def test_decomposition_never_auto_escalates_subtasks_to_strong_models():
     assert subreqs
     assert all(req.preferred_model_class == "standard" for req in subreqs)
     assert all(req.max_strategic_cost is not None and req.max_strategic_cost <= 30 for req in subreqs)
+
+
+def test_plan_accepts_up_to_fifty_subtasks():
+    fake = FakeRouter()
+    orchestrator = Orchestrator(fake)
+    req = RouteRequest("complex", decompose=True, max_subtasks=50)
+    payload = {
+        "summary": "many",
+        "requires_verification": False,
+        "subtasks": [
+            {"id": f"s{i}", "role": "execute", "task": f"task {i}", "capabilities": ["chat"], "importance": 20}
+            for i in range(1, 51)
+        ],
+    }
+    import json
+    plan = orchestrator._parse_plan(json.dumps(payload), req)
+    assert len(plan.subtasks) == 50

@@ -157,7 +157,12 @@ class ProviderClient:
             if capability == "speech":
                 if _is_cloudflare_workers_ai(base):
                     url = base + "/run/" + model
-                    payload = {"text": "Hello"}
+                    spanish = model.lower().endswith("aura-2-es")
+                    payload = {
+                        "text": "Hola",
+                        "speaker": "aquila" if spanish else "asteria",
+                        "encoding": "mp3",
+                    }
                 else:
                     url = base + "/audio/speech"
                     payload = {"model": model, "input": "Hello", "voice": "alloy", "response_format": "wav"}
@@ -166,24 +171,48 @@ class ProviderClient:
                 return self._probe_http_result(response, "active_speech_probe")
 
             if capability == "transcription":
-                if _is_cloudflare_workers_ai(base):
-                    return {"status": "inconclusive", "evidence": "cloudflare_transcription_requires_native_format"}
                 wav = self._silence_wav()
-                files = {"file": ("probe.wav", wav, "audio/wav")}
-                data = {"model": model, "response_format": "json"}
-                with httpx.Client(timeout=45, follow_redirects=False) as client:
-                    response = client.post(base + "/audio/transcriptions", headers=headers, files=files, data=data)
+                if _is_cloudflare_workers_ai(base):
+                    import base64
+                    payload = {
+                        "audio": base64.b64encode(wav).decode("ascii"),
+                        "task": "transcribe",
+                    }
+                    with httpx.Client(timeout=45, follow_redirects=False) as client:
+                        response = client.post(
+                            base + "/run/" + model,
+                            headers={**headers, "Content-Type": "application/json"},
+                            json=payload,
+                        )
+                else:
+                    files = {"file": ("probe.wav", wav, "audio/wav")}
+                    data = {"model": model, "response_format": "json"}
+                    with httpx.Client(timeout=45, follow_redirects=False) as client:
+                        response = client.post(base + "/audio/transcriptions", headers=headers, files=files, data=data)
                 return self._probe_http_result(response, "active_transcription_probe")
 
             if capability == "image_generation":
                 if _is_cloudflare_workers_ai(base):
                     url = base + "/run/" + model
-                    payload = {"prompt": "A red circle on a white background"}
+                    prompt = "A red circle on a white background"
+                    with httpx.Client(timeout=60, follow_redirects=False) as client:
+                        if any(token in model.lower() for token in ("flux-2-dev", "flux-2-klein")):
+                            response = client.post(
+                                url,
+                                headers=headers,
+                                files={"prompt": (None, prompt)},
+                            )
+                        else:
+                            response = client.post(
+                                url,
+                                headers={**headers, "Content-Type": "application/json"},
+                                json={"prompt": prompt},
+                            )
                 else:
                     url = base + "/images/generations"
                     payload = {"model": model, "prompt": "A red circle on a white background", "n": 1}
-                with httpx.Client(timeout=60, follow_redirects=False) as client:
-                    response = client.post(url, headers={**headers, "Content-Type": "application/json"}, json=payload)
+                    with httpx.Client(timeout=60, follow_redirects=False) as client:
+                        response = client.post(url, headers={**headers, "Content-Type": "application/json"}, json=payload)
                 return self._probe_http_result(response, "active_image_generation_probe")
 
             return {"status": "inconclusive", "evidence": "no_specific_probe_defined"}

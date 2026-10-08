@@ -222,6 +222,26 @@ class ProviderClient:
                         response = client.post(url, headers={**headers, "Content-Type": "application/json"}, json=payload)
                 return self._probe_http_result(response, "active_image_generation_probe")
 
+            if capability == "image_editing":
+                import base64
+                pixel = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=")
+                prompt = "Change the image color while preserving the simple composition"
+                if _is_cloudflare_workers_ai(base):
+                    url = base + "/run/" + model
+                    files = {
+                        "prompt": (None, prompt),
+                        "input_image_0": ("probe.png", pixel, "image/png"),
+                    }
+                    with httpx.Client(timeout=60, follow_redirects=False) as client:
+                        response = client.post(url, headers=headers, files=files)
+                else:
+                    url = base + "/images/edits"
+                    files = {"image": ("probe.png", pixel, "image/png")}
+                    data = {"model": model, "prompt": prompt}
+                    with httpx.Client(timeout=60, follow_redirects=False) as client:
+                        response = client.post(url, headers=headers, files=files, data=data)
+                return self._probe_http_result(response, "active_image_editing_probe")
+
             return {"status": "inconclusive", "evidence": "no_specific_probe_defined"}
         except httpx.HTTPError as exc:
             if isinstance(exc, httpx.HTTPStatusError):

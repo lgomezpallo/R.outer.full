@@ -89,3 +89,22 @@ def test_catalog_can_add_provider_without_secret(monkeypatch):
     item = next(provider for provider in catalog if provider["id"] == "exampleai")
     assert item["models"][0]["declared_capabilities"] == ["chat", "json"]
     assert "api_key" not in str(item).lower()
+
+
+def test_frontend_root_is_served():
+    client = TestClient(module.app)
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "Router IA" in response.text
+    assert "/app/app.js" in response.text
+
+def test_route_accepts_up_to_fifty_subtasks(monkeypatch):
+    module.router = Router()
+    monkeypatch.setenv("ROUTER_SERVICE_TOKEN", "secret-token")
+    client = TestClient(module.app)
+    response = client.post(
+        "/route",
+        headers={"Authorization":"Bearer secret-token"},
+        json={"task":"hola","max_subtasks":50},
+    )
+    assert response.status_code == 200

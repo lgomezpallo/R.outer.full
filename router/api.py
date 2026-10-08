@@ -3,7 +3,10 @@ import os
 import secrets
 import time
 import threading
+from pathlib import Path
 from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from .catalog import ModelSpec, ProviderCatalog, ProviderSpec
 from .router import Router
@@ -12,6 +15,16 @@ from .storage import RouterStore
 from .types import RouteRequest
 
 app = FastAPI(title="Router IA", version="2.0.0")
+_STATIC_DIR = Path(__file__).resolve().parent / "static"
+if _STATIC_DIR.exists():
+    app.mount("/app", StaticFiles(directory=_STATIC_DIR), name="app")
+
+@app.get("/", include_in_schema=False)
+def router_ui():
+    index = _STATIC_DIR / "index.html"
+    if index.exists():
+        return FileResponse(index)
+    return {"name": "Router IA", "status": "ok"}
 catalog = ProviderCatalog(storage_path=os.getenv("ROUTER_CATALOG_FILE") or "router-catalog.json")
 store = RouterStore(path=os.getenv("ROUTER_DB_FILE", "router.db"), master_key=os.getenv("ROUTER_MASTER_KEY"))
 router = Router(max_retries=int(os.getenv("ROUTER_MAX_RETRIES", "1")), catalog=catalog, store=store)

@@ -112,6 +112,31 @@ class ProviderClient:
                 ok = False
             return {"status": "verified" if ok else "unsupported", "evidence": "active_json_probe"}
 
+        if capability in {"reasoning", "code", "coding", "summarization", "document"}:
+            if capability == "reasoning":
+                task = "Solve 17*19. Reply with only the number."
+                validator = lambda text: text.strip() == "323"
+                evidence = "active_reasoning_probe"
+            elif capability in {"code", "coding"}:
+                task = "Write a Python function named add(a, b) that returns a+b. Return only code."
+                validator = lambda text: "def add" in text and "return" in text and ("a + b" in text or "a+b" in text)
+                evidence = "active_code_probe"
+            elif capability == "summarization":
+                task = "Summarize in at most 6 words: The red car stopped at the traffic light because it had turned red."
+                validator = lambda text: 1 <= len(text.strip().split()) <= 8 and "red" in text.lower()
+                evidence = "active_summarization_probe"
+            else:
+                task = "Document: ALPHA=73; BETA=19. Question: what is ALPHA? Reply with only the value."
+                validator = lambda text: text.strip() == "73"
+                evidence = "active_document_probe"
+            text, _ = self.complete(
+                provider,
+                model,
+                RouteRequest(task=task, required_capabilities=frozenset({"chat"}), decompose=False, timeout_s=25),
+            )
+            ok = bool(validator(text))
+            return {"status": "verified" if ok else "unsupported", "evidence": evidence}
+
         if provider.spec.protocol != "openai-compatible":
             return {"status": "inconclusive", "evidence": "probe_not_implemented_for_protocol"}
 

@@ -159,12 +159,12 @@ def _startup_capability_profile() -> None:
     if os.getenv("ROUTER_STARTUP_CAPABILITY_PROFILE", "").strip() != "1":
         return
     for item in router.registry.all():
-        for capability in ("reasoning", "code", "summarization", "document", "vision", "transcription", "speech", "image_generation"):
-            candidates = [m for m in item.spec.models if ("chat" in m.capabilities if capability in {"reasoning","code","summarization","document"} else capability in m.capabilities)]
+        for capability in ("json", "reasoning", "code", "summarization", "document", "vision", "transcription", "speech", "image_generation", "image_editing"):
+            candidates = [m for m in item.spec.models if ("chat" in m.capabilities if capability in {"json","reasoning","code","summarization","document"} else capability in m.capabilities)]
             verified = None
             checked = 0
             print(f"ROUTER_CAPABILITY_CANDIDATES provider={item.spec.id} capability={capability} candidates={len(candidates)}", flush=True)
-            limit = 2 if capability in {"reasoning","code","summarization","document"} else 6
+            limit = 2 if capability in {"json","reasoning","code","summarization","document"} else 6
             for model in candidates[:limit]:
                 checked += 1
                 try:

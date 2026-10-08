@@ -285,13 +285,24 @@ class Router:
                 "status": "inconclusive",
                 "reason": "no_chat_model",
                 "health_status": provider.state.health_status,
+                "checked": [],
             }
-        candidates.sort(key=lambda model: (model.strategic_cost, -model.priority))
-        model = candidates[0]
-        result = self.verify_capability(provider_id, model.id, "chat")
-        if result["status"] == "verified":
-            provider.state.mark_success(model.id, int(result.get("latency_ms", 0)))
-        else:
+        candidates.sort(key=lambda model: (model.strategic_cost, -model.priority, model.id))
+        checked: list[dict] = []
+        best = None
+        for model in candidates[:8]:
+            result = self.verify_capability(provider_id, model.id, "chat")
+            checked.append({
+                "model": model.id,
+                "status": result["status"],
+                "latency_ms": result.get("latency_ms"),
+                "http_status": result.get("http_status"),
+                "evidence": result.get("evidence"),
+            })
+            if result["status"] == "verified":
+                provider.state.mark_success(model.id, int(result.get("latency_ms", 0)))
+                best = result
+                break
             provider.state.mark_failure(
                 model.id,
                 result.get("evidence", result["status"]),
@@ -300,8 +311,21 @@ class Router:
             )
         if self.store is not None:
             self.store.save_provider_runtime(provider_id, provider.state)
+        if best is None:
+            last = checked[-1]
+            return {
+                "provider": provider_id,
+                "status": "inconclusive",
+                "model": last["model"],
+                "latency_ms": last["latency_ms"],
+                "evidence": last["evidence"],
+                "health_status": provider.state.health_status,
+                "success_rate": provider.state.success_rate,
+                "checked": checked,
+            }
         return {
-            **result,
+            **best,
             "health_status": provider.state.health_status,
             "success_rate": provider.state.success_rate,
+            "checked": checked,
         }

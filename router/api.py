@@ -92,7 +92,7 @@ class RouteInput(BaseModel):
     timeout_s: float = 45.0
     application_name: str = "unknown"
     decompose: bool | None = None
-    max_subtasks: int = Field(default=8, ge=1, le=12)
+    max_subtasks: int = Field(default=12, ge=1, le=50)
 
 @app.on_event("startup")
 def load_environment_providers() -> None:

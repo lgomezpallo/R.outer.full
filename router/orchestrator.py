@@ -237,6 +237,12 @@ class Orchestrator:
                     max_strategic_cost=max_cost,
                 )
                 result = self.router.route(subreq, phase=f"subtask:{subtask.role}")
+                # Preserve cheap-first routing, but do not reject capable
+                # models solely because the initial cost ceiling was too low.
+                if not result.ok and result.error == "no_eligible_provider":
+                    from dataclasses import replace
+                    retry_req = replace(subreq, max_strategic_cost=None)
+                    result = self.router.route(retry_req, phase=f"subtask:{subtask.role}")
                 all_attempts.extend(result.attempts)
                 all_decisions.extend(result.decisions)
                 item = {

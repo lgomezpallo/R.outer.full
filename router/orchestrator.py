@@ -14,6 +14,8 @@ class PlannedSubtask:
     task: str
     capabilities: frozenset[str]
     importance: int
+    depends_on: tuple[str, ...] = ()
+    critical: bool = False
 
 @dataclass(frozen=True)
 class TaskPlan:
@@ -53,12 +55,19 @@ class Orchestrator:
             if role not in allowed_roles:
                 role = "execute"
             caps = frozenset(str(x) for x in item.get("capabilities", ["chat"]) if str(x) in allowed_caps) or frozenset({"chat"})
+            subtask_id = str(item.get("id") or f"s{index}")
+            depends_on = tuple(
+                str(x) for x in item.get("depends_on", [])
+                if isinstance(x, (str, int)) and str(x) != subtask_id
+            )
             subtasks.append(PlannedSubtask(
-                id=str(item.get("id") or f"s{index}"),
+                id=subtask_id,
                 role=role,
                 task=task,
                 capabilities=caps,
                 importance=max(0, min(100, int(item.get("importance", 50)))),
+                depends_on=depends_on,
+                critical=bool(item.get("critical", False)),
             ))
         if not subtasks:
             raise ValueError("empty_plan")
@@ -67,7 +76,18 @@ class Orchestrator:
     def _fallback_plan(self, req: RouteRequest) -> TaskPlan:
         chunks = [x.strip(" -\t") for x in re.split(r"\n+|(?<=[.;])\s+", req.task) if x.strip()]
         chunks = (chunks if len(chunks) > 1 else [req.task])[: min(req.max_subtasks, 6)]
-        subtasks = tuple(PlannedSubtask(f"s{i}", "understand" if i == 1 else "execute", task, req.required_capabilities, 25 if i == 1 else 50) for i, task in enumerate(chunks, 1))
+        subtasks = tuple(
+            PlannedSubtask(
+                f"s{i}",
+                "understand" if i == 1 else "execute",
+                task,
+                req.required_capabilities,
+                25 if i == 1 else 50,
+                (f"s{i-1}",) if i > 1 else (),
+                i == len(chunks),
+            )
+            for i, task in enumerate(chunks, 1)
+        )
         return TaskPlan(req.task[:200], subtasks, True)
 
     def _budget(self, importance: int) -> tuple[str | None, int | None]:
@@ -88,6 +108,8 @@ class Orchestrator:
                 "task": "self-contained work item",
                 "capabilities": ["chat", "reasoning"],
                 "importance": 20,
+                "depends_on": [],
+                "critical": False,
             }],
         }
         task = (
@@ -163,32 +185,99 @@ class Orchestrator:
         all_decisions = list(planning.decisions)
         results: list[dict] = []
 
-        for subtask in plan.subtasks:
-            model_class, max_cost = self._budget(subtask.importance)
-            subreq = RouteRequest(
-                task=subtask.task,
-                context=req.context,
-                requirements=req.requirements,
-                required_capabilities=subtask.capabilities,
-                preferred_model_class=model_class,
-                timeout_s=req.timeout_s,
-                application_name=req.application_name,
-                decompose=False,
-                max_strategic_cost=max_cost,
+        completed: dict[str, dict] = {}
+        pending = list(plan.subtasks)
+        while pending:
+            progressed = False
+            for subtask in list(pending):
+                missing = [dep for dep in subtask.depends_on if dep not in completed]
+                if missing:
+                    continue
+                blocked = [dep for dep in subtask.depends_on if not completed[dep]["ok"]]
+                if blocked:
+                    item = {
+                        "id": subtask.id,
+                        "role": subtask.role,
+                        "importance": subtask.importance,
+                        "critical": subtask.critical,
+                        "depends_on": list(subtask.depends_on),
+                        "ok": False,
+                        "text": None,
+                        "provider": None,
+                        "model": None,
+                        "error": "dependency_failed:" + ",".join(blocked),
+                    }
+                    results.append(item)
+                    completed[subtask.id] = item
+                    pending.remove(subtask)
+                    progressed = True
+                    continue
+
+                dependency_context = [
+                    {"id": dep, "text": completed[dep]["text"]}
+                    for dep in subtask.depends_on
+                    if completed[dep].get("text")
+                ]
+                model_class, max_cost = self._budget(subtask.importance)
+                subreq = RouteRequest(
+                    task=subtask.task,
+                    context=req.context + (
+                        "\nDependency results: " + json.dumps(dependency_context, ensure_ascii=False)
+                        if dependency_context else ""
+                    ),
+                    requirements=req.requirements,
+                    required_capabilities=subtask.capabilities,
+                    preferred_model_class=model_class,
+                    timeout_s=req.timeout_s,
+                    application_name=req.application_name,
+                    decompose=False,
+                    max_strategic_cost=max_cost,
+                )
+                result = self.router.route(subreq, phase=f"subtask:{subtask.role}")
+                all_attempts.extend(result.attempts)
+                all_decisions.extend(result.decisions)
+                item = {
+                    "id": subtask.id,
+                    "role": subtask.role,
+                    "importance": subtask.importance,
+                    "critical": subtask.critical,
+                    "depends_on": list(subtask.depends_on),
+                    "ok": result.ok,
+                    "text": result.text,
+                    "provider": result.provider,
+                    "model": result.model,
+                    "error": result.error,
+                }
+                results.append(item)
+                completed[subtask.id] = item
+                pending.remove(subtask)
+                progressed = True
+
+            if not progressed:
+                for subtask in pending:
+                    item = {
+                        "id": subtask.id,
+                        "role": subtask.role,
+                        "importance": subtask.importance,
+                        "critical": subtask.critical,
+                        "depends_on": list(subtask.depends_on),
+                        "ok": False,
+                        "text": None,
+                        "provider": None,
+                        "model": None,
+                        "error": "dependency_cycle_or_missing",
+                    }
+                    results.append(item)
+                    completed[subtask.id] = item
+                pending.clear()
+
+        failed_critical = [item for item in results if item.get("critical") and not item["ok"]]
+        if failed_critical:
+            return RouteResponse(
+                False, None, None, None, all_attempts, all_decisions,
+                "critical_subtask_failed",
+                raw={"orchestration": {"plan": plan.summary, "subtasks": results}},
             )
-            result = self.router.route(subreq, phase=f"subtask:{subtask.role}")
-            all_attempts.extend(result.attempts)
-            all_decisions.extend(result.decisions)
-            results.append({
-                "id": subtask.id,
-                "role": subtask.role,
-                "importance": subtask.importance,
-                "ok": result.ok,
-                "text": result.text,
-                "provider": result.provider,
-                "model": result.model,
-                "error": result.error,
-            })
 
         successful = [item for item in results if item["ok"] and item["text"]]
         if not successful:

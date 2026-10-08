@@ -260,3 +260,22 @@ def test_router_exhausts_current_provider_models_before_switching_group():
     assert result.ok
     assert [attempt.provider for attempt in result.attempts] == ["groq", "groq", "groq"]
     assert len({attempt.model for attempt in result.attempts}) == 3
+
+
+def test_verified_capability_becomes_routable():
+    from router.catalog import ModelSpec, ProviderCatalog, ProviderSpec
+    catalog = ProviderCatalog(providers=(
+        ProviderSpec(
+            id="test",
+            aliases=("test",),
+            base_url="https://example.invalid/v1",
+            models=(ModelSpec("m", frozenset({"chat"}), "standard", 50, 10),),
+        ),
+    ))
+    catalog.record_capability("test", "m", "long_context", "verified", "active_probe")
+    fake = FakeClient(["ok"])
+    router = Router(fake, max_retries=0, catalog=catalog)
+    router.add_provider("test", "a", discover=False)
+    result = router.route(RouteRequest("x", required_capabilities=frozenset({"long_context"})))
+    assert result.ok
+    assert result.model == "m"

@@ -154,6 +154,66 @@ def load_environment_providers() -> None:
 
     if os.getenv("ROUTER_STARTUP_CAPABILITY_PROFILE", "").strip() == "1":
         threading.Thread(target=_startup_capability_profile, daemon=True).start()
+    if os.getenv("ROUTER_STARTUP_ROUTING_SMOKE", "").strip() == "1":
+        threading.Thread(target=_startup_routing_smoke, daemon=True).start()
+
+def _startup_routing_smoke() -> None:
+    if os.getenv("ROUTER_STARTUP_ROUTING_SMOKE", "").strip() != "1":
+        return
+
+    cases = [
+        ("simple", RouteRequest(
+            task="Reply with exactly ROUTER_SMOKE_OK",
+            required_capabilities=frozenset({"chat"}),
+            application_name="router-smoke",
+            decompose=False,
+            timeout_s=25,
+        )),
+        ("reasoning", RouteRequest(
+            task="Solve 29*37. Reply with only the number.",
+            required_capabilities=frozenset({"reasoning"}),
+            application_name="router-smoke",
+            decompose=False,
+            timeout_s=25,
+        )),
+        ("code", RouteRequest(
+            task="Write a Python function square(n) that returns n*n. Return only code.",
+            required_capabilities=frozenset({"code"}),
+            application_name="router-smoke",
+            decompose=False,
+            timeout_s=25,
+        )),
+        ("long-fallback", RouteRequest(
+            task=(("alpha beta gamma delta epsilon zeta eta theta " * 1100)
+                  + "\nIMPORTANT MARKER: ROUTER_SMOKE_LONG_93217"
+                  + "\nReply with exactly ROUTER_SMOKE_LONG_93217"),
+            required_capabilities=frozenset({"chat"}),
+            application_name="router-smoke",
+            decompose=False,
+            timeout_s=45,
+        )),
+    ]
+
+    for name, request in cases:
+        try:
+            result = router.route(request)
+            attempts = ",".join(
+                f"{a.provider}/{a.model}:{'ok' if a.ok else 'fail'}"
+                for a in result.attempts
+            )
+            print(
+                "ROUTER_ROUTING_SMOKE "
+                f"case={name} ok={result.ok} provider={result.provider or '-'} "
+                f"model={result.model or '-'} attempts={attempts or '-'} "
+                f"error={result.error or '-'}",
+                flush=True,
+            )
+        except Exception as exc:
+            print(
+                "ROUTER_ROUTING_SMOKE "
+                f"case={name} ok=False error={type(exc).__name__}",
+                flush=True,
+            )
 
 def _startup_capability_profile() -> None:
     if os.getenv("ROUTER_STARTUP_CAPABILITY_PROFILE", "").strip() != "1":

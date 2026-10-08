@@ -129,3 +129,27 @@ def test_plan_accepts_up_to_fifty_subtasks():
     import json
     plan = orchestrator._parse_plan(json.dumps(payload), req)
     assert len(plan.subtasks) == 50
+
+
+class BudgetCeilingRouter(FakeRouter):
+    def route(self, req, phase="execute"):
+        self.calls.append((phase, req))
+        if phase == "plan":
+            return RouteResponse(True, '{"summary":"budget","requires_verification":false,"subtasks":[{"id":"s1","role":"execute","task":"specialized","capabilities":["long_context"],"importance":20,"critical":true}]}', "p", "m", [], [])
+        if phase.startswith("subtask:"):
+            if req.max_strategic_cost is not None:
+                return RouteResponse(False, None, None, None, [], [], "no_eligible_provider")
+            assert req.required_capabilities == frozenset({"long_context"})
+            return RouteResponse(True, "SPECIALIZED_OK", "p", "m", [], [])
+        return RouteResponse(True, "DONE", "p", "m", [], [])
+
+
+def test_subtask_retries_without_cost_ceiling_if_no_eligible_provider():
+    fake = BudgetCeilingRouter()
+    result = Orchestrator(fake).process(RouteRequest("complex", decompose=True))
+    assert result.ok
+    calls = [req for phase, req in fake.calls if phase.startswith("subtask:")]
+    assert len(calls) == 2
+    assert calls[0].max_strategic_cost == 20
+    assert calls[1].max_strategic_cost is None
+    assert calls[1].required_capabilities == calls[0].required_capabilities

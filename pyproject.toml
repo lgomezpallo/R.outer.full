@@ -3,7 +3,7 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "corex-router"
+name = "router-ia"
 version = "1.0.0"
 description = "Router de IA desacoplado, auditable y tolerante a fallas."
 requires-python = ">=3.11"

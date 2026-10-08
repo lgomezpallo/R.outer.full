@@ -130,6 +130,27 @@ def load_environment_providers() -> None:
             except ValueError:
                 pass
 
+    if os.getenv("ROUTER_STARTUP_PROVIDER_TESTS", "").strip() == "1":
+        for item in router.registry.all():
+            provider_id = item.spec.id
+            print(f"ROUTER_PROVIDER_DISCOVERY provider={provider_id} models={len(item.spec.models)}")
+            try:
+                result = router.test_provider(provider_id)
+                print(
+                    "ROUTER_PROVIDER_TEST "
+                    f"provider={provider_id} "
+                    f"status={result.get('status')} "
+                    f"model={result.get('model')} "
+                    f"latency_ms={result.get('latency_ms')} "
+                    f"health={result.get('health_status')}"
+                )
+            except Exception as exc:
+                print(
+                    "ROUTER_PROVIDER_TEST "
+                    f"provider={provider_id} status=error "
+                    f"error={type(exc).__name__}"
+                )
+
 @app.get("/catalog")
 def catalog():
     return {"providers": router.catalog.snapshot()}

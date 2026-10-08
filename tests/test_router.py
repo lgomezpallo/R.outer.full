@@ -245,3 +245,18 @@ def test_active_provider_health_test_updates_state():
     assert result["health_status"] == "available"
     provider = router.registry.all()[0]
     assert provider.state.health_ok is True
+
+
+def test_router_exhausts_current_provider_models_before_switching_group():
+    fake = FakeClient([
+        RuntimeError("first model failed"),
+        RuntimeError("second model failed"),
+        "third model works",
+    ])
+    router = Router(fake, max_retries=0)
+    router.add_provider("Groq", "a")
+    router.add_provider("OpenRouter", "b")
+    result = router.route(RouteRequest("tarea"))
+    assert result.ok
+    assert [attempt.provider for attempt in result.attempts] == ["groq", "groq", "groq"]
+    assert len({attempt.model for attempt in result.attempts}) == 3

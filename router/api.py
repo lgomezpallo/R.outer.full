@@ -158,6 +158,54 @@ def load_environment_providers() -> None:
         threading.Thread(target=_startup_routing_smoke, daemon=True).start()
     if os.getenv("ROUTER_STARTUP_ORCHESTRATION_SMOKE", "").strip() == "1":
         threading.Thread(target=_startup_orchestration_smoke, daemon=True).start()
+    if os.getenv("ROUTER_STARTUP_HETEROGENEOUS_SMOKE", "").strip() == "1":
+        threading.Thread(target=_startup_heterogeneous_smoke, daemon=True).start()
+
+def _startup_heterogeneous_smoke() -> None:
+    if os.getenv("ROUTER_STARTUP_HETEROGENEOUS_SMOKE", "").strip() != "1":
+        return
+    long_material = ("alpha beta gamma delta epsilon zeta eta theta " * 1100)
+    task = (
+        "Construí una única respuesta final usando exactamente tres subtareas independientes. "
+        "Subtarea 1: resolver 47*63 y justificar brevemente; capability reasoning. "
+        "Subtarea 2: escribir una función Python clamp(x, low, high); capability code. "
+        "Subtarea 3: leer el material largo incluido al final y devolver exactamente la marca "
+        "ROUTER_HETERO_55119; capability long_context. "
+        "Después verificá y componé una respuesta única con los tres resultados. "
+        "No mezcles las tres subtareas.\nMATERIAL LARGO:\n" + long_material +
+        "\nMARCA: ROUTER_HETERO_55119"
+    )
+    try:
+        result = router.process(RouteRequest(
+            task=task,
+            required_capabilities=frozenset({"chat","reasoning"}),
+            application_name="router-heterogeneous-smoke",
+            decompose=True,
+            max_subtasks=5,
+            timeout_s=45,
+        ))
+        trace = (result.raw or {}).get("orchestration", {})
+        subtasks = trace.get("subtasks", [])
+        providers = ",".join(
+            f"{item.get('id')}:{item.get('provider') or '-'}:{item.get('model') or '-'}"
+            for item in subtasks
+        )
+        unique_providers = sorted({item.get("provider") for item in subtasks if item.get("provider")})
+        print(
+            "ROUTER_HETEROGENEOUS_SMOKE "
+            f"ok={result.ok} subtasks={len(subtasks)} "
+            f"unique_providers={len(unique_providers)} "
+            f"providers={providers or '-'} "
+            f"verification={'yes' if trace.get('verification') else 'no'} "
+            f"error={result.error or '-'}",
+            flush=True,
+        )
+    except Exception as exc:
+        print(
+            "ROUTER_HETEROGENEOUS_SMOKE "
+            f"ok=False error={type(exc).__name__}",
+            flush=True,
+        )
 
 def _startup_orchestration_smoke() -> None:
     if os.getenv("ROUTER_STARTUP_ORCHESTRATION_SMOKE", "").strip() != "1":

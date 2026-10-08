@@ -47,7 +47,7 @@ class Orchestrator:
             "image_generation","image_editing","long_context","fast",
         }
         subtasks = []
-        for index, item in enumerate((data.get("subtasks") or [])[: min(req.max_subtasks, 12)], 1):
+        for index, item in enumerate((data.get("subtasks") or [])[: min(req.max_subtasks, 50)], 1):
             task = str(item.get("task", "")).strip()
             if not task:
                 continue
@@ -75,7 +75,7 @@ class Orchestrator:
 
     def _fallback_plan(self, req: RouteRequest) -> TaskPlan:
         chunks = [x.strip(" -\t") for x in re.split(r"\n+|(?<=[.;])\s+", req.task) if x.strip()]
-        chunks = (chunks if len(chunks) > 1 else [req.task])[: min(req.max_subtasks, 6)]
+        chunks = (chunks if len(chunks) > 1 else [req.task])[: min(req.max_subtasks, 50)]
         subtasks = tuple(
             PlannedSubtask(
                 f"s{i}",
@@ -119,7 +119,7 @@ class Orchestrator:
             "Break the task into only the work items that are actually needed. "
             "Use roles from analysis or execution lanes. "
             "Importance is 0-100. Return JSON only. Maximum subtasks: "
-            + str(max(1, min(req.max_subtasks, 12)))
+            + str(max(1, min(req.max_subtasks, 50)))
             + "\nSchema: " + json.dumps(schema)
             + "\nTask: " + req.task
             + "\nContext: " + req.context

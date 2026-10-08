@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#0b1020">
+  <link rel="manifest" href="/app/manifest.json">
+  <link rel="stylesheet" href="/app/styles.css">
+  <title>Router IA</title>
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <div class="eyebrow">CoreX · Router</div>
+      <h1>Router IA</h1>
+      <p>Orquestación gratuita, auditable y tolerante a fallas.</p>
+    </div>
+    <div id="serviceStatus" class="pill muted">conectando…</div>
+  </header>
+
+  <main>
+    <section class="grid stats">
+      <article class="card"><span>Grupos activos</span><strong id="providerCount">—</strong></article>
+      <article class="card"><span>Modelos visibles</span><strong id="modelCount">—</strong></article>
+      <article class="card"><span>Disponibles</span><strong id="availableCount">—</strong></article>
+      <article class="card"><span>Política</span><strong>Gratis</strong></article>
+    </section>
+
+    <section class="card task-card">
+      <div class="section-head">
+        <div><h2>Ejecutar tarea</h2><p>El Router decide si conviene resolver directo o descomponer.</p></div>
+        <button id="refreshBtn" class="secondary">Actualizar</button>
+      </div>
+      <label>Tarea
+        <textarea id="task" rows="7" placeholder="Escribí una tarea completa…"></textarea>
+      </label>
+      <div class="form-grid">
+        <label>Capacidades
+          <input id="capabilities" value="chat">
+        </label>
+        <label>Máx. subtareas
+          <input id="maxSubtasks" type="number" min="1" max="50" value="12">
+        </label>
+        <label>Descomposición
+          <select id="decompose">
+            <option value="">Automática</option>
+            <option value="true">Forzar</option>
+            <option value="false">Directa</option>
+          </select>
+        </label>
+      </div>
+      <details>
+        <summary>Acceso y opciones</summary>
+        <div class="form-grid">
+          <label>Token de app
+            <input id="token" type="password" autocomplete="off" placeholder="Bearer token">
+          </label>
+          <label>Nombre de aplicación
+            <input id="appName" value="router-ui">
+          </label>
+          <label>Timeout
+            <input id="timeout" type="number" min="5" max="180" value="45">
+          </label>
+        </div>
+        <p class="hint">El token queda sólo en este navegador. El panel de estado funciona sin token.</p>
+      </details>
+      <div class="actions">
+        <button id="runBtn" class="primary">Ejecutar</button>
+        <span id="runState" class="hint"></span>
+      </div>
+    </section>
+
+    <section id="resultCard" class="card hidden">
+      <div class="section-head"><div><h2>Resultado</h2><p id="resultMeta"></p></div></div>
+      <pre id="resultText" class="result"></pre>
+      <details open><summary>Traza</summary><div id="trace"></div></details>
+    </section>
+
+    <section class="card">
+      <div class="section-head"><div><h2>Proveedores</h2><p>Estado real observado por el Router.</p></div></div>
+      <div id="providers" class="providers"></div>
+    </section>
+  </main>
+
+  <footer>Router IA · cero costo monetario · selección por capacidad y costo estratégico</footer>
+  <script src="/app/app.js"></script>
+</body>
+</html>

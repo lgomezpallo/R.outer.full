@@ -1,0 +1,9 @@
+{
+  "name": "Router IA",
+  "short_name": "Router",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#080c17",
+  "theme_color": "#0b1020",
+  "icons": []
+}

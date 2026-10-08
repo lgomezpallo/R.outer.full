@@ -165,7 +165,14 @@ class ProviderClient:
                     }
                 else:
                     url = base + "/audio/speech"
-                    payload = {"model": model, "input": "Hello", "voice": "alloy", "response_format": "wav"}
+                    lower_model = model.lower()
+                    if "orpheus-arabic" in lower_model:
+                        voice = "fahad"
+                    elif "orpheus" in lower_model:
+                        voice = "troy"
+                    else:
+                        voice = "alloy"
+                    payload = {"model": model, "input": "Hello", "voice": voice, "response_format": "wav"}
                 with httpx.Client(timeout=45, follow_redirects=False) as client:
                     response = client.post(url, headers={**headers, "Content-Type": "application/json"}, json=payload)
                 return self._probe_http_result(response, "active_speech_probe")

@@ -13,6 +13,7 @@ class ProviderCredential:
 class RouteRequest:
     task: str
     context: str = ""
+    conversation: tuple[tuple[str, str], ...] = ()
     requirements: tuple[str, ...] = ()
     required_capabilities: frozenset[Capability] = frozenset({"chat"})
     preferred_model_class: str | None = None

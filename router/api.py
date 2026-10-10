@@ -503,7 +503,7 @@ def openai_chat(payload: OpenAIChatInput, app_identity: str = Depends(require_au
         capabilities.add("summarization")
     result = router.process(RouteRequest(
         task=users[-1],
-        context=context,
+        context=with_temporal_context(context),
         required_capabilities=frozenset(capabilities),
         application_name=app_identity,
     ))

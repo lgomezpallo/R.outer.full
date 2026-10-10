@@ -26,6 +26,21 @@
       <article class="card"><span>Política</span><strong>Gratis</strong></article>
     </section>
 
+    <section class="card" id="matrixCard">
+      <div class="section-head">
+        <div><h2>Matriz de capacidades verificadas</h2><p>Un tilde significa prueba real aprobada. Los modelos no probados no se contabilizan.</p></div>
+      </div>
+      <div class="form-grid matrix-filters">
+        <label>Plataforma <select id="matrixPlatform"><option value="">Todas las conectadas</option></select></label>
+        <label>Capacidad <select id="matrixCapability"><option value="">Todas</option></select></label>
+        <label>Modelo <input id="matrixSearch" placeholder="Buscar modelo"></label>
+      </div>
+      <div id="capabilityTotals" class="capability-totals" aria-live="polite"></div>
+      <p class="hint" id="matrixInfo">Cargando evidencias…</p>
+      <div class="matrix-scroll"><table class="matrix-table"><thead id="matrixHead"></thead><tbody id="matrixBody"></tbody></table></div>
+      <p class="hint">✓ prueba aprobada · × prueba fallida · · sin verificar. La información declarada no cuenta como verificación.</p>
+    </section>
+
     <section class="card task-card">
       <div class="section-head">
         <div><h2>Ejecutar tarea</h2><p>El Router decide si conviene resolver directo o descomponer.</p></div>

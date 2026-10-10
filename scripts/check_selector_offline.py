@@ -1,8 +1,11 @@
 """Offline selector smoke test using the persisted Router catalog; no API calls."""
 from __future__ import annotations
 import os
+import sys
 from pathlib import Path
-from router.catalog import ProviderCatalog
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from router.catalog import ProviderCatalog, infer_discovered_capabilities
+import router.selector as selector_module
 from router.registry import RegisteredProvider
 from router.selector import rank
 from router.state import RuntimeState
@@ -16,6 +19,8 @@ catalog = ProviderCatalog(storage_path=path)
 platforms = {"groq", "openrouter", "nvidia", "cloudflare"}
 providers = [RegisteredProvider(spec=p, api_key="", state=RuntimeState())
              for p in catalog.all() if p.id in platforms]
+print(f"Selector cargado desde: {selector_module.__file__}")
+print(f"Clasificación bge-m3: {sorted(infer_discovered_capabilities("@cf/baai/bge-m3"))}")
 print(f"Catálogo: {path} | plataformas: {len(providers)} | rutas: {sum(len(p.spec.models) for p in providers)}")
 if not providers:
     raise SystemExit("ERROR: no se encontraron plataformas")

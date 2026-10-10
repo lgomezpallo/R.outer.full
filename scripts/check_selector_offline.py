@@ -35,6 +35,9 @@ for capability, task in [("chat", "Saludá en español"), ("vision", "Describí 
 print("\nNOTA: Simulación sin estado operativo ni cuotas en tiempo real. No se realizaron llamadas externas.")
 
 chat_rank=rank(providers, RouteRequest(task="Hola", required_capabilities=frozenset({"chat"})))
-blocked=("bge-m3","distilbert","llama-guard")
+blocked=("bge-m3","distilbert","llama-guard","resnet")
 assert not any(any(b in d.model.lower() for b in blocked) for d in chat_rank), "ERROR: modelo no conversacional en candidatos de chat"
 print("OK: embeddings, clasificadores y filtros de seguridad excluidos del chat.")
+llava=[d for d in chat_rank if "llava-" in d.model.lower()]
+assert not llava or all(any(r.startswith("scarcity_penalty=") and int(r.split("=")[1]) > 0 for r in d.reasons) for d in llava), "ERROR: LLaVA no está penalizado como especialista en visión"
+print("OK: los modelos LLaVA reciben penalización por visión en tareas de texto.")

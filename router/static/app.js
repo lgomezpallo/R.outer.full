@@ -13,6 +13,14 @@ async function jsonFetch(url,opts={}){
 const columns=["chat","code","reasoning","vision","document","image_generation","transcription","speech","tools"];
 let availablePlatforms=[], catalogPlatforms=[];
 function verified(m,c){return (m.evidence||[]).some(e=>e.capability===c&&e.status==="verified"&&e.evidence!=="migrated_from_v1")}
+function renderPerformance(data){
+ const rows=data.metrics||[];
+ $("performanceInfo").textContent=rows.length+" modelos con actividad registrada. Los modelos sin intentos no tienen medidas.";
+ $("performanceRows").innerHTML=rows.slice(0,200).map(m=>{
+  const errors=Object.entries(m.errors||{}).map(([k,v])=>k+": "+v).join(", ")||"—";
+  return "<tr><td>"+esc(m.provider)+"</td><td>"+esc(m.model)+"</td><td>"+m.attempts+"</td><td>"+Math.round(m.success_rate*100)+" %</td><td>"+m.avg_latency_ms+" ms</td><td>"+esc(errors)+"</td></tr>";
+ }).join("")||"<tr><td colspan='6'>Todavía no hay ejecuciones registradas.</td></tr>";
+}
 function renderInventory(){
  const live=catalogPlatforms.filter(p=>availablePlatforms.includes(p.id));
  const routes=live.flatMap(p=>(p.models||[]).map(m=>({platform:p.id,model:m})));
@@ -62,7 +70,8 @@ columns.forEach(c=>{$("matrixCapability").add(new Option(c,c))});
 async function refresh(){
   $("serviceStatus").textContent="conectando…"; $("serviceStatus").className="pill muted";
   try{
-    const [health,catalog]=await Promise.all([jsonFetch("/health"),jsonFetch("/catalog")]);
+    const [health,catalog,performance]=await Promise.all([jsonFetch("/health"),jsonFetch("/catalog"),jsonFetch("/performance")]);
+    renderPerformance(performance);
     $("serviceStatus").textContent="online"; $("serviceStatus").className="pill ok";
     const ps=health.providers||[], cps=catalog.providers||[];
     availablePlatforms=ps.map(p=>p.provider);catalogPlatforms=cps;

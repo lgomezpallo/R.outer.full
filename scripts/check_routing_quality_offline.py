@@ -11,7 +11,7 @@ from router.types import RouteRequest
 
 def provider(name, model, *, hits=0, misses=0, latency=None, caps=("chat",)):
     spec = ProviderSpec(id=name, aliases=(name,), base_url="https://example.com",
-                        models=(ModelSpec(id=model, capabilities=frozenset(caps)),))
+                        models=(ModelSpec(id=model, capabilities=frozenset(caps), model_class="standard"),))
     state = RuntimeState()
     item = state.model(model)
     item.success_count, item.failure_count = hits, misses

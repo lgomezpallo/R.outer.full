@@ -404,6 +404,11 @@ def health():
         })
     return {"status": "ok", "providers": providers}
 
+@app.get("/performance")
+def performance():
+    """Operational measurements only; API success does not prove answer quality."""
+    return {"metrics": store.model_performance_report(), "quality_measured": False}
+
 @app.post("/tokens", dependencies=[Depends(require_admin)])
 def create_token(payload: TokenInput):
     return {"name": payload.name, "token": store.create_app_token(payload.name)}

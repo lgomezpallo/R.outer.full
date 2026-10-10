@@ -33,6 +33,16 @@ def _specialization_penalty(model, required: frozenset[str]) -> int:
     return sum(1 for item in extras if item in SPECIALIZED_CAPABILITIES)
 
 def _score(provider: RegisteredProvider, model, req: RouteRequest) -> Decision | None:
+    # Discovered /models endpoints include language-specific and experimental
+    # architectures that should not be treated as general-purpose chat models.
+    # Keep Arabic-specialized models eligible when the task is in Arabic.
+    model_name = model.id.casefold()
+    if "diffusiongemma" in model_name and "chat" in req.required_capabilities:
+        return None
+    if "allam-" in model_name and "chat" in req.required_capabilities:
+        task_text = req.task + " " + req.context
+        if not any("\u0600" <= char <= "\u06ff" for char in task_text):
+            return None
     if req.required_capabilities & model.unsupported_capabilities:
         return None
     effective_capabilities = model.capabilities | model.verified_capabilities

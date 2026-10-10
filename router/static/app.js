@@ -9,12 +9,37 @@ async function jsonFetch(url,opts={}){
   if(!r.ok) throw new Error(body.detail||body.error||("HTTP "+r.status));
   return body;
 }
+
+const columns=["chat","code","reasoning","vision","document","image_generation","transcription","speech","tools"];
+let availablePlatforms=[], catalogPlatforms=[];
+function verified(m,c){return (m.evidence||[]).some(e=>e.capability===c&&e.status==="verified"&&e.evidence!=="migrated_from_v1")}
+function renderMatrix(){
+ const group=$("matrixPlatform").value, kind=$("matrixCapability").value, term=$("matrixSearch").value.toLowerCase();
+ const groups=catalogPlatforms.filter(p=>availablePlatforms.includes(p.id));
+ const models=groups.filter(p=>!group||p.id===group).flatMap(p=>(p.models||[]).map(m=>({platform:p.id,model:m}))).filter(x=>x.model.id.toLowerCase().includes(term));
+ const caps=kind?[kind]:columns;
+ $("capabilityTotals").textContent=columns.map(c=>c+": "+groups.reduce((n,p)=>n+(p.models||[]).filter(m=>verified(m,c)).length,0)).join(" · ");
+ $("matrixInfo").textContent=models.length+" rutas visibles; totales de plataformas conectadas, solo pruebas verificadas.";
+ $("matrixHead").innerHTML="<tr><th>Plataforma</th><th>Modelo</th>"+caps.map(c=>"<th>"+esc(c)+"</th>").join("")+"</tr>";
+ $("matrixBody").innerHTML=models.map(x=>"<tr><td>"+esc(x.platform)+"</td><td>"+esc(x.model.id)+"</td>"+caps.map(c=>{const e=(x.model.evidence||[]).find(e=>e.capability===c);const ok=verified(x.model,c);return "<td title='"+esc(e?.evidence||"Sin verificar")+"'>"+(ok?"✓":e?.status==="unsupported"?"×":"·")+"</td>"}).join("")+"</tr>").join("")||"<tr><td colspan='"+(caps.length+2)+"'>Sin resultados</td></tr>";
+}
+$("matrixPlatform").onchange=renderMatrix;
+$("matrixCapability").onchange=renderMatrix;
+$("matrixSearch").oninput=renderMatrix;
+columns.forEach(c=>{$("matrixCapability").add(new Option(c,c))});
+
 async function refresh(){
   $("serviceStatus").textContent="conectando…"; $("serviceStatus").className="pill muted";
   try{
     const [health,catalog]=await Promise.all([jsonFetch("/health"),jsonFetch("/catalog")]);
     $("serviceStatus").textContent="online"; $("serviceStatus").className="pill ok";
     const ps=health.providers||[], cps=catalog.providers||[];
+    availablePlatforms=ps.map(p=>p.provider);catalogPlatforms=cps;
+    const saved=$('matrixPlatform').value;
+    $('matrixPlatform').innerHTML='<option value="">Todas las conectadas</option>';
+    availablePlatforms.forEach(p=>$('matrixPlatform').add(new Option(p,p)));
+    $('matrixPlatform').value=availablePlatforms.includes(saved)?saved:'';
+    renderMatrix();
     $("providerCount").textContent=ps.length;
     $("availableCount").textContent=ps.filter(p=>p.available).length;
     $("modelCount").textContent=cps.reduce((n,p)=>n+(p.models?.length||0),0);

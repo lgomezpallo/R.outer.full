@@ -22,9 +22,14 @@ if not providers:
 
 for capability, task in [("chat", "Saludá en español"), ("vision", "Describí esta imagen")]:
     ranked = rank(providers, RouteRequest(task=task, required_capabilities=frozenset({capability})))
-    print(f"\\nTarea: {capability} | candidatos: {len(ranked)}")
+    print(f"\nTarea: {capability} | candidatos: {len(ranked)}")
     for index, decision in enumerate(ranked[:10], 1):
         shortage = next((x for x in decision.reasons if x.startswith("scarcity_penalty=")), "sin penalización")
         print(f"{index:2}. {decision.provider:11} {decision.model[:54]:54} {shortage:24} puntuación={decision.score:.0f}")
 
-print("\\nNOTA: Simulación sin estado operativo ni cuotas en tiempo real. No se realizaron llamadas externas.")
+print("\nNOTA: Simulación sin estado operativo ni cuotas en tiempo real. No se realizaron llamadas externas.")
+
+chat_rank=rank(providers, RouteRequest(task="Hola", required_capabilities=frozenset({"chat"})))
+blocked=("bge-m3","distilbert","llama-guard")
+assert not any(any(b in d.model.lower() for b in blocked) for d in chat_rank), "ERROR: modelo no conversacional en candidatos de chat"
+print("OK: embeddings, clasificadores y filtros de seguridad excluidos del chat.")

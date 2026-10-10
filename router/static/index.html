@@ -26,6 +26,16 @@
       <article class="card"><span>Política</span><strong>Gratis</strong></article>
     </section>
 
+    <section class="card" id="performanceCard">
+      <div class="section-head"><div><h2>Rendimiento observado</h2><p>Solicitudes reales registradas: latencia, éxitos técnicos y errores por modelo.</p></div></div>
+      <p id="performanceInfo" class="hint" aria-live="polite">Cargando métricas…</p>
+      <div class="matrix-scroll"><table class="matrix-table">
+        <thead><tr><th>Plataforma</th><th>Modelo</th><th>Intentos</th><th>Éxito API</th><th>Media</th><th>Errores</th></tr></thead>
+        <tbody id="performanceRows"></tbody>
+      </table></div>
+      <p class="hint">Éxito API significa respuesta técnica recibida, no respuesta correcta. La eficacia por capacidad requiere pruebas con resultado conocido.</p>
+    </section>
+
     <section class="card" id="inventoryCard">
       <div class="section-head"><div><h2>Inventario local</h2><p>Analiza el catálogo ya guardado. No ejecuta modelos ni consume llamadas de inferencia.</p></div></div>
       <div id="inventorySummary" class="inventory-summary" aria-live="polite">Cargando inventario…</div>

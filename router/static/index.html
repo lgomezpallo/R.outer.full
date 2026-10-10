@@ -41,6 +41,20 @@
       <p class="hint">✓ prueba aprobada · × prueba fallida · · sin verificar. La información declarada no cuenta como verificación.</p>
     </section>
 
+    <section class="card">
+      <div class="section-head"><div><h2>Auditoría controlada</h2><p>Probá una capacidad de un modelo por vez. Cada prueba consume una solicitud real del proveedor.</p></div></div>
+      <div class="form-grid">
+        <label>Plataforma<select id="probePlatform"><option value="">Seleccionar plataforma</option></select></label>
+        <label>Modelo<select id="probeModel"><option value="">Seleccionar modelo</option></select></label>
+        <label>Capacidad<select id="probeCapability"></select></label>
+      </div>
+      <label style="margin-top:12px">Token administrador de Router (no se guarda en el navegador)
+        <input id="probeAdminToken" type="password" autocomplete="off" placeholder="Token administrativo de la API">
+      </label>
+      <div class="actions"><button id="probeButton" class="primary" type="button">Probar capacidad</button><span id="probeMessage" class="hint" aria-live="polite"></span></div>
+      <p class="hint">La contraseña de acceso al sitio no es el token administrativo de la API. Si Router no tiene token administrativo configurado, las pruebas no pueden iniciarse desde el panel.</p>
+    </section>
+
     <section class="card task-card">
       <div class="section-head">
         <div><h2>Ejecutar tarea</h2><p>El Router decide si conviene resolver directo o descomponer.</p></div>

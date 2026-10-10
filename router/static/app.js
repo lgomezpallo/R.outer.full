@@ -33,7 +33,7 @@ function renderMatrix(){
  $("capabilityTotals").textContent=columns.map(c=>c+": "+groups.reduce((n,p)=>n+(p.models||[]).filter(m=>verified(m,c)).length,0)).join(" · ");
  $("matrixInfo").textContent=models.length+" rutas visibles; totales de plataformas conectadas, solo pruebas verificadas.";
  $("matrixHead").innerHTML="<tr><th>Plataforma</th><th>Modelo</th>"+caps.map(c=>"<th>"+esc(c)+"</th>").join("")+"</tr>";
- $("matrixBody").innerHTML=models.map(x=>"<tr><td>"+esc(x.platform)+"</td><td>"+esc(x.model.id)+"</td>"+caps.map(c=>{const e=(x.model.evidence||[]).find(e=>e.capability===c);const ok=verified(x.model,c);return "<td title='"+esc(e?.evidence||"Sin verificar")+"'>"+(ok?"✓":e?.status==="unsupported"?"×":"·")+"</td>"}).join("")+"</tr>").join("")||"<tr><td colspan='"+(caps.length+2)+"'>Sin resultados</td></tr>";
+ $("matrixBody").innerHTML=models.map(x=>"<tr><td>"+esc(x.platform)+"</td><td>"+esc(x.model.id)+"</td>"+caps.map(c=>{const e=(x.model.evidence||[]).find(e=>e.capability===c);const ok=verified(x.model,c);return "<td title='"+esc(e?.evidence||"Sin verificar")+"'>"+(ok?"✓":e?.status==="unsupported"?"×":(x.model.declared_capabilities||[]).includes(c)?"○":"·")+"</td>"}).join("")+"</tr>").join("")||"<tr><td colspan='"+(caps.length+2)+"'>Sin resultados</td></tr>";
 }
 function updateProbeModels(){
  const p=catalogPlatforms.find(p=>p.id===$("probePlatform").value);

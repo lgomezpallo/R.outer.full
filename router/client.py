@@ -116,7 +116,7 @@ class ProviderClient:
                 RouteRequest(task=task, required_capabilities=frozenset({"chat"}), decompose=False, timeout_s=20),
             )
             if capability == "chat":
-                return {"status": "verified" if text.strip() == "ROUTER_OK" else "unsupported", "evidence": "active_text_probe"}
+                return {"status": "verified" if text.strip() == "ROUTER_OK" else "inconclusive", "evidence": "active_text_probe"}
             try:
                 ok = bool(json.loads(text).get("router_ok") is True)
             except Exception:

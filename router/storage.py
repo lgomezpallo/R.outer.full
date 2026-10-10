@@ -73,7 +73,7 @@ class RouterStore:
                     last_failure_kind TEXT,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
-                CREATE TABLE IF NOT EXISTS app_tokens (
+                CREATE TABLE IF NOT EXISTS audit_budget (\n                    provider_id TEXT NOT NULL, day_utc TEXT NOT NULL, used INTEGER NOT NULL DEFAULT 0,\n                    PRIMARY KEY (provider_id,day_utc)\n                );\n                CREATE TABLE IF NOT EXISTS app_tokens (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL UNIQUE,
                     token_hash TEXT NOT NULL UNIQUE,
@@ -209,6 +209,34 @@ class RouterStore:
             latency = sum(int(x["latency_ms"]) for x in items) / len(items)
             result[key] = {"success_rate": success_rate, "latency_ms": latency, "samples": float(len(items))}
         return result
+
+    def reserve_audit_budget(self, provider_id: str, daily_limit: int) -> tuple[bool, int]:
+        """Atomically reserve one external probe for the current UTC day."""
+        from datetime import datetime, timezone
+        today = datetime.now(timezone.utc).date().isoformat()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "INSERT OR IGNORE INTO audit_budget(provider_id, day_utc, used) VALUES (?, ?, 0)",
+                (provider_id, today),
+            )
+            conn.execute(
+                "UPDATE audit_budget SET used=used+1 WHERE provider_id=? AND day_utc=? AND used < ?",
+                (provider_id, today, daily_limit),
+            )
+            updated = conn.execute("SELECT changes()").fetchone()[0] == 1
+            used = conn.execute(
+                "SELECT used FROM audit_budget WHERE provider_id=? AND day_utc=?",
+                (provider_id, today),
+            ).fetchone()[0]
+        return updated, used
+
+    def audit_budget_used(self) -> dict[str, int]:
+        from datetime import datetime, timezone
+        today = datetime.now(timezone.utc).date().isoformat()
+        with self._connect() as conn:
+            rows = conn.execute("SELECT provider_id,used FROM audit_budget WHERE day_utc=?", (today,)).fetchall()
+        return {row["provider_id"]: row["used"] for row in rows}
 
     def model_performance_report(self, limit: int = 2000) -> list[dict]:
         """Recent execution statistics, not a measure of answer correctness."""

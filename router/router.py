@@ -124,21 +124,7 @@ class Router:
         if not decisions:
             return RouteResponse(False, None, None, None, [], [], "no_eligible_provider")
 
-        # Once a provider/resource group is chosen, exhaust its eligible models
-        # before moving to the next provider. Provider-wide failures (auth,
-        # quota, payment, etc.) still skip the whole group immediately.
-        provider_order: list[str] = []
-        for decision in decisions:
-            if decision.provider not in provider_order:
-                provider_order.append(decision.provider)
-        grouped_decisions = [
-            decision
-            for provider_id in provider_order
-            for decision in decisions
-            if decision.provider == provider_id
-        ]
-        decisions = grouped_decisions
-
+        # Preserve global model ranking; only skip a full provider after a provider-wide failure.
         request_id = str(uuid4())
         attempts: list[Attempt] = []
         by_id = {p.spec.id: p for p in self.registry.all()}

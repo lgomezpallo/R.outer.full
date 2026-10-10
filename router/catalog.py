@@ -66,7 +66,7 @@ def infer_discovered_capabilities(model_id: str) -> frozenset[str]:
             caps.add("image_editing")
         return frozenset(caps)
     capabilities = {"chat"}
-    if any(token in name for token in ("vision", "vlm", "vila", "neva", "fuyu", "omni", "gemma-3", "gemma-4", "llama-4", "moondream")):
+    if any(token in name for token in ("vision", "vlm", "vila", "llava", "neva", "fuyu", "omni", "gemma-3", "gemma-4", "llama-4", "moondream")):
         capabilities.add("vision")
     if any(token in name for token in ("coder", "code", "codestral")):
         capabilities.add("code")

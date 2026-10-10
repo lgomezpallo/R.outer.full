@@ -54,7 +54,7 @@ def _m(model_id: str, caps: set[str], model_class: str, priority: int, cost: int
 
 def infer_discovered_capabilities(model_id: str) -> frozenset[str]:
     name = model_id.lower()
-    if any(token in name for token in ("prompt-guard", "safeguard", "moderation", "safety", "rerank", "embed", "smart-turn", "turn-detection", "vad")):
+    if any(token in name for token in ("prompt-guard", "safeguard", "moderation", "safety", "rerank", "embed", "embedding", "bge-", "e5-", "distilbert", "bert-base", "llama-guard", "guard-3", "classifier", "classification", "sentiment", "smart-turn", "turn-detection", "vad")):
         return frozenset()
     if "whisper" in name or "transcri" in name or "/asr" in name or "nova-3" in name:
         return frozenset({"transcription"})
@@ -177,6 +177,13 @@ class ProviderCatalog:
             provider = self._providers[provider_id]
             existing = {model.id: model for model in provider.models}
             for model_id in model_ids:
+                if model_id in existing:
+                    old = existing[model_id]
+                    # Remove falsely inferred chat from specialist-only model IDs.
+                    # Keep verified capabilities even when metadata changes.
+                    inferred = infer_discovered_capabilities(model_id)
+                    if not inferred and "chat" in old.capabilities and "chat" not in old.verified_capabilities:
+                        existing[model_id] = replace(old, capabilities=frozenset(c for c in old.capabilities if c != "chat"))
                 if model_id not in existing:
                     existing[model_id] = ModelSpec(
                         id=model_id,

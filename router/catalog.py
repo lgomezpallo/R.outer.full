@@ -54,7 +54,7 @@ def _m(model_id: str, caps: set[str], model_class: str, priority: int, cost: int
 
 def infer_discovered_capabilities(model_id: str) -> frozenset[str]:
     name = model_id.lower()
-    if any(token in name for token in ("prompt-guard", "safeguard", "moderation", "safety", "rerank", "embed", "embedding", "bge-", "e5-", "distilbert", "bert-base", "llama-guard", "guard-3", "classifier", "classification", "sentiment", "smart-turn", "turn-detection", "vad")):
+    if any(token in name for token in ("prompt-guard", "safeguard", "moderation", "safety", "rerank", "embed", "embedding", "bge-", "e5-", "distilbert", "bert-base", "resnet", "llama-guard", "guard-3", "classifier", "classification", "sentiment", "smart-turn", "turn-detection", "vad")):
         return frozenset()
     if "whisper" in name or "transcri" in name or "/asr" in name or "nova-3" in name:
         return frozenset({"transcription"})

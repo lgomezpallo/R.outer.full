@@ -84,6 +84,14 @@ async function refresh(){
   try{
     const [health,catalog,performance]=await Promise.all([jsonFetch("/health"),jsonFetch("/catalog"),jsonFetch("/performance")]);
     renderPerformance(performance);
+    jsonFetch("/audit/progress").then(progress=>{
+      const summary=Object.entries(progress.platforms||{}).map(([name,v])=>{
+        const budget=progress.daily_budget?.[name]||{used:0,limit:0};
+        return name+": "+v.verified_routes+"/"+v.total_routes+" rutas verificadas · "+v.untested_routes+" sin pruebas · "+budget.used+"/"+budget.limit+" presupuesto hoy";
+      });
+      $("auditProgress").textContent=summary.join(" | ")||"Sin plataformas conectadas";
+    }).catch(()=>{$("auditProgress").textContent="No se pudo consultar el avance de auditoría";});
+
     $("serviceStatus").textContent="online"; $("serviceStatus").className="pill ok";
     const ps=health.providers||[], cps=catalog.providers||[];
     availablePlatforms=ps.map(p=>p.provider);catalogPlatforms=cps;

@@ -342,6 +342,7 @@ class ProviderClient:
         messages: list[dict] = []
         if req.context:
             messages.append({"role": "system", "content": req.context})
+        messages.extend({"role": role, "content": content} for role, content in req.conversation if role in ("user", "assistant"))
         user = req.task
         if req.requirements:
             user += "\n\nRequirements:\n- " + "\n- ".join(req.requirements)

@@ -455,6 +455,31 @@ def probe_capability(payload: CapabilityProbeInput):
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
+@app.get("/audit/progress")
+def audit_progress():
+    """Read-only progress; inspecting it never invokes any model."""
+    counts = {}
+    for provider in router.registry.all():
+        if provider.spec.id not in AUDIT_DAILY_LIMITS:
+            continue
+        models = provider.spec.models
+        verified = sum(1 for m in models if any(e.status == "verified" and e.evidence != "migrated_from_v1" for e in m.evidence))
+        inconclusive = sum(1 for m in models if any(e.status == "inconclusive" for e in m.evidence))
+        untouched = sum(1 for m in models if not any(e.evidence != "migrated_from_v1" for e in m.evidence))
+        counts[provider.spec.id] = {
+            "total_routes": len(models),
+            "verified_routes": verified,
+            "inconclusive_routes": inconclusive,
+            "untested_routes": untouched,
+        }
+    used = store.audit_budget_used()
+    return {
+        "platforms": counts,
+        "daily_budget": {p: {"limit": limit, "used": used.get(p, 0)}
+                         for p, limit in AUDIT_DAILY_LIMITS.items()},
+        "note": "Verificación por capacidad, no garantía de calidad. El presupuesto diario se reinicia a las 00:00 UTC.",
+    }
+
 @app.get("/audit/budget", dependencies=[Depends(require_admin)])
 def audit_budget():
     used = store.audit_budget_used()

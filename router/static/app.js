@@ -23,6 +23,25 @@ function renderMatrix(){
  $("matrixHead").innerHTML="<tr><th>Plataforma</th><th>Modelo</th>"+caps.map(c=>"<th>"+esc(c)+"</th>").join("")+"</tr>";
  $("matrixBody").innerHTML=models.map(x=>"<tr><td>"+esc(x.platform)+"</td><td>"+esc(x.model.id)+"</td>"+caps.map(c=>{const e=(x.model.evidence||[]).find(e=>e.capability===c);const ok=verified(x.model,c);return "<td title='"+esc(e?.evidence||"Sin verificar")+"'>"+(ok?"✓":e?.status==="unsupported"?"×":"·")+"</td>"}).join("")+"</tr>").join("")||"<tr><td colspan='"+(caps.length+2)+"'>Sin resultados</td></tr>";
 }
+function updateProbeModels(){
+ const p=catalogPlatforms.find(p=>p.id===$("probePlatform").value);
+ $("probeModel").innerHTML="";
+ $("probeModel").add(new Option("Seleccionar modelo",""));
+ (p?.models||[]).forEach(m=>$("probeModel").add(new Option(m.id,m.id)));
+}
+$("probePlatform").addEventListener("change",updateProbeModels);
+columns.forEach(c=>$("probeCapability").add(new Option(c,c)));
+$("probeButton").addEventListener("click",async()=>{
+ const provider=$("probePlatform").value,model=$("probeModel").value,capability=$("probeCapability").value,token=$("probeAdminToken").value.trim();
+ if(!provider||!model||!token){$("probeMessage").textContent="Elegí plataforma y modelo e ingresá el token administrador.";return}
+ $("probeButton").disabled=true;$("probeMessage").textContent="Probando con el proveedor…";
+ try{
+   const result=await jsonFetch("/capabilities/probe",{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},body:JSON.stringify({provider,model,capability})});
+   $("probeMessage").textContent=(result.status||"sin resultado")+" · "+(result.evidence||"")+" · "+provider+"/"+model;
+   await refresh();
+ }catch(err){$("probeMessage").textContent=err.message}
+ finally{$("probeButton").disabled=false}
+});
 $("matrixPlatform").onchange=renderMatrix;
 $("matrixCapability").onchange=renderMatrix;
 $("matrixSearch").oninput=renderMatrix;
@@ -35,6 +54,13 @@ async function refresh(){
     $("serviceStatus").textContent="online"; $("serviceStatus").className="pill ok";
     const ps=health.providers||[], cps=catalog.providers||[];
     availablePlatforms=ps.map(p=>p.provider);catalogPlatforms=cps;
+    const oldProbe=$("probePlatform").value,oldModel=$("probeModel").value;
+    $("probePlatform").innerHTML="";
+    $("probePlatform").add(new Option("Seleccionar plataforma",""));
+    availablePlatforms.forEach(p=>$("probePlatform").add(new Option(p,p)));
+    $("probePlatform").value=availablePlatforms.includes(oldProbe)?oldProbe:"";
+    updateProbeModels();
+    if([...$("probeModel").options].some(o=>o.value===oldModel)) $("probeModel").value=oldModel;
     const saved=$('matrixPlatform').value;
     $('matrixPlatform').innerHTML='<option value="">Todas las conectadas</option>';
     availablePlatforms.forEach(p=>$('matrixPlatform').add(new Option(p,p)));

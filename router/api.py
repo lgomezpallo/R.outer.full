@@ -97,6 +97,13 @@ class CapabilityProbeInput(BaseModel):
     model: str
     capability: str
 
+class AuditStepInput(BaseModel):
+    provider: str
+    max_calls: int = Field(default=1, ge=1, le=3)
+
+# Conservative self-imposed daily budgets, not advertised provider quotas.
+AUDIT_DAILY_LIMITS = {"groq": 12, "openrouter": 5, "cloudflare": 4, "nvidia": 1}
+
 class CapabilityAuditInput(BaseModel):
     provider: str
     inconclusive_only: bool = False
@@ -447,6 +454,42 @@ def probe_capability(payload: CapabilityProbeInput):
         return router.verify_capability(payload.provider, payload.model, payload.capability)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+
+@app.get("/audit/budget", dependencies=[Depends(require_admin)])
+def audit_budget():
+    used = store.audit_budget_used()
+    return {"limits": AUDIT_DAILY_LIMITS, "used": used, "note": "Límites internos conservadores, no cuotas oficiales del proveedor."}
+
+@app.post("/audit/step", dependencies=[Depends(require_admin)])
+def audit_step(payload: AuditStepInput):
+    """Bounded, opt-in probes. Never retry a model already tested for chat."""
+    from .catalog import infer_discovered_capabilities
+    provider_id = payload.provider.strip().lower()
+    limit = AUDIT_DAILY_LIMITS.get(provider_id)
+    if limit is None:
+        raise HTTPException(400, "provider_not_approved_for_budgeted_audit")
+    provider = next((p for p in router.registry.all() if p.spec.id == provider_id), None)
+    if provider is None:
+        raise HTTPException(400, "provider_not_registered")
+    candidates = [
+        m for m in provider.spec.models
+        if "chat" in m.capabilities
+        and "chat" in infer_discovered_capabilities(m.id)
+        and not any(e.capability == "chat" for e in m.evidence)
+    ]
+    candidates.sort(key=lambda m: (len(m.capabilities - {"chat", "json", "fast"}), m.strategic_cost, m.id))
+    results = []
+    used = store.audit_budget_used().get(provider_id, 0)
+    for model in candidates[:payload.max_calls]:
+        permitted, used = store.reserve_audit_budget(provider_id, limit)
+        if not permitted:
+            break
+        results.append(router.verify_capability(provider_id, model.id, "chat"))
+    return {
+        "provider": provider_id, "results": results, "pending_chat": len(candidates)-len(results),
+        "daily_limit": limit, "used_today": used,
+        "note": "Una reserva corresponde a una prueba de texto; otros tipos de prueba se agregarán por separado.",
+    }
 
 @app.post("/capabilities/audit", dependencies=[Depends(require_admin)])
 def audit_capabilities(payload: CapabilityAuditInput):

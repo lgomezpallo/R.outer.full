@@ -31,7 +31,6 @@
       <div class="form-grid">
         <label>Plataforma <select id="auditPlatform"><option value="">Elegir…</option></select></label>
         <label>Pruebas ahora <select id="auditCalls"><option value="1">1 llamada</option><option value="2">2 llamadas</option><option value="3">3 llamadas</option></select></label>
-        <label>Token administrador <input id="auditToken" type="password" autocomplete="off" placeholder="Token de la API"></label>
       </div>
       <div class="actions"><button id="auditStart" class="primary" type="button">Ejecutar lote</button><span id="auditStatus" class="hint" aria-live="polite"></span></div>
       <p class="hint">Cada prueba consume una llamada real. Límite propio diario: Groq 12, OpenRouter 5, Cloudflare 4, NVIDIA 1. No se ejecuta automáticamente.</p>
@@ -76,11 +75,8 @@
         <label>Modelo<select id="probeModel"><option value="">Seleccionar modelo</option></select></label>
         <label>Capacidad<select id="probeCapability"></select></label>
       </div>
-      <label style="margin-top:12px">Token administrador de Router (no se guarda en el navegador)
-        <input id="probeAdminToken" type="password" autocomplete="off" placeholder="Token administrativo de la API">
-      </label>
       <div class="actions"><button id="probeButton" class="primary" type="button">Probar capacidad</button><span id="probeMessage" class="hint" aria-live="polite"></span></div>
-      <p class="hint">La contraseña de acceso al sitio no es el token administrativo de la API. Si Router no tiene token administrativo configurado, las pruebas no pueden iniciarse desde el panel.</p>
+      <p class="hint">Las operaciones de administración requieren acceso protegido al sitio. No ingreses claves API en esta pantalla.</p>
     </section>
 
     <section class="card task-card">

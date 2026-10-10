@@ -13,6 +13,18 @@ async function jsonFetch(url,opts={}){
 const columns=["chat","code","reasoning","vision","document","image_generation","transcription","speech","tools"];
 let availablePlatforms=[], catalogPlatforms=[];
 function verified(m,c){return (m.evidence||[]).some(e=>e.capability===c&&e.status==="verified"&&e.evidence!=="migrated_from_v1")}
+$("auditStart").addEventListener("click",async()=>{
+ const token=$("auditToken").value.trim(),provider=$("auditPlatform").value;
+ if(!token||!provider){$("auditStatus").textContent="Elegí plataforma y token administrativo.";return}
+ $("auditStart").disabled=true;
+ $("auditStatus").textContent="Ejecutando lote pequeño…";
+ try{
+  const data=await jsonFetch("/audit/step",{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},body:JSON.stringify({provider,max_calls:Number($("auditCalls").value)})});
+  $("auditStatus").textContent=data.results.length+" pruebas registradas · "+data.used_today+"/"+data.daily_limit+" presupuesto diario utilizado · "+data.pending_chat+" pendientes de texto";
+  await refresh();
+ }catch(e){$("auditStatus").textContent=e.message}
+ finally{$("auditStart").disabled=false}
+});
 function renderPerformance(data){
  const rows=data.metrics||[];
  $("performanceInfo").textContent=rows.length+" modelos con actividad registrada. Los modelos sin intentos no tienen medidas.";
@@ -75,6 +87,11 @@ async function refresh(){
     $("serviceStatus").textContent="online"; $("serviceStatus").className="pill ok";
     const ps=health.providers||[], cps=catalog.providers||[];
     availablePlatforms=ps.map(p=>p.provider);catalogPlatforms=cps;
+    const auditSaved=$("auditPlatform").value;
+    $("auditPlatform").innerHTML="";
+    $("auditPlatform").add(new Option("Elegir…",""));
+    availablePlatforms.forEach(p=>$("auditPlatform").add(new Option(p,p)));
+    $("auditPlatform").value=availablePlatforms.includes(auditSaved)?auditSaved:"";
     const oldProbe=$("probePlatform").value,oldModel=$("probeModel").value;
     $("probePlatform").innerHTML="";
     $("probePlatform").add(new Option("Seleccionar plataforma",""));

@@ -13,6 +13,18 @@ async function jsonFetch(url,opts={}){
 const columns=["chat","code","reasoning","vision","document","image_generation","transcription","speech","tools"];
 let availablePlatforms=[], catalogPlatforms=[];
 function verified(m,c){return (m.evidence||[]).some(e=>e.capability===c&&e.status==="verified"&&e.evidence!=="migrated_from_v1")}
+function renderInventory(){
+ const live=catalogPlatforms.filter(p=>availablePlatforms.includes(p.id));
+ const routes=live.flatMap(p=>(p.models||[]).map(m=>({platform:p.id,model:m})));
+ const ids=new Set(routes.map(x=>x.model.id.toLowerCase().replace(/:free$/,"")));
+ const verifiedRoutes=routes.filter(x=>columns.some(c=>verified(x.model,c))).length;
+ const declaredRoutes=routes.filter(x=>(x.model.declared_capabilities||[]).length).length;
+ $("inventorySummary").textContent=live.length+" plataformas · "+routes.length+" rutas · "+ids.size+" identificadores normalizados (aproximados) · "+declaredRoutes+" rutas con declaraciones · "+verifiedRoutes+" con evidencia verificada.";
+ $("inventoryPlatforms").innerHTML=live.map(p=>{
+  const models=p.models||[],tested=models.filter(m=>columns.some(c=>verified(m,c))).length;
+  return "<div class='inventory-item'><b>"+esc(p.id)+"</b><span>"+models.length+" rutas · "+tested+" verificadas</span></div>";
+ }).join("")+"<p class='hint'>Capacidades (verificadas / declaradas): "+columns.map(c=>esc(c)+": "+routes.filter(x=>verified(x.model,c)).length+"/"+routes.filter(x=>(x.model.declared_capabilities||[]).includes(c)).length).join(" · ")+"</p>";
+}
 function renderMatrix(){
  const group=$("matrixPlatform").value, kind=$("matrixCapability").value, term=$("matrixSearch").value.toLowerCase();
  const groups=catalogPlatforms.filter(p=>availablePlatforms.includes(p.id));
@@ -65,6 +77,7 @@ async function refresh(){
     $('matrixPlatform').innerHTML='<option value="">Todas las conectadas</option>';
     availablePlatforms.forEach(p=>$('matrixPlatform').add(new Option(p,p)));
     $('matrixPlatform').value=availablePlatforms.includes(saved)?saved:'';
+    renderInventory();
     renderMatrix();
     $("providerCount").textContent=ps.length;
     $("availableCount").textContent=ps.filter(p=>p.available).length;

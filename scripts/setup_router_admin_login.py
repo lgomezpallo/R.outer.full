@@ -2,6 +2,7 @@
 """One-time setup: use existing Caddy login for Router admin; no token shown to browser."""
 from pathlib import Path
 import os
+import grp
 import re
 import subprocess
 import sys
@@ -56,6 +57,7 @@ def main() -> None:
     backup = CONFIG.with_name("Caddyfile.before-router-admin")
     backup.write_text(original)
     CONFIG.write_text(updated)
+    CONFIG.chown(0, grp.getgrnam('caddy').gr_gid)
     CONFIG.chmod(0o640)
     try:
         subprocess.run(["caddy", "validate", "--config", str(CONFIG)], check=True)

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from .catalog import infer_discovered_capabilities
 from .registry import RegisteredProvider
 from .types import Decision, RouteRequest
 
@@ -37,6 +38,8 @@ def _score(provider: RegisteredProvider, model, req: RouteRequest, scarcity: dic
     # architectures that should not be treated as general-purpose chat models.
     # Keep Arabic-specialized models eligible when the task is in Arabic.
     model_name = model.id.casefold()
+    if "chat" in req.required_capabilities and not infer_discovered_capabilities(model.id) and "chat" not in model.verified_capabilities:
+        return None
     if "diffusiongemma" in model_name and "chat" in req.required_capabilities:
         return None
     if "allam-" in model_name and "chat" in req.required_capabilities:

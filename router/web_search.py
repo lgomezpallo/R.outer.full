@@ -47,6 +47,7 @@ def search_current(task: str, *, now: datetime | None = None, limit: int = 5) ->
     found: list[dict[str, str]] = []
     seen: set[str] = set()
     for base, params in endpoints:
+        source_count = 0
         try:
             response = httpx.get(base, params=params, timeout=6.0, follow_redirects=False,
                                  headers={"User-Agent": "Mozilla/5.0 IAchatSearch/1.0"})
@@ -63,8 +64,9 @@ def search_current(task: str, *, now: datetime | None = None, limit: int = 5) ->
                     seen.add(url)
                     found.append({"title": title, "url": url, "snippet": snippet,
                                   "published": (item.findtext("pubDate") or "")[:70]})
-                    if len(found) >= limit and base == endpoints[-1][0]:
-                        return found
+                    source_count += 1
+                    if source_count >= max(1, (limit + 1) // 2):
+                        break
         except (httpx.HTTPError, ET.ParseError, ValueError):
             continue
     return found[:limit]

@@ -32,7 +32,7 @@ def _specialization_penalty(model, required: frozenset[str]) -> int:
     extras = set(model.capabilities) - set(required) - set(GENERIC_EXTRAS)
     return sum(1 for item in extras if item in SPECIALIZED_CAPABILITIES)
 
-def _score(provider: RegisteredProvider, model, req: RouteRequest) -> Decision | None:
+def _score(provider: RegisteredProvider, model, req: RouteRequest, scarcity: dict[str, int] | None = None) -> Decision | None:
     # Discovered /models endpoints include language-specific and experimental
     # architectures that should not be treated as general-purpose chat models.
     # Keep Arabic-specialized models eligible when the task is in Arabic.
@@ -58,6 +58,10 @@ def _score(provider: RegisteredProvider, model, req: RouteRequest) -> Decision |
     health_rank = _provider_health_rank(provider)
     verification_tier = _verification_tier(model, req.required_capabilities)
     specialization_penalty = _specialization_penalty(model, req.required_capabilities)
+    # Preserve specialized capabilities only when the current task does not need them.
+    # Smaller pools incur larger penalties; declared availability is provisional.
+    scarce_extras = (set(model.capabilities) | set(model.verified_capabilities)) - set(req.required_capabilities) - set(GENERIC_EXTRAS)
+    scarcity_penalty = sum(min(2000, 8000 // max(1, (scarcity or {}).get(cap, 1))) for cap in scarce_extras if cap in SPECIALIZED_CAPABILITIES)
     model_state = provider.state.models.get(model.id)
     success_rate = model_state.success_rate if model_state else provider.state.success_rate
     latency = (
@@ -77,6 +81,8 @@ def _score(provider: RegisteredProvider, model, req: RouteRequest) -> Decision |
     reasons.append(f"strategic_cost={strategic_cost}")
 
     score -= specialization_penalty * 300.0
+    score -= scarcity_penalty
+    reasons.append(f"scarcity_penalty={scarcity_penalty}")
     reasons.append(f"specialization_penalty={specialization_penalty}")
 
     score += success_rate * 100.0
@@ -105,9 +111,16 @@ def _score(provider: RegisteredProvider, model, req: RouteRequest) -> Decision |
 
 def rank(providers: list[RegisteredProvider], req: RouteRequest) -> list[Decision]:
     decisions: list[Decision] = []
+    scarcity: dict[str, int] = {}
+    for provider in providers:
+        if not provider.state.available:
+            continue
+        for model in provider.spec.models:
+            for capability in (model.capabilities | model.verified_capabilities) - model.unsupported_capabilities:
+                scarcity[capability] = scarcity.get(capability, 0) + 1
     for provider in providers:
         for model in provider.spec.models:
-            decision = _score(provider, model, req)
+            decision = _score(provider, model, req, scarcity)
             if decision:
                 decisions.append(decision)
     return sorted(decisions, key=lambda d: d.score, reverse=True)

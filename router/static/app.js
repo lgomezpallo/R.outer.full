@@ -14,12 +14,12 @@ const columns=["chat","code","reasoning","vision","document","image_generation",
 let availablePlatforms=[], catalogPlatforms=[];
 function verified(m,c){return (m.evidence||[]).some(e=>e.capability===c&&e.status==="verified"&&e.evidence!=="migrated_from_v1")}
 $("auditStart").addEventListener("click",async()=>{
- const token=$("auditToken").value.trim(),provider=$("auditPlatform").value;
- if(!token||!provider){$("auditStatus").textContent="Elegí plataforma y token administrativo.";return}
+ const provider=$("auditPlatform").value;
+ if(!provider){$("auditStatus").textContent="Elegí una plataforma.";return}
  $("auditStart").disabled=true;
  $("auditStatus").textContent="Ejecutando lote pequeño…";
  try{
-  const data=await jsonFetch("/audit/step",{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},body:JSON.stringify({provider,max_calls:Number($("auditCalls").value)})});
+  const data=await jsonFetch("/audit/step",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({provider,max_calls:Number($("auditCalls").value)})});
   $("auditStatus").textContent=data.results.length+" pruebas registradas · "+data.used_today+"/"+data.daily_limit+" presupuesto diario utilizado · "+data.pending_chat+" pendientes de texto";
   await refresh();
  }catch(e){$("auditStatus").textContent=e.message}
@@ -64,11 +64,11 @@ function updateProbeModels(){
 $("probePlatform").addEventListener("change",updateProbeModels);
 columns.forEach(c=>$("probeCapability").add(new Option(c,c)));
 $("probeButton").addEventListener("click",async()=>{
- const provider=$("probePlatform").value,model=$("probeModel").value,capability=$("probeCapability").value,token=$("probeAdminToken").value.trim();
- if(!provider||!model||!token){$("probeMessage").textContent="Elegí plataforma y modelo e ingresá el token administrador.";return}
+ const provider=$("probePlatform").value,model=$("probeModel").value,capability=$("probeCapability").value;
+ if(!provider||!model){$("probeMessage").textContent="Elegí plataforma y modelo.";return}
  $("probeButton").disabled=true;$("probeMessage").textContent="Probando con el proveedor…";
  try{
-   const result=await jsonFetch("/capabilities/probe",{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},body:JSON.stringify({provider,model,capability})});
+   const result=await jsonFetch("/capabilities/probe",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({provider,model,capability})});
    $("probeMessage").textContent=(result.status||"sin resultado")+" · "+(result.evidence||"")+" · "+provider+"/"+model;
    await refresh();
  }catch(err){$("probeMessage").textContent=err.message}

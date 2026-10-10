@@ -13,6 +13,7 @@ from .router import Router
 from .security import validate_provider_base_url
 from .storage import RouterStore
 from .types import RouteRequest
+from .temporal import with_temporal_context
 
 app = FastAPI(title="Router IA", version="2.0.0")
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -454,7 +455,7 @@ def audit_capabilities(payload: CapabilityAuditInput):
 def route(payload: RouteInput, app_identity: str = Depends(require_auth)):
     req = RouteRequest(
         task=payload.task,
-        context=payload.context,
+        context=with_temporal_context(payload.context),
         requirements=tuple(payload.requirements),
         required_capabilities=frozenset(payload.required_capabilities),
         preferred_model_class=payload.preferred_model_class,

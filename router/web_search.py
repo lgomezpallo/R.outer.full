@@ -35,7 +35,11 @@ def _safe_url(value: str) -> bool:
 def search_current(task: str, *, now: datetime | None = None, limit: int = 5) -> list[dict[str, str]]:
     """Search via public RSS with a bounded request and untrusted snippets."""
     current = now or datetime.now().astimezone()
-    query = task.strip()[:280] + " " + str(current.year)
+    base_query = task.strip()[:230]
+    # Explicitly request the missing fields for upcoming fixture queries.
+    fixture = bool(re.search(r"\\b(?:cu[aá]ndo|cuando) juega\\b", base_query, re.I))
+    detail = " fecha día horario rival próximo partido " if fixture else " "
+    query = base_query + detail + current.strftime("%d %B %Y")
     endpoints = (
         ("https://www.bing.com/search", {"q": query, "format": "rss", "setlang": "es"}),
         ("https://news.google.com/rss/search", {"q": query, "hl": "es-419", "gl": "AR", "ceid": "AR:es-419"}),
@@ -59,11 +63,11 @@ def search_current(task: str, *, now: datetime | None = None, limit: int = 5) ->
                     seen.add(url)
                     found.append({"title": title, "url": url, "snippet": snippet,
                                   "published": (item.findtext("pubDate") or "")[:70]})
-                    if len(found) >= limit:
+                    if len(found) >= limit and base == endpoints[-1][0]:
                         return found
         except (httpx.HTTPError, ET.ParseError, ValueError):
             continue
-    return found
+    return found[:limit]
 
 
 def search_context(task: str, *, now: datetime | None = None) -> str:

@@ -256,6 +256,21 @@ class Router:
                 http_status = None
 
         latency = int((perf_counter() - started) * 1000)
+        # Every active probe is a measured attempt; a valid API response is not
+        # evidence that the expected answer was correct.
+        if evidence != "no_specific_probe_defined":
+            self.store.record_metric(
+                request_id=f"capability-probe:{provider_id}:{model_id}:{int(started * 1000)}",
+                application_name="router-capability-probe",
+                provider_id=provider_id,
+                model_id=model_id,
+                phase=f"probe:{capability}",
+                attempt_number=1,
+                latency_ms=latency,
+                success=(status == "verified"),
+                error_type=None if status == "verified" else evidence.split(":", 1)[0],
+                error_code=http_status if isinstance(http_status, int) else None,
+            )
         updated = self.catalog.record_capability(provider_id, model_id, capability, status, evidence)
         provider.spec = updated
         result = {

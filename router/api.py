@@ -14,6 +14,7 @@ from .security import validate_provider_base_url
 from .storage import RouterStore
 from .types import RouteRequest
 from .temporal import with_temporal_context
+from .web_search import needs_current_search, search_context
 
 app = FastAPI(title="Router IA", version="2.0.0")
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -451,11 +452,18 @@ def audit_capabilities(payload: CapabilityAuditInput):
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
+def _enriched_context(task: str, context: str) -> str:
+    base = with_temporal_context(context)
+    if needs_current_search(task):
+        base += "\n" + search_context(task)
+    return base
+
+
 @app.post("/route")
 def route(payload: RouteInput, app_identity: str = Depends(require_auth)):
     req = RouteRequest(
         task=payload.task,
-        context=with_temporal_context(payload.context),
+        context=_enriched_context(payload.task, payload.context),
         requirements=tuple(payload.requirements),
         required_capabilities=frozenset(payload.required_capabilities),
         preferred_model_class=payload.preferred_model_class,
@@ -503,7 +511,7 @@ def openai_chat(payload: OpenAIChatInput, app_identity: str = Depends(require_au
         capabilities.add("summarization")
     result = router.process(RouteRequest(
         task=users[-1],
-        context=with_temporal_context(context),
+        context=_enriched_context(users[-1], context),
         required_capabilities=frozenset(capabilities),
         application_name=app_identity,
     ))

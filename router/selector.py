@@ -30,7 +30,7 @@ def _verification_tier(model, required: frozenset[str]) -> int:
     return 1
 
 def _specialization_penalty(model, required: frozenset[str]) -> int:
-    extras = set(model.capabilities) - set(required) - set(GENERIC_EXTRAS)
+    extras = (set(model.capabilities) | set(infer_discovered_capabilities(model.id))) - set(required) - set(GENERIC_EXTRAS)
     return sum(1 for item in extras if item in SPECIALIZED_CAPABILITIES)
 
 def _score(provider: RegisteredProvider, model, req: RouteRequest, scarcity: dict[str, int] | None = None) -> Decision | None:
@@ -63,7 +63,7 @@ def _score(provider: RegisteredProvider, model, req: RouteRequest, scarcity: dic
     specialization_penalty = _specialization_penalty(model, req.required_capabilities)
     # Preserve specialized capabilities only when the current task does not need them.
     # Smaller pools incur larger penalties; declared availability is provisional.
-    scarce_extras = (set(model.capabilities) | set(model.verified_capabilities)) - set(req.required_capabilities) - set(GENERIC_EXTRAS)
+    scarce_extras = (set(model.capabilities) | set(model.verified_capabilities) | set(infer_discovered_capabilities(model.id))) - set(req.required_capabilities) - set(GENERIC_EXTRAS)
     scarcity_penalty = sum(min(2000, 8000 // max(1, (scarcity or {}).get(cap, 1))) for cap in scarce_extras if cap in SPECIALIZED_CAPABILITIES)
     model_state = provider.state.models.get(model.id)
     success_rate = model_state.success_rate if model_state else provider.state.success_rate
@@ -119,7 +119,7 @@ def rank(providers: list[RegisteredProvider], req: RouteRequest) -> list[Decisio
         if not provider.state.available:
             continue
         for model in provider.spec.models:
-            for capability in (model.capabilities | model.verified_capabilities) - model.unsupported_capabilities:
+            for capability in (model.capabilities | model.verified_capabilities | infer_discovered_capabilities(model.id)) - model.unsupported_capabilities:
                 scarcity[capability] = scarcity.get(capability, 0) + 1
     for provider in providers:
         for model in provider.spec.models:

@@ -57,7 +57,7 @@ def main() -> None:
     backup = CONFIG.with_name("Caddyfile.before-router-admin")
     backup.write_text(original)
     CONFIG.write_text(updated)
-    CONFIG.chown(0, grp.getgrnam('caddy').gr_gid)
+    os.chown(CONFIG, 0, grp.getgrnam('caddy').gr_gid)
     CONFIG.chmod(0o640)
     try:
         subprocess.run(["caddy", "validate", "--config", str(CONFIG)], check=True)

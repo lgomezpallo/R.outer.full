@@ -258,7 +258,7 @@ class Router:
         latency = int((perf_counter() - started) * 1000)
         # Every active probe is a measured attempt; a valid API response is not
         # evidence that the expected answer was correct.
-        if evidence != "no_specific_probe_defined":
+        if self.store is not None and evidence != "no_specific_probe_defined":
             self.store.record_metric(
                 request_id=f"capability-probe:{provider_id}:{model_id}:{int(started * 1000)}",
                 application_name="router-capability-probe",

@@ -44,3 +44,8 @@ curl -sS http://127.0.0.1:8000/api/router/status
 
 ## Procedimiento de mantenimiento
 Al modificar cualquier componente: registrar motivo, ubicación, servicio, dependencias, secreto por **nombre y ubicación solamente**, prueba efectuada y pendientes. No declarar finalizada una integración hasta probar un caso real de extremo a extremo.
+
+## Cambio de conversación estructurada (2026-10-10)
+- Router acepta ahora el campo opcional `conversation` con turnos `role/content` en `/route`, manteniendo `context` para instrucciones y compatibilidad con clientes anteriores.
+- IAchat envía historial de usuario/asistente en `conversation`, en lugar de aplanarlo dentro de `context`.
+- Código confirmado en GitHub, **pendiente de `git pull`, reinicio y prueba real en Oracle**. La respuesta mecánica o modelo inadecuado puede necesitar diagnóstico separado.

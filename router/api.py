@@ -104,6 +104,7 @@ class CapabilityAuditInput(BaseModel):
 class RouteInput(BaseModel):
     task: str = Field(min_length=1, max_length=100000)
     context: str = ""
+    conversation: list[ChatMessage] = Field(default_factory=list, max_length=100)
     requirements: list[str] = Field(default_factory=list)
     required_capabilities: list[str] = Field(default_factory=lambda: ["chat"])
     preferred_model_class: str | None = None
@@ -464,6 +465,7 @@ def route(payload: RouteInput, app_identity: str = Depends(require_auth)):
     req = RouteRequest(
         task=payload.task,
         context=_enriched_context(payload.task, payload.context),
+        conversation=tuple((m.role, m.content) for m in payload.conversation if m.role in ("user", "assistant") and m.content),
         requirements=tuple(payload.requirements),
         required_capabilities=frozenset(payload.required_capabilities),
         preferred_model_class=payload.preferred_model_class,

@@ -66,45 +66,44 @@ def _score(provider: RegisteredProvider, model, req: RouteRequest, scarcity: dic
     scarce_extras = (set(model.capabilities) | set(model.verified_capabilities) | set(infer_discovered_capabilities(model.id))) - set(req.required_capabilities) - set(GENERIC_EXTRAS)
     scarcity_penalty = sum(min(2000, 8000 // max(1, (scarcity or {}).get(cap, 1))) for cap in scarce_extras if cap in SPECIALIZED_CAPABILITIES)
     model_state = provider.state.models.get(model.id)
-    success_rate = model_state.success_rate if model_state else provider.state.success_rate
-    latency = (
-        model_state.ewma_latency_ms
-        if model_state and model_state.ewma_latency_ms is not None
-        else provider.state.ewma_latency_ms
-    )
+    samples = (model_state.success_count + model_state.failure_count) if model_state else 0
+    successes = model_state.success_count if model_state else 0
+    latency = model_state.ewma_latency_ms if model_state else None
+
+    # Never pretend that an untested model has a measured 100% success rate.
+    # Blend observations with a neutral prior; confidence grows gradually.
+    observed_reliability = (successes + 2) / (samples + 4)
+    reliability_adjustment = (observed_reliability - 0.5) * 3600.0
+    latency_adjustment = -min(750.0, latency / 12.0) if latency is not None else 0.0
 
     reasons: list[str] = []
-    score = health_rank * 100000.0
+    score = health_rank * 2500.0
     reasons.append(f"health_rank={health_rank}")
 
-    score -= verification_tier * 10000.0
+    evidence_adjustment = {0: 1500.0, 1: 0.0, 2: -350.0, 9: -10000.0}[verification_tier]
+    score += evidence_adjustment
     reasons.append(f"verification_tier={verification_tier}")
 
-    score -= strategic_cost * 100.0
+    score -= strategic_cost * 12.0
     reasons.append(f"strategic_cost={strategic_cost}")
 
-    score -= specialization_penalty * 300.0
-    score -= scarcity_penalty
+    score -= specialization_penalty * 200.0
+    score -= scarcity_penalty * 0.4
     reasons.append(f"scarcity_penalty={scarcity_penalty}")
     reasons.append(f"specialization_penalty={specialization_penalty}")
 
-    score += success_rate * 100.0
-    reasons.append(f"success_rate={success_rate:.2f}")
+    score += reliability_adjustment
+    reasons.append(f"observed_samples={samples}")
+    reasons.append(f"smoothed_reliability={observed_reliability:.3f}")
+    score += latency_adjustment
+    reasons.append(f"observed_latency_ms={latency if latency is not None else 'unknown'}")
 
-    if latency is not None:
-        latency_bonus = max(0.0, 50.0 - latency / 100.0)
-        score += latency_bonus
-        reasons.append(f"latency_bonus={latency_bonus:.2f}")
-    else:
-        score += 10.0
-        reasons.append("latency_unknown_bonus=10")
-
-    score += model.priority + provider.spec.priority
+    score += (model.priority + provider.spec.priority) * 2.0
     reasons.append(f"priority={model.priority + provider.spec.priority}")
 
     if "fast" in model.capabilities and req.required_capabilities == frozenset({"chat"}):
-        score += 25.0
-        reasons.append("fast_chat_bonus=25")
+        score += 80.0
+        reasons.append("fast_chat_bonus=80")
 
     if req.preferred_model_class and model.model_class == req.preferred_model_class:
         score += 250.0

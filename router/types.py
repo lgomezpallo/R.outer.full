@@ -22,6 +22,7 @@ class RouteRequest:
     decompose: bool | None = None
     max_subtasks: int = 8
     max_strategic_cost: int | None = None
+    images: tuple[str, ...] = ()  # Validated image data URLs; never persisted in logs.
 
 @dataclass
 class Decision:

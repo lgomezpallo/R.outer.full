@@ -7,7 +7,7 @@ from router.types import RouteRequest, RouteResponse
 from router.client import ProviderClient
 
 
-PIXEL = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII="
+PIXEL = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg=="
 IMAGE = "data:image/png;base64," + PIXEL
 
 

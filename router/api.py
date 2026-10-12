@@ -1,5 +1,8 @@
 from __future__ import annotations
 import os
+import base64
+import binascii
+import re
 import secrets
 import time
 import threading
@@ -112,6 +115,7 @@ class RouteInput(BaseModel):
     task: str = Field(min_length=1, max_length=100000)
     context: str = ""
     conversation: list[ChatMessage] = Field(default_factory=list, max_length=100)
+    images: list[str] = Field(default_factory=list, max_length=3)
     requirements: list[str] = Field(default_factory=list)
     required_capabilities: list[str] = Field(default_factory=lambda: ["chat"])
     preferred_model_class: str | None = None
@@ -533,14 +537,43 @@ def _enriched_context(task: str, context: str) -> str:
     return base
 
 
+_IMAGE_URL = re.compile(r"^data:image/(png|jpeg|webp);base64,([A-Za-z0-9+/]+={0,2})$")
+
+def _validated_images(images: list[str]) -> tuple[str, ...]:
+    result = []
+    for source in images:
+        if not isinstance(source, str) or len(source) > 2_750_000:
+            raise HTTPException(422, "image_too_large")
+        match = _IMAGE_URL.fullmatch(source)
+        if match is None:
+            raise HTTPException(422, "unsupported_image_format")
+        try:
+            raw = base64.b64decode(match.group(2), validate=True)
+        except (ValueError, binascii.Error):
+            raise HTTPException(422, "invalid_image_encoding")
+        if len(raw) > 2_000_000 or not raw:
+            raise HTTPException(422, "image_too_large")
+        kind = match.group(1)
+        if not (
+            (kind == "png" and raw.startswith(b"\\x89PNG\\r\\n\\x1a\\n"))
+            or (kind == "jpeg" and raw.startswith(b"\\xff\\xd8\\xff"))
+            or (kind == "webp" and raw.startswith(b"RIFF") and raw[8:12] == b"WEBP")
+        ):
+            raise HTTPException(422, "image_signature_invalid")
+        result.append(source)
+    return tuple(result)
+
+
 @app.post("/route")
 def route(payload: RouteInput, app_identity: str = Depends(require_auth)):
+    images = _validated_images(payload.images)
     req = RouteRequest(
         task=payload.task,
         context=_enriched_context(payload.task, payload.context),
         conversation=tuple((m.role, m.content) for m in payload.conversation if m.role in ("user", "assistant") and m.content),
         requirements=tuple(payload.requirements),
-        required_capabilities=frozenset(payload.required_capabilities),
+        required_capabilities=frozenset(payload.required_capabilities) | (frozenset({"chat", "vision"}) if images else frozenset()),
+        images=images,
         preferred_model_class=payload.preferred_model_class,
         timeout_s=payload.timeout_s,
         application_name=(
@@ -548,7 +581,7 @@ def route(payload: RouteInput, app_identity: str = Depends(require_auth)):
             if app_identity == "service" and payload.application_name != "unknown"
             else app_identity
         ),
-        decompose=payload.decompose,
+        decompose=False if images else payload.decompose,
         max_subtasks=payload.max_subtasks,
     )
     result = router.process(req)

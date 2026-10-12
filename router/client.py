@@ -346,7 +346,12 @@ class ProviderClient:
         user = req.task
         if req.requirements:
             user += "\n\nRequirements:\n- " + "\n- ".join(req.requirements)
-        messages.append({"role": "user", "content": user})
+        if req.images:
+            content = [{"type": "text", "text": user}]
+            content.extend({"type": "image_url", "image_url": {"url": source}} for source in req.images)
+            messages.append({"role": "user", "content": content})
+        else:
+            messages.append({"role": "user", "content": user})
         return messages
 
     def _openai_compatible(self, provider: RegisteredProvider, model: str, req: RouteRequest) -> tuple[str, dict]:
@@ -367,7 +372,16 @@ class ProviderClient:
         return text, data
 
     def _anthropic(self, provider: RegisteredProvider, model: str, req: RouteRequest) -> tuple[str, dict]:
-        messages = [{"role": "user", "content": req.task}]
+        if req.images:
+            content = [{"type": "text", "text": req.task}]
+            content.extend({
+                "type": "image",
+                "source": {"type": "base64", "media_type": source.split(";", 1)[0][5:],
+                           "data": source.split(",", 1)[1]},
+            } for source in req.images)
+            messages = [{"role": "user", "content": content}]
+        else:
+            messages = [{"role": "user", "content": req.task}]
         payload = {"model": model, "messages": messages, "max_tokens": 2048}
         headers = {
             "x-api-key": provider.api_key,
@@ -386,7 +400,13 @@ class ProviderClient:
 
     def _gemini(self, provider: RegisteredProvider, model: str, req: RouteRequest) -> tuple[str, dict]:
         url = provider.spec.base_url.rstrip("/") + f"/models/{model}:generateContent"
-        payload = {"contents": [{"parts": [{"text": req.task}]}]}
+        parts = [{"text": req.task}]
+        if req.images:
+            parts.extend({
+                "inline_data": {"mime_type": source.split(";", 1)[0][5:],
+                                "data": source.split(",", 1)[1]}
+            } for source in req.images)
+        payload = {"contents": [{"parts": parts}]}
         with httpx.Client(timeout=req.timeout_s, follow_redirects=False) as client:
             response = client.post(url, params={"key": provider.api_key}, json=payload)
             response.raise_for_status()

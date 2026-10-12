@@ -555,8 +555,8 @@ def _validated_images(images: list[str]) -> tuple[str, ...]:
             raise HTTPException(422, "image_too_large")
         kind = match.group(1)
         if not (
-            (kind == "png" and raw.startswith(b"\\x89PNG\\r\\n\\x1a\\n"))
-            or (kind == "jpeg" and raw.startswith(b"\\xff\\xd8\\xff"))
+            (kind == "png" and raw.startswith(b"\x89PNG\r\n\x1a\n"))
+            or (kind == "jpeg" and raw.startswith(b"\xff\xd8\xff"))
             or (kind == "webp" and raw.startswith(b"RIFF") and raw[8:12] == b"WEBP")
         ):
             raise HTTPException(422, "image_signature_invalid")

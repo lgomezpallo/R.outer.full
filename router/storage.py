@@ -189,6 +189,52 @@ class RouterStore:
                 ),
             )
 
+    def recent_request_traces(self, limit: int = 30, application_name: str | None = None) -> list[dict]:
+        """Recent per-request attempt traces without prompts, responses or credentials."""
+        limit = max(1, min(int(limit), 100))
+        with self._connect() as conn:
+            if application_name:
+                ids = conn.execute(
+                    """SELECT request_id, MAX(id) AS last_id FROM request_metrics
+                       WHERE application_name = ?
+                       GROUP BY request_id ORDER BY last_id DESC LIMIT ?""",
+                    (application_name, limit),
+                ).fetchall()
+            else:
+                ids = conn.execute(
+                    """SELECT request_id, MAX(id) AS last_id FROM request_metrics
+                       GROUP BY request_id ORDER BY last_id DESC LIMIT ?""",
+                    (limit,),
+                ).fetchall()
+            if not ids:
+                return []
+            placeholders = ",".join("?" for _ in ids)
+            rows = conn.execute(
+                f"""SELECT request_id, application_name, provider_id, model_id, phase,
+                           attempt_number, latency_ms, success, error_type, error_code, created_at
+                    FROM request_metrics WHERE request_id IN ({placeholders})
+                    ORDER BY id ASC""",
+                tuple(row["request_id"] for row in ids),
+            ).fetchall()
+        traces = {}
+        for row in rows:
+            rid = row["request_id"]
+            trace = traces.setdefault(rid, {
+                "request_id": rid, "application_name": row["application_name"],
+                "created_at": row["created_at"], "attempts": [],
+                "total_provider_latency_ms": 0, "fallback": False,
+            })
+            trace["attempts"].append({
+                "provider": row["provider_id"], "model": row["model_id"],
+                "phase": row["phase"], "attempt_number": row["attempt_number"],
+                "latency_ms": row["latency_ms"], "success": bool(row["success"]),
+                "error_type": row["error_type"], "error_code": row["error_code"],
+            })
+            trace["total_provider_latency_ms"] += int(row["latency_ms"])
+        for trace in traces.values():
+            trace["fallback"] = len({a["provider"] for a in trace["attempts"]}) > 1
+        return [traces[row["request_id"]] for row in ids]
+
     def recent_model_stats(self, limit: int = 2000) -> dict[tuple[str,str], dict[str,float]]:
         with self._connect() as conn:
             rows = conn.execute(

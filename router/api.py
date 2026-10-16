@@ -420,6 +420,14 @@ def performance():
     """Operational measurements only; API success does not prove answer quality."""
     return {"metrics": store.model_performance_report(), "quality_measured": False}
 
+@app.get("/diagnostics/requests", dependencies=[Depends(require_admin)])
+def recent_request_traces(limit: int = 30, application_name: str | None = None):
+    """Admin-only attempt timing and fallback diagnostics; no message content."""
+    return {
+        "requests": store.recent_request_traces(limit=limit, application_name=application_name),
+        "timing_scope": "provider_attempts_only",
+    }
+
 @app.post("/tokens", dependencies=[Depends(require_admin)])
 def create_token(payload: TokenInput):
     return {"name": payload.name, "token": store.create_app_token(payload.name)}

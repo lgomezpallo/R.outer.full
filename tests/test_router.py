@@ -359,3 +359,26 @@ def test_429_is_shared_platform_failure():
     error = httpx.HTTPStatusError("rate limit", request=response.request, response=response)
     _, provider_wide, error_type, _, _ = router._classify_failure(error)
     assert provider_wide and error_type == "quota"
+
+
+def test_model_cooldown_persists_across_router_restart(tmp_path):
+    from router.storage import RouterStore
+    from router.catalog import ModelSpec, ProviderCatalog, ProviderSpec
+    db = tmp_path / "runtime.db"
+    catalog = ProviderCatalog(providers=(ProviderSpec(
+        id="one", aliases=("one",), base_url="https://example.invalid/v1",
+        models=(ModelSpec("primary", frozenset({"chat"}), "standard", 90, 10),
+                ModelSpec("backup", frozenset({"chat"}), "standard", 50, 10)),
+    ),))
+    first = Router(FakeClient([httpx.ReadTimeout("model timed out"), "backup ok"]),
+                   max_retries=0, catalog=catalog, store=RouterStore(db))
+    first.add_provider("one", "secret", discover=False)
+    assert first.route(RouteRequest("first")).ok
+    assert not first.registry.all()[0].state.model("primary").available
+
+    second = Router(FakeClient(["backup again"]), max_retries=0,
+                    catalog=catalog, store=RouterStore(db))
+    second.add_provider("one", "secret", discover=False)
+    assert not second.registry.all()[0].state.model("primary").available
+    result = second.route(RouteRequest("second"))
+    assert result.ok and result.model == "backup"

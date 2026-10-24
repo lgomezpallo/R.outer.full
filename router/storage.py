@@ -61,6 +61,14 @@ class RouterStore:
                     ON request_metrics(provider_id, model_id, created_at);
                 CREATE INDEX IF NOT EXISTS request_metrics_request_idx
                     ON request_metrics(request_id);
+                CREATE TABLE IF NOT EXISTS model_runtime (
+                    provider_id TEXT NOT NULL,
+                    model_id TEXT NOT NULL,
+                    cooldown_until REAL NOT NULL DEFAULT 0,
+                    cooldown_strikes INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT,
+                    PRIMARY KEY(provider_id, model_id)
+                );
                 CREATE TABLE IF NOT EXISTS provider_runtime (
                     provider_id TEXT PRIMARY KEY,
                     success_count INTEGER NOT NULL DEFAULT 0,
@@ -352,6 +360,26 @@ class RouterStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+
+    def save_model_runtime(self, provider_id: str, model_id: str, state) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """INSERT INTO model_runtime(provider_id,model_id,cooldown_until,cooldown_strikes,last_error)
+                   VALUES(?,?,?,?,?)
+                   ON CONFLICT(provider_id,model_id) DO UPDATE SET
+                   cooldown_until=excluded.cooldown_until,
+                   cooldown_strikes=excluded.cooldown_strikes,
+                   last_error=excluded.last_error""",
+                (provider_id, model_id, state.cooldown_until, state.cooldown_strikes, state.last_error),
+            )
+
+    def load_model_runtime(self, provider_id: str) -> dict[str, dict]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT model_id,cooldown_until,cooldown_strikes,last_error FROM model_runtime WHERE provider_id=?",
+                (provider_id,),
+            ).fetchall()
+        return {row["model_id"]: dict(row) for row in rows}
 
     def save_provider_runtime(self, provider_id: str, state) -> None:
         health_value = None if state.health_ok is None else (1 if state.health_ok else 0)

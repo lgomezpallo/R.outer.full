@@ -191,6 +191,7 @@ class Router:
                     )
                     if self.store is not None:
                         self.store.save_provider_runtime(provider.spec.id, provider.state)
+                        self.store.save_model_runtime(provider.spec.id, decision.model, provider.state.model(decision.model))
                     if provider_wide:
                         blocked_providers.add(decision.provider)
                     break

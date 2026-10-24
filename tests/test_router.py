@@ -44,7 +44,8 @@ def test_fallback_after_timeout():
     assert len(result.attempts) == 3
     assert result.attempts[0].provider == "groq"
     assert result.attempts[1].provider == "groq"
-    assert result.attempts[2].provider == "openrouter"
+    assert result.attempts[2].provider == "groq"
+    assert result.attempts[2].model != result.attempts[0].model
     assert result.attempts[2].ok is True
 
 def test_decision_is_auditable():
@@ -66,10 +67,11 @@ def test_state_affects_ranking_after_failure():
     router.add_provider("OpenRouter", "b")
     first = router.route(RouteRequest("tarea"))
     assert first.ok
-    assert first.provider == "openrouter"
+    assert first.provider == "groq"
+    assert first.attempts[0].model != first.attempts[1].model
     second = router.route(RouteRequest("otra"))
     assert second.ok
-    assert second.provider == "openrouter"
+    assert second.model != first.attempts[0].model
 
 
 def test_non_retryable_error_falls_back_immediately():
@@ -92,7 +94,8 @@ def test_retry_then_fallback_sequence():
     router.add_provider("OpenRouter", "b")
     result = router.route(RouteRequest("x"))
     assert result.ok
-    assert [a.provider for a in result.attempts] == ["groq", "groq", "openrouter"]
+    assert [a.provider for a in result.attempts] == ["groq", "groq", "groq"]
+    assert result.attempts[2].model != result.attempts[0].model
 
 
 def test_model_specific_failure_can_try_another_model_same_provider():

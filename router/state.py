@@ -8,6 +8,12 @@ class ModelRuntimeState:
     failure_count: int = 0
     ewma_latency_ms: float | None = None
     last_error: str | None = None
+    cooldown_until: float = 0.0
+    cooldown_strikes: int = 0
+
+    @property
+    def available(self) -> bool:
+        return time() >= self.cooldown_until
 
     @property
     def success_rate(self) -> float:
@@ -17,11 +23,16 @@ class ModelRuntimeState:
     def mark_success(self, latency_ms: int) -> None:
         self.success_count += 1
         self.last_error = None
+        self.cooldown_until = 0.0
+        self.cooldown_strikes = 0
         self.ewma_latency_ms = float(latency_ms) if self.ewma_latency_ms is None else self.ewma_latency_ms * 0.7 + latency_ms * 0.3
 
-    def mark_failure(self, error: str) -> None:
+    def mark_failure(self, error: str, cooldown_s: float = 0.0) -> None:
         self.failure_count += 1
         self.last_error = error
+        if cooldown_s > 0:
+            self.cooldown_strikes = min(self.cooldown_strikes + 1, 4)
+            self.cooldown_until = time() + cooldown_s * self.cooldown_strikes
 
 @dataclass
 class RuntimeState:
@@ -75,4 +86,4 @@ class RuntimeState:
                 self.cooldown_strikes = min(self.cooldown_strikes + 1, 4)
                 self.cooldown_until = time() + cooldown_s * self.cooldown_strikes
         self.last_failure_kind = failure_kind
-        self.model(model_id).mark_failure(error)
+        self.model(model_id).mark_failure(error, 0.0 if provider_wide else cooldown_s)

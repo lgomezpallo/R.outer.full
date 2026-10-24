@@ -72,6 +72,11 @@ class Router:
             provider.state.health_ok = runtime["health_ok"]
             provider.state.cooldown_strikes = int(runtime.get("cooldown_strikes", 0) or 0)
             provider.state.last_failure_kind = runtime.get("last_failure_kind")
+        for model_id, saved in self.store.load_model_runtime(provider.spec.id).items():
+            model_state = provider.state.model(model_id)
+            model_state.cooldown_until = float(saved["cooldown_until"] or 0)
+            model_state.cooldown_strikes = int(saved["cooldown_strikes"] or 0)
+            model_state.last_error = saved["last_error"]
         stats = self.store.recent_model_stats()
         for model in provider.spec.models:
             item = stats.get((provider.spec.id, model.id))
@@ -89,7 +94,8 @@ class Router:
 
     def _classify_failure(self, exc: Exception) -> tuple[bool, bool, str, int | None, float]:
         retryable = isinstance(exc, (httpx.TimeoutException, httpx.TransportError))
-        provider_wide = retryable
+        # A single model timeout is not evidence that its entire platform failed.
+        provider_wide = isinstance(exc, httpx.ConnectError)
         error_type = "unreachable" if isinstance(exc, httpx.TransportError) else "provider_error"
         error_code: int | None = None
         cooldown = 60.0 if retryable else 0.0
@@ -103,7 +109,7 @@ class Router:
             status = exc.response.status_code
             error_code = status
             retryable = status in {408, 409, 429, 500, 502, 503, 504}
-            provider_wide = status in {401, 402, 403, 408, 429, 500, 502, 503, 504}
+            provider_wide = status in {401, 402, 403, 429}
             if status == 429:
                 error_type, cooldown = "quota", 15 * 60.0
             elif status == 402:
@@ -142,6 +148,7 @@ class Router:
                     provider.state.mark_success(decision.model, latency)
                     if self.store is not None:
                         self.store.save_provider_runtime(provider.spec.id, provider.state)
+                        self.store.save_model_runtime(provider.spec.id, decision.model, provider.state.model(decision.model))
                     attempts.append(Attempt(decision.provider, decision.model, True, latency, phase=phase))
                     if self.store is not None:
                         self.store.record_metric(
@@ -173,7 +180,7 @@ class Router:
                             error_type=error_type,
                             error_code=error_code,
                         )
-                    if retryable and attempt_index < self.max_retries:
+                    if retryable and attempt_index < self.max_retries and not provider_wide:
                         continue
                     provider.state.mark_failure(
                         decision.model,
@@ -184,6 +191,7 @@ class Router:
                     )
                     if self.store is not None:
                         self.store.save_provider_runtime(provider.spec.id, provider.state)
+                        self.store.save_model_runtime(provider.spec.id, decision.model, provider.state.model(decision.model))
                     if provider_wide:
                         blocked_providers.add(decision.provider)
                     break

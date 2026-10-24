@@ -44,7 +44,8 @@ def test_fallback_after_timeout():
     assert len(result.attempts) == 3
     assert result.attempts[0].provider == "groq"
     assert result.attempts[1].provider == "groq"
-    assert result.attempts[2].provider == "openrouter"
+    assert result.attempts[2].provider == "groq"
+    assert result.attempts[2].model != result.attempts[0].model
     assert result.attempts[2].ok is True
 
 def test_decision_is_auditable():
@@ -66,10 +67,11 @@ def test_state_affects_ranking_after_failure():
     router.add_provider("OpenRouter", "b")
     first = router.route(RouteRequest("tarea"))
     assert first.ok
-    assert first.provider == "openrouter"
+    assert first.provider == "groq"
+    assert first.attempts[0].model != first.attempts[1].model
     second = router.route(RouteRequest("otra"))
     assert second.ok
-    assert second.provider == "openrouter"
+    assert second.model != first.attempts[0].model
 
 
 def test_non_retryable_error_falls_back_immediately():
@@ -92,7 +94,8 @@ def test_retry_then_fallback_sequence():
     router.add_provider("OpenRouter", "b")
     result = router.route(RouteRequest("x"))
     assert result.ok
-    assert [a.provider for a in result.attempts] == ["groq", "groq", "openrouter"]
+    assert [a.provider for a in result.attempts] == ["groq", "groq", "groq"]
+    assert result.attempts[2].model != result.attempts[0].model
 
 
 def test_model_specific_failure_can_try_another_model_same_provider():
@@ -317,3 +320,65 @@ def test_provider_wide_http_429_causes_fallback_and_cooldown():
     result = router.route(RouteRequest("hola"))
     assert result.ok and [a.provider for a in result.attempts] == ["one", "two"]
     assert not router.registry.all()[0].state.available
+
+
+def test_timeout_isolated_to_model_and_next_request_skips_it():
+    from router.catalog import ModelSpec, ProviderCatalog, ProviderSpec
+    catalog = ProviderCatalog(providers=(ProviderSpec(
+        id="one", aliases=("one",), base_url="https://example.invalid/v1",
+        models=(ModelSpec("primary", frozenset({"chat"}), "standard", 90, 10),
+                ModelSpec("backup", frozenset({"chat"}), "standard", 50, 10)),
+    ),))
+    fake = FakeClient([httpx.ReadTimeout("slow"), "backup works", "backup works again"])
+    router = Router(fake, max_retries=0, catalog=catalog)
+    router.add_provider("one", "key", discover=False)
+    first = router.route(RouteRequest("hola"))
+    assert first.ok and len(first.attempts) == 2
+    state = router.registry.all()[0].state
+    assert state.available and not state.model("primary").available
+    assert state.model("backup").available
+    second = router.route(RouteRequest("otra"))
+    assert second.ok and len(second.attempts) == 1
+    assert second.model == "backup"
+
+
+def test_model_cooldown_recovers_without_restart():
+    from router.state import ModelRuntimeState
+    model = ModelRuntimeState()
+    model.mark_failure("temporary", cooldown_s=30)
+    assert not model.available
+    model.cooldown_until = 0
+    assert model.available
+    model.mark_success(10)
+    assert model.cooldown_strikes == 0
+
+
+def test_429_is_shared_platform_failure():
+    router = Router(FakeClient([]))
+    response = httpx.Response(429, request=httpx.Request("POST", "https://example.invalid"))
+    error = httpx.HTTPStatusError("rate limit", request=response.request, response=response)
+    _, provider_wide, error_type, _, _ = router._classify_failure(error)
+    assert provider_wide and error_type == "quota"
+
+
+def test_model_cooldown_persists_across_router_restart(tmp_path):
+    from router.storage import RouterStore
+    from router.catalog import ModelSpec, ProviderCatalog, ProviderSpec
+    db = tmp_path / "runtime.db"
+    catalog = ProviderCatalog(providers=(ProviderSpec(
+        id="one", aliases=("one",), base_url="https://example.invalid/v1",
+        models=(ModelSpec("primary", frozenset({"chat"}), "standard", 90, 10),
+                ModelSpec("backup", frozenset({"chat"}), "standard", 50, 10)),
+    ),))
+    first = Router(FakeClient([httpx.ReadTimeout("model timed out"), "backup ok"]),
+                   max_retries=0, catalog=catalog, store=RouterStore(db))
+    first.add_provider("one", "secret", discover=False)
+    assert first.route(RouteRequest("first")).ok
+    assert not first.registry.all()[0].state.model("primary").available
+
+    second = Router(FakeClient(["backup again"]), max_retries=0,
+                    catalog=catalog, store=RouterStore(db))
+    second.add_provider("one", "secret", discover=False)
+    assert not second.registry.all()[0].state.model("primary").available
+    result = second.route(RouteRequest("second"))
+    assert result.ok and result.model == "backup"

@@ -317,3 +317,42 @@ def test_provider_wide_http_429_causes_fallback_and_cooldown():
     result = router.route(RouteRequest("hola"))
     assert result.ok and [a.provider for a in result.attempts] == ["one", "two"]
     assert not router.registry.all()[0].state.available
+
+
+def test_timeout_isolated_to_model_and_next_request_skips_it():
+    from router.catalog import ModelSpec, ProviderCatalog, ProviderSpec
+    catalog = ProviderCatalog(providers=(ProviderSpec(
+        id="one", aliases=("one",), base_url="https://example.invalid/v1",
+        models=(ModelSpec("primary", frozenset({"chat"}), "standard", 90, 10),
+                ModelSpec("backup", frozenset({"chat"}), "standard", 50, 10)),
+    ),))
+    fake = FakeClient([httpx.ReadTimeout("slow"), "backup works", "backup works again"])
+    router = Router(fake, max_retries=0, catalog=catalog)
+    router.add_provider("one", "key", discover=False)
+    first = router.route(RouteRequest("hola"))
+    assert first.ok and len(first.attempts) == 2
+    state = router.registry.all()[0].state
+    assert state.available and not state.model("primary").available
+    assert state.model("backup").available
+    second = router.route(RouteRequest("otra"))
+    assert second.ok and len(second.attempts) == 1
+    assert second.model == "backup"
+
+
+def test_model_cooldown_recovers_without_restart():
+    from router.state import ModelRuntimeState
+    model = ModelRuntimeState()
+    model.mark_failure("temporary", cooldown_s=30)
+    assert not model.available
+    model.cooldown_until = 0
+    assert model.available
+    model.mark_success(10)
+    assert model.cooldown_strikes == 0
+
+
+def test_429_is_shared_platform_failure():
+    router = Router(FakeClient([]))
+    response = httpx.Response(429, request=httpx.Request("POST", "https://example.invalid"))
+    error = httpx.HTTPStatusError("rate limit", request=response.request, response=response)
+    _, provider_wide, error_type, _, _ = router._classify_failure(error)
+    assert provider_wide and error_type == "quota"

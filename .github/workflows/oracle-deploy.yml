@@ -11,6 +11,7 @@ on:
         options:
           - preflight
           - snapshot
+          - compare
           - deploy
 
 permissions:
@@ -85,6 +86,20 @@ jobs:
             echo "Snapshot saved privately on Oracle: $SNAP"
             echo "Tracked files saved: $(git diff --name-only | wc -l)"
             echo "Repository and service unchanged."
+            exit 0
+          fi
+          if test "$DEPLOY_MODE" = compare; then
+            echo "=== Changed paths on Oracle (names only) ==="
+            git diff --name-only
+            echo "=== Changed paths on GitHub since Oracle HEAD (names only) ==="
+            git diff --name-only HEAD origin/main
+            echo "=== Paths changed on both sides ==="
+            comm -12 <(git diff --name-only | sort) <(git diff --name-only HEAD origin/main | sort) || true
+            echo "=== Local change size (no content) ==="
+            git diff --stat
+            echo "=== GitHub commit ancestry ==="
+            git rev-list --left-right --count HEAD...origin/main
+            echo "Comparison complete: no source, secrets, database, or service modified."
             exit 0
           fi
           if test "$DEPLOY_MODE" = preflight; then

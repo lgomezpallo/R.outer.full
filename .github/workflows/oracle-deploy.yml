@@ -4,12 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'Preflight only or deploy'
+        description: 'Inspect, preserve local changes, or deploy'
         type: choice
         required: true
         default: preflight
         options:
           - preflight
+          - snapshot
           - deploy
 
 permissions:
@@ -67,6 +68,34 @@ jobs:
           echo "Oracle commit: $(git rev-parse --short HEAD)"
           echo "GitHub commit: $(git rev-parse --short origin/main)"
           echo "Tracked modifications: $(git status --porcelain --untracked-files=no | wc -l)"
+          if test "$DEPLOY_MODE" = snapshot; then
+            # Keep all sensitive patches and snapshots on Oracle, never in public CI logs.
+            umask 077
+            SNAP="$HOME/router-local-snapshot-$(date +%Y%m%d-%H%M%S)-$"
+            mkdir -m 700 "$SNAP"
+            git rev-parse HEAD > "$SNAP/oracle_commit"
+            git rev-parse origin/main > "$SNAP/github_commit"
+            git status --porcelain=v1 > "$SNAP/status.txt"
+            git diff --binary > "$SNAP/local-tracked.patch"
+            git diff --name-only -z | tar --null -T - -cf "$SNAP/modified-tracked.tar"
+            if test -f tests/test_vision.py; then cp -p tests/test_vision.py "$SNAP/test_vision.py"; fi
+            if test -f router.db; then
+              python3 - "$SNAP/router.db" <<'PY'
+import sqlite3, sys
+source = sqlite3.connect("file:router.db?mode=ro", uri=True)
+dest = sqlite3.connect(sys.argv[1])
+try:
+    source.backup(dest)
+finally:
+    dest.close()
+    source.close()
+PY
+            fi
+            echo "Snapshot saved privately on Oracle: $SNAP"
+            echo "Tracked files saved: $(git diff --name-only | wc -l)"
+            echo "Repository and service unchanged."
+            exit 0
+          fi
           if test "$DEPLOY_MODE" = preflight; then
             echo "Preflight complete; no deployment performed."
             exit 0

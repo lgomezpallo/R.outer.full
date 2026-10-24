@@ -72,6 +72,11 @@ class Router:
             provider.state.health_ok = runtime["health_ok"]
             provider.state.cooldown_strikes = int(runtime.get("cooldown_strikes", 0) or 0)
             provider.state.last_failure_kind = runtime.get("last_failure_kind")
+        for model_id, saved in self.store.load_model_runtime(provider.spec.id).items():
+            model_state = provider.state.model(model_id)
+            model_state.cooldown_until = float(saved["cooldown_until"] or 0)
+            model_state.cooldown_strikes = int(saved["cooldown_strikes"] or 0)
+            model_state.last_error = saved["last_error"]
         stats = self.store.recent_model_stats()
         for model in provider.spec.models:
             item = stats.get((provider.spec.id, model.id))
@@ -143,6 +148,7 @@ class Router:
                     provider.state.mark_success(decision.model, latency)
                     if self.store is not None:
                         self.store.save_provider_runtime(provider.spec.id, provider.state)
+                        self.store.save_model_runtime(provider.spec.id, decision.model, provider.state.model(decision.model))
                     attempts.append(Attempt(decision.provider, decision.model, True, latency, phase=phase))
                     if self.store is not None:
                         self.store.record_metric(

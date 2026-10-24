@@ -102,7 +102,7 @@ class Router:
         if isinstance(exc, httpx.HTTPStatusError):
             status = exc.response.status_code
             error_code = status
-            retryable = status in {400, 401, 402, 403, 404, 405, 408, 409, 413, 415, 422, 429, 500, 502, 503, 504}
+            retryable = status in {408, 409, 429, 500, 502, 503, 504}
             provider_wide = status in {401, 402, 403, 408, 429, 500, 502, 503, 504}
             if status == 429:
                 error_type, cooldown = "quota", 15 * 60.0
@@ -180,6 +180,7 @@ class Router:
                         error,
                         cooldown,
                         failure_kind=error_type,
+                        provider_wide=provider_wide,
                     )
                     if self.store is not None:
                         self.store.save_provider_runtime(provider.spec.id, provider.state)

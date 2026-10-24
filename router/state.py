@@ -65,12 +65,14 @@ class RuntimeState:
         self.ewma_latency_ms = float(latency_ms) if self.ewma_latency_ms is None else self.ewma_latency_ms * 0.7 + latency_ms * 0.3
         self.model(model_id).mark_success(latency_ms)
 
-    def mark_failure(self, model_id: str, error: str, cooldown_s: float = 15.0, failure_kind: str | None = None) -> None:
+    def mark_failure(self, model_id: str, error: str, cooldown_s: float = 15.0, failure_kind: str | None = None, *, provider_wide: bool = True) -> None:
         self.failure_count += 1
         self.last_error = error
-        self.health_ok = False
-        if cooldown_s > 0:
-            self.cooldown_strikes = min(self.cooldown_strikes + 1, 4)
-            self.cooldown_until = time() + cooldown_s * self.cooldown_strikes
+        # Model-specific failures must not disable every model of a provider.
+        if provider_wide:
+            self.health_ok = False
+            if cooldown_s > 0:
+                self.cooldown_strikes = min(self.cooldown_strikes + 1, 4)
+                self.cooldown_until = time() + cooldown_s * self.cooldown_strikes
         self.last_failure_kind = failure_kind
         self.model(model_id).mark_failure(error)

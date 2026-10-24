@@ -1,0 +1,84 @@
+name: Router Oracle Deploy (manual)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: router-oracle-production
+  cancel-in-progress: false
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - run: pytest
+
+  deploy:
+    needs: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check SSH configuration
+        env:
+          SSH_HOST: ${{ secrets.ORACLE_SSH_HOST }}
+          SSH_USER: ${{ secrets.ORACLE_SSH_USER }}
+          SSH_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.ORACLE_SSH_KNOWN_HOSTS }}
+        run: |
+          test -n "$SSH_HOST" && test -n "$SSH_USER" && test -n "$SSH_KEY" && test -n "$SSH_KNOWN_HOSTS" || {
+            echo "::error::Configure ORACLE_SSH_HOST, ORACLE_SSH_USER, ORACLE_SSH_PRIVATE_KEY, ORACLE_SSH_KNOWN_HOSTS first."
+            exit 1
+          }
+      - name: Deploy only when Oracle checkout is clean
+        env:
+          SSH_HOST: ${{ secrets.ORACLE_SSH_HOST }}
+          SSH_USER: ${{ secrets.ORACLE_SSH_USER }}
+          SSH_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.ORACLE_SSH_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/router_oracle
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/router_oracle ~/.ssh/known_hosts
+          ssh -i ~/.ssh/router_oracle -o BatchMode=yes -o StrictHostKeyChecking=yes "$SSH_USER@$SSH_HOST" 'bash -se' <<'REMOTE'
+          set -euo pipefail
+          APP=/home/ubuntu/Proyecto/Herramientas/Router
+          cd "$APP"
+          git fetch origin main
+          # Fail closed if Oracle contains any local tracked modifications.
+          # Never overwrite experimental work with a remote deploy.
+          if test -n "$(git status --porcelain --untracked-files=no)"; then
+            echo "BLOCKED: tracked Oracle changes exist. Resolve and preserve them before deploying."
+            git status --short
+            exit 2
+          fi
+          OLD=$(git rev-parse HEAD)
+          test "$(git rev-list --left-right --count HEAD...origin/main | awk '{print $1}')" = 0 || {
+            echo "BLOCKED: Oracle branch diverged from GitHub main."
+            exit 3
+          }
+          test "$(systemctl is-active router.service)" = active
+          BACKUP="$HOME/router-deploy-backup-$(date +%Y%m%d-%H%M%S)"
+          mkdir -p "$BACKUP"
+          git rev-parse HEAD > "$BACKUP/previous_commit"
+          # Back up the working directory's runtime database if present.
+          if test -f router.db; then cp -p router.db "$BACKUP/router.db"; fi
+          git merge --ff-only origin/main
+          if ! (.venv/bin/python -m compileall -q router && sudo -n systemctl restart router.service && sleep 8 && curl -fsS --max-time 15 http://127.0.0.1:8010/health | python3 -c 'import json,sys; assert json.load(sys.stdin)["status"] == "ok"'); then
+            echo "Health check failed: rolling back source and service."
+            git reset --hard "$OLD"
+            if test -f "$BACKUP/router.db"; then cp -p "$BACKUP/router.db" router.db; fi
+            sudo -n systemctl restart router.service || true
+            exit 4
+          fi
+          echo "Router deployed: $(git rev-parse --short HEAD)"
+          REMOTE

@@ -279,3 +279,41 @@ def test_verified_capability_becomes_routable():
     result = router.route(RouteRequest("x", required_capabilities=frozenset({"long_context"})))
     assert result.ok
     assert result.model == "m"
+
+
+def test_model_specific_http_error_does_not_cooldown_provider():
+    from router.catalog import ModelSpec, ProviderCatalog, ProviderSpec
+    catalog = ProviderCatalog(providers=(
+        ProviderSpec(id="one", aliases=("one",), base_url="https://example.invalid/v1",
+            models=(ModelSpec("broken", frozenset({"chat"}), "standard", 80, 10),
+                    ModelSpec("working", frozenset({"chat"}), "standard", 50, 10))),))
+    response = httpx.Response(404, request=httpx.Request("POST", "https://example.invalid/v1/chat/completions"))
+    fake = FakeClient([httpx.HTTPStatusError("model not found", request=response.request, response=response),
+                       "second model works", "still works"])
+    router = Router(fake, max_retries=2, catalog=catalog)
+    router.add_provider("one", "secret", discover=False)
+    first = router.route(RouteRequest("hola"))
+    assert first.ok and len(first.attempts) == 2
+    assert first.attempts[0].model != first.attempts[1].model
+    assert router.registry.all()[0].state.available
+    assert router.registry.all()[0].state.health_ok is True
+    second = router.route(RouteRequest("otra"))
+    assert second.ok and len(second.attempts) == 1
+
+
+def test_provider_wide_http_429_causes_fallback_and_cooldown():
+    from router.catalog import ModelSpec, ProviderCatalog, ProviderSpec
+    catalog = ProviderCatalog(providers=(
+        ProviderSpec(id="one", aliases=("one",), base_url="https://example.invalid/v1",
+            models=(ModelSpec("a", frozenset({"chat"}), "standard", 70, 10),)),
+        ProviderSpec(id="two", aliases=("two",), base_url="https://example.invalid/v1",
+            models=(ModelSpec("b", frozenset({"chat"}), "standard", 60, 10),)),
+    ))
+    response = httpx.Response(429, request=httpx.Request("POST", "https://example.invalid/v1/chat/completions"))
+    fake = FakeClient([httpx.HTTPStatusError("rate limited", request=response.request, response=response), "fallback ok"])
+    router = Router(fake, max_retries=0, catalog=catalog)
+    router.add_provider("one", "secret", discover=False)
+    router.add_provider("two", "secret", discover=False)
+    result = router.route(RouteRequest("hola"))
+    assert result.ok and [a.provider for a in result.attempts] == ["one", "two"]
+    assert not router.registry.all()[0].state.available

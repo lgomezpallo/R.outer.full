@@ -51,7 +51,10 @@ def _score(provider: RegisteredProvider, model, req: RouteRequest, scarcity: dic
     effective_capabilities = model.capabilities | model.verified_capabilities
     if req.required_capabilities - effective_capabilities:
         return None
-    if not provider.state.available or not provider.state.model(model.id).available:
+    if not provider.state.available:
+        return None
+    model_state = provider.state.models.get(model.id)
+    if model_state is not None and not model_state.available:
         return None
 
     strategic_cost = provider.spec.strategic_cost + model.strategic_cost

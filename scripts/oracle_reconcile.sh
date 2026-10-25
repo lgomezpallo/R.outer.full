@@ -6,6 +6,13 @@ UPSTREAM_REF="${ROUTER_UPSTREAM_REF:-origin/main}"
 RUN_TESTS="${ROUTER_RECONCILE_TESTS:-1}"
 APP="$(git -C "$APP" rev-parse --show-toplevel)"
 UPSTREAM="$(git -C "$APP" rev-parse --verify "$UPSTREAM_REF^{commit}")"
+# Preserve Oracle-only committed changes as well as uncommitted tracked edits.
+# A HEAD-based diff would silently omit committed changes on a diverged branch.
+if ! BASE="$(git -C "$APP" merge-base HEAD "$UPSTREAM")"; then
+  echo "reconcile_status=no_common_ancestor"
+  exit 2
+fi
+LOCAL_UNIQUE_COMMITS="$(git -C "$APP" rev-list --count "$BASE"..HEAD)"
 umask 077
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/router-reconcile.XXXXXXXX")"
 cleanup() {
@@ -13,10 +20,11 @@ cleanup() {
   rm -rf "$TMP"
 }
 trap cleanup EXIT
-git -C "$APP" diff --binary HEAD -- > "$TMP/local.patch"
-LOCAL_COUNT="$(git -C "$APP" diff --name-only HEAD -- | wc -l | tr -d ' ')"
+git -C "$APP" diff --binary "$BASE" -- > "$TMP/local.patch"
+LOCAL_COUNT="$(git -C "$APP" diff --name-only "$BASE" -- | wc -l | tr -d ' ')"
 UNTRACKED_COUNT="$(git -C "$APP" ls-files --others --exclude-standard | wc -l | tr -d ' ')"
 echo "local_tracked_files=$LOCAL_COUNT"
+echo "local_unique_commits=$LOCAL_UNIQUE_COMMITS"
 echo "untracked_files_not_included=$UNTRACKED_COUNT"
 echo "oracle_head=$(git -C "$APP" rev-parse --short HEAD)"
 echo "upstream_head=$(git -C "$APP" rev-parse --short "$UPSTREAM")"

@@ -8,6 +8,7 @@ The result is only a diagnostic candidate, NOT a deployable release.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path, PurePosixPath
 import stat
 import subprocess
@@ -15,6 +16,7 @@ import sys
 
 MAX_SOURCE_BYTES = 256_000
 ALLOWED_ROOTS = frozenset({"router", "tests"})
+SENSITIVE_COMPONENT = re.compile(r"(?:secret|credential|token|password|api[_-]?key|private)", re.I)
 
 
 def untracked_paths(app: Path) -> list[str]:
@@ -33,7 +35,7 @@ def is_safe_source_path(name: str) -> bool:
         and path.parts[0] in ALLOWED_ROOTS
         and path.suffix == ".py"
         and all(part not in {".", ".."} and not part.startswith(".") for part in path.parts)
-        and not any(part in {"__pycache__", "venv", "node_modules", "secrets"} for part in path.parts)
+        and not any(part in {"__pycache__", "venv", "node_modules", "secrets"} or SENSITIVE_COMPONENT.search(part) for part in path.parts)
     )
 
 
@@ -49,6 +51,8 @@ def _skip_reason(name: str) -> str | None:
             or any(part in {".", ".."} or part.startswith(".") for part in path.parts)
             or any(part in {"__pycache__", "venv", "node_modules", "secrets"} for part in path.parts)):
         return "skipped_unsafe_path"
+    if any(SENSITIVE_COMPONENT.search(part) for part in path.parts):
+        return "skipped_sensitive_path"
     if is_safe_source_path(name):
         return None
     if path.suffix == ".py":
@@ -65,13 +69,15 @@ def stage(app: Path, candidate: Path) -> dict[str, int]:
         raise ValueError("unsafe worktree layout")
 
     reasons = (
-        "skipped_unsafe_path", "skipped_python_outside_roots",
+        "skipped_unsafe_path", "skipped_sensitive_path", "skipped_python_outside_roots",
         "skipped_other_source_like", "skipped_other",
         "blocked_symlink", "blocked_unsafe_layout", "blocked_collision",
         "blocked_nonregular", "blocked_oversize", "blocked_io",
     )
     counts = {"total": 0, "eligible": 0, "copied": 0, "blocked": 0, "skipped": 0}
     counts.update({reason: 0 for reason in reasons})
+    counts.update({"outside_python_scripts": 0, "outside_python_tools": 0,
+                   "outside_python_other": 0})
 
     for name in untracked_paths(app):
         counts["total"] += 1
@@ -79,6 +85,11 @@ def stage(app: Path, candidate: Path) -> dict[str, int]:
         if reason:
             counts["skipped"] += 1
             counts[reason] += 1
+            if reason == "skipped_python_outside_roots":
+                root = PurePosixPath(name).parts[0]
+                role = ("scripts" if root == "scripts" else
+                        "tools" if root in {"tools", "tooling", "utilities"} else "other")
+                counts["outside_python_" + role] += 1
             continue
 
         counts["eligible"] += 1

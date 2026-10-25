@@ -1,0 +1,66 @@
+name: Promote frozen Router release with automatic rollback
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/router_release_promote.py"
+      - "tests/test_router_release_promote.py"
+      - ".github/workflows/router-release-promote.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: router-oracle-production
+  cancel-in-progress: false
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - run: pytest -q
+      - run: docker build -t router-release-promote-ci .
+
+  oracle-promote:
+    needs: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Switch only the pinned release using a reversible systemd drop-in
+        env:
+          SSH_HOST: ${{ secrets.ORACLE_SSH_HOST }}
+          SSH_USER: ${{ secrets.ORACLE_SSH_USER }}
+          SSH_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.ORACLE_SSH_KNOWN_HOSTS }}
+          SCRIPT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test -n "$SSH_HOST" && test -n "$SSH_USER" && test -n "$SSH_KEY" && test -n "$SSH_KNOWN_HOSTS"
+          [[ "$SCRIPT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          umask 077
+          mkdir -m 700 -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/router_oracle
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/router_oracle ~/.ssh/known_hosts
+          trap 'rm -f ~/.ssh/router_oracle' EXIT
+          ssh -i ~/.ssh/router_oracle -o BatchMode=yes -o StrictHostKeyChecking=yes "$SSH_USER@$SSH_HOST" "ROUTER_SCRIPT_SHA=$SCRIPT_SHA bash -se" <<'REMOTE'
+          set -euo pipefail
+          umask 077
+          cd /home/ubuntu/Proyecto/Herramientas/Router
+          git fetch --quiet origin main
+          git cat-file -e "$ROUTER_SCRIPT_SHA:scripts/router_release_promote.py"
+          mkdir -p -m 700 "$HOME/router-private-backups"
+          SCRIPT="$(mktemp "$HOME/router-private-backups/router-promote-script-XXXXXXXX.py")"
+          trap 'rm -f "$SCRIPT"' EXIT
+          git show "$ROUTER_SCRIPT_SHA:scripts/router_release_promote.py" > "$SCRIPT"
+          chmod 600 "$SCRIPT"
+          python3 "$SCRIPT" promote
+          REMOTE

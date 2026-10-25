@@ -132,7 +132,7 @@ def test_failing_local_overlay_never_prints_private_test_identifiers(tmp_path: P
     git(app, "commit", "-qm", "upstream with overlay")
     git(app, "update-ref", "refs/remotes/origin/main", "HEAD")
     git(app, "reset", "--hard", base)
-    (app / "tests/test_private_oracle_only.py").write_text(
+    (app / "tests/test_oracle_only.py").write_text(
         "def test_private_internal_customer_name():\n"
         "    assert False, 'NEVER_LOG_PRIVATE_ASSERTION'\n"
     )
@@ -145,7 +145,7 @@ def test_failing_local_overlay_never_prints_private_test_identifiers(tmp_path: P
     assert result.returncode == 5, result.stdout + result.stderr
     assert "candidate_tests=passed" in result.stdout
     assert "untracked_overlay_tests=failed" in result.stdout
-    assert "test_private_oracle_only" not in result.stdout + result.stderr
+    assert "test_oracle_only" not in result.stdout + result.stderr
     assert "test_private_internal_customer_name" not in result.stdout + result.stderr
     assert "NEVER_LOG_PRIVATE_ASSERTION" not in result.stdout + result.stderr
     assert git(app, "status", "--porcelain") == before
@@ -187,10 +187,37 @@ def test_private_reason_counts_explain_skips_and_blocks_without_paths(tmp_path: 
         "blocked_unsafe_layout", "blocked_nonregular", "blocked_io")) == counts["blocked"]
     assert sum(counts[k] for k in (
         "skipped_python_outside_roots", "skipped_other_source_like",
-        "skipped_other", "skipped_unsafe_path")) == counts["skipped"]
+        "skipped_other", "skipped_unsafe_path", "skipped_sensitive_path")) == counts["skipped"]
     assert "ORACLE_PRIVATE_CONTENT" not in result.stdout + result.stderr
     assert "PRIVATE_TOKEN" not in result.stdout + result.stderr
     for private_name in ("collision.py", "oversize.py", "link.py", "legacy.py", "old.sh", ".env"):
         assert private_name not in result.stdout + result.stderr
     assert (candidate / "router/collision.py").read_text() == "UPSTREAM = 1\n"
+    assert git(app, "status", "--porcelain") == before
+
+
+def test_outside_python_roles_are_aggregated_and_sensitive_paths_are_never_copied(tmp_path: Path):
+    app, candidate = make_repo(tmp_path)
+    for root, filename in (("scripts", "helper.py"), ("tools", "adapter.py"),
+                           ("applications", "entry.py")):
+        (app / root).mkdir()
+        (app / root / filename).write_text("ORACLE_ONLY_INTERNAL = 1\n")
+    (app / "router/api_key.py").write_text("DO_NOT_EXPOSE = 1\n")
+    (app / "tests/test_private.py").write_text("DO_NOT_EXPOSE = 1\n")
+    before = git(app, "status", "--porcelain")
+    result = run_overlay(app, candidate)
+    assert result.returncode == 0
+    assert "untracked_overlay_total=5" in result.stdout
+    assert "untracked_overlay_skipped_python_outside_roots=3" in result.stdout
+    assert "untracked_overlay_outside_python_scripts=1" in result.stdout
+    assert "untracked_overlay_outside_python_tools=1" in result.stdout
+    assert "untracked_overlay_outside_python_other=1" in result.stdout
+    assert "untracked_overlay_skipped_sensitive_path=2" in result.stdout
+    assert "untracked_overlay_copied=0" in result.stdout
+    assert "ORACLE_ONLY_INTERNAL" not in result.stdout
+    assert "DO_NOT_EXPOSE" not in result.stdout
+    for name in ("helper.py", "adapter.py", "entry.py", "api_key.py", "test_private.py"):
+        assert name not in result.stdout
+    assert not (candidate / "router/api_key.py").exists()
+    assert not (candidate / "tests/test_private.py").exists()
     assert git(app, "status", "--porcelain") == before

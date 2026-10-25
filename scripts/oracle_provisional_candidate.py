@@ -260,7 +260,10 @@ def run(app: Path, upstream: str, candidate: Path, test_enabled: bool) -> int:
                 if staged.returncode == 0:
                     # Only sanitized integer counts, never private paths.
                     for key in ("total", "eligible", "copied", "blocked", "skipped",
-                                "skipped_unsafe_path", "skipped_python_outside_roots",
+                                "skipped_unsafe_path", "skipped_sensitive_path",
+                                "skipped_python_outside_roots",
+                                "outside_python_scripts", "outside_python_tools",
+                                "outside_python_other",
                                 "skipped_other_source_like", "skipped_other",
                                 "blocked_symlink", "blocked_unsafe_layout",
                                 "blocked_collision", "blocked_nonregular",

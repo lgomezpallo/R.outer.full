@@ -12,6 +12,7 @@ on:
           - preflight
           - snapshot
           - compare
+          - reconcile-check
           - deploy
 
 permissions:
@@ -100,6 +101,34 @@ jobs:
             echo "=== GitHub commit ancestry ==="
             git rev-list --left-right --count HEAD...origin/main
             echo "Comparison complete: no source, secrets, database, or service modified."
+            exit 0
+          fi
+          if test "$DEPLOY_MODE" = reconcile-check; then
+            # Test local changes against latest GitHub source in an isolated directory.
+            # No patch content is sent to CI logs, and production is not modified.
+            umask 077
+            TMP=$(mktemp -d "$HOME/router-reconcile-XXXXXX")
+            trap 'git worktree remove --force "$TMP/worktree" >/dev/null 2>&1 || true; rm -rf "$TMP"' EXIT
+            git diff --binary > "$TMP/local.patch"
+            git worktree add --detach "$TMP/worktree" origin/main >/dev/null
+            cd "$TMP/worktree"
+            set +e
+            git apply --3way "$TMP/local.patch" > "$TMP/apply.log" 2>&1
+            APPLY_RC=$?
+            set -e
+            echo "=== Isolated integration test ==="
+            if test "$APPLY_RC" = 0; then
+              echo "Patch applied cleanly to current GitHub version."
+              echo "Changed paths:"
+              git diff --name-only
+              git diff --cached --name-only
+            else
+              echo "Automatic integration requires manual review."
+              echo "Conflicting paths:"
+              git diff --name-only --diff-filter=U
+              echo "Git apply exit code: $APPLY_RC"
+            fi
+            echo "Production source, database and service unchanged."
             exit 0
           fi
           if test "$DEPLOY_MODE" = preflight; then

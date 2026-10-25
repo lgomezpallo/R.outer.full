@@ -113,3 +113,21 @@ def test_private_candidate_failures_never_emit_ids(
     assert outcome.failed_public_tests == ()
     report_test_outcome("tracked", outcome)
     assert "test_oracle_secret_function" not in capsys.readouterr().out
+
+
+def test_nested_reconciliation_inherits_working_pytest_interpreter(tmp_path: Path) -> None:
+    candidate, env = _private_test(
+        tmp_path,
+        "import os\n"
+        "import subprocess\n"
+        "import sys\n"
+        "def test_nested_python():\n"
+        "    selected = os.environ['ROUTER_PYTHON']\n"
+        "    assert selected == sys.executable\n"
+        "    completed = subprocess.run([selected, '-m', 'pytest', '--version'],\n"
+        "                               capture_output=True, check=False)\n"
+        "    assert completed.returncode == 0\n",
+    )
+    env["ROUTER_PYTHON"] = "/nonexistent/stale-system-python"
+    outcome = run_tests(Path(sys.executable), candidate, env)
+    assert outcome == TestOutcome(True, "passed")

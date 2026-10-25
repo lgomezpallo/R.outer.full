@@ -95,6 +95,10 @@ def run_tests(python: Path, candidate: Path, env: dict[str, str],
     Collection is checked separately so environment/import failures are not
     confused with behavioral test failures.
     """
+    # Reconciliation tests spawn nested git worktrees. Their shell runner must
+    # reuse the interpreter that has pytest installed, not the VM system python.
+    # This is not an Oracle credential and remains private to test subprocesses.
+    env = {**env, "ROUTER_PYTHON": str(python)}
     with tempfile.TemporaryDirectory(prefix="router-pytest-private-", dir=env.get("HOME")) as private:
         xml = Path(private) / "results.xml"
         try:

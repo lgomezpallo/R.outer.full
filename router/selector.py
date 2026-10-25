@@ -122,6 +122,7 @@ def _score(provider: RegisteredProvider, model, req: RouteRequest, scarcity: dic
     if ineligibility_reason(provider, model, req) is not None:
         return None
 
+    strategic_cost = provider.spec.strategic_cost + model.strategic_cost
     health_rank = _provider_health_rank(provider)
     verification_tier = _verification_tier(model, req.required_capabilities)
     specialization_penalty = _specialization_penalty(model, req.required_capabilities)

@@ -13,6 +13,7 @@ from scripts.oracle_provisional_candidate import (
     TestOutcome,
     report_test_outcome,
     run_tests,
+    select_test_python,
 )
 
 
@@ -131,3 +132,13 @@ def test_nested_reconciliation_inherits_working_pytest_interpreter(tmp_path: Pat
     env["ROUTER_PYTHON"] = "/nonexistent/stale-system-python"
     outcome = run_tests(Path(sys.executable), candidate, env)
     assert outcome == TestOutcome(True, "passed")
+
+
+def test_provisional_prefers_configured_nested_pytest_interpreter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Synthetic git fixtures have no .venv, but their parent diagnostic does.
+    monkeypatch.setenv("ROUTER_PYTHON", sys.executable)
+    assert select_test_python(tmp_path) == Path(sys.executable)
+    monkeypatch.setenv("ROUTER_PYTHON", str(tmp_path / "missing-python"))
+    assert select_test_python(tmp_path) == Path(sys.executable)

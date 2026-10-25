@@ -100,7 +100,16 @@ class ProviderClient:
                         prompt = Decimal(str(prompt_price))
                         completion = Decimal(str(completion_price))
                         if prompt.is_finite() and completion.is_finite() and prompt >= 0 and completion >= 0:
-                            status = "free" if prompt == 0 and completion == 0 else "paid"
+                            # Request, image and reasoning surcharges also matter:
+                            # a zero token price alone does not mean a free request.
+                            charges = []
+                            for key in ("request", "image", "web_search", "internal_reasoning", "input_cache_read", "input_cache_write"):
+                                if pricing.get(key) is not None:
+                                    charge = Decimal(str(pricing[key]))
+                                    if not charge.is_finite() or charge < 0:
+                                        raise InvalidOperation
+                                    charges.append(charge)
+                            status = "free" if prompt == 0 and completion == 0 and all(c == 0 for c in charges) else "paid"
                 except (InvalidOperation, ValueError, TypeError):
                     pass
                 billing[model_id] = status

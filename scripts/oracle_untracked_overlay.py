@@ -37,46 +37,85 @@ def is_safe_source_path(name: str) -> bool:
     )
 
 
+# Only aggregate counters are reported. Never emit Oracle paths, names or data.
+# This list is intentionally narrow: configuration formats are not executable
+# overlay candidates even if they may contain useful source/configuration.
+SOURCE_LIKE_SUFFIXES = frozenset({".py", ".sh", ".js", ".ts", ".tsx", ".go", ".rs", ".java", ".yaml", ".yml", ".toml"})
+
+
+def _skip_reason(name: str) -> str | None:
+    path = PurePosixPath(name)
+    if (path.is_absolute() or len(path.parts) < 2
+            or any(part in {".", ".."} or part.startswith(".") for part in path.parts)
+            or any(part in {"__pycache__", "venv", "node_modules", "secrets"} for part in path.parts)):
+        return "skipped_unsafe_path"
+    if is_safe_source_path(name):
+        return None
+    if path.suffix == ".py":
+        return "skipped_python_outside_roots"
+    if path.suffix in SOURCE_LIKE_SUFFIXES:
+        return "skipped_other_source_like"
+    return "skipped_other"
+
+
 def stage(app: Path, candidate: Path) -> dict[str, int]:
     app, candidate = app.resolve(), candidate.resolve()
-    if not app.is_dir() or not candidate.is_dir() or candidate.is_relative_to(app):
+    if (not app.is_dir() or not candidate.is_dir()
+            or candidate.is_relative_to(app) or app.is_relative_to(candidate)):
         raise ValueError("unsafe worktree layout")
 
+    reasons = (
+        "skipped_unsafe_path", "skipped_python_outside_roots",
+        "skipped_other_source_like", "skipped_other",
+        "blocked_symlink", "blocked_unsafe_layout", "blocked_collision",
+        "blocked_nonregular", "blocked_oversize", "blocked_io",
+    )
     counts = {"total": 0, "eligible": 0, "copied": 0, "blocked": 0, "skipped": 0}
+    counts.update({reason: 0 for reason in reasons})
+
     for name in untracked_paths(app):
         counts["total"] += 1
-        if not is_safe_source_path(name):
+        reason = _skip_reason(name)
+        if reason:
             counts["skipped"] += 1
+            counts[reason] += 1
             continue
+
         counts["eligible"] += 1
-        source = app / name
-        target = candidate / name
-        # Reject symlinks anywhere in the source or destination ancestry.
+        source, target = app / name, candidate / name
         source_parents = [source, *list(source.parents)[:-1]]
         target_parents = [target, *list(target.parents)[:-1]]
-        if (any(p.is_symlink() for p in source_parents if p != app)
-                or any(p.is_symlink() for p in target_parents if p != candidate)
-                or not source.resolve().is_relative_to(app)
-                or not target.parent.resolve().is_relative_to(candidate)
-                or target.exists() or target.is_symlink()):
-            counts["blocked"] += 1
-            continue
+        reason = None
         try:
-            info = source.stat(follow_symlinks=False)
-            if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_SOURCE_BYTES:
-                counts["blocked"] += 1
-                continue
-            data = source.read_bytes()
-            if len(data) > MAX_SOURCE_BYTES:
-                counts["blocked"] += 1
-                continue
-            target.parent.mkdir(parents=True, exist_ok=True)
-            with target.open("xb") as handle:
-                handle.write(data)
-            target.chmod(0o600)
-            counts["copied"] += 1
+            if (any(p.is_symlink() for p in source_parents if p != app)
+                    or any(p.is_symlink() for p in target_parents if p != candidate)):
+                reason = "blocked_symlink"
+            elif (not source.resolve().is_relative_to(app)
+                    or not target.parent.resolve().is_relative_to(candidate)):
+                reason = "blocked_unsafe_layout"
+            elif target.exists() or target.is_symlink():
+                reason = "blocked_collision"
+            else:
+                info = source.stat(follow_symlinks=False)
+                if not stat.S_ISREG(info.st_mode):
+                    reason = "blocked_nonregular"
+                elif info.st_size > MAX_SOURCE_BYTES:
+                    reason = "blocked_oversize"
+                else:
+                    data = source.read_bytes()
+                    if len(data) > MAX_SOURCE_BYTES:
+                        reason = "blocked_oversize"
+                    else:
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        with target.open("xb") as handle:
+                            handle.write(data)
+                        target.chmod(0o600)
+                        counts["copied"] += 1
         except (OSError, ValueError):
+            reason = "blocked_io"
+        if reason:
             counts["blocked"] += 1
+            counts[reason] += 1
     return counts
 
 

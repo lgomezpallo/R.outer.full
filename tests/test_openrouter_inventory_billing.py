@@ -39,22 +39,23 @@ def test_openrouter_discovers_all_but_ranks_only_verified_free(monkeypatch, tmp_
         {"id": "vendor/missing-price"},
         {"id": "vendor/misleading:free", "pricing": {"prompt": "0.2", "completion": "0"}},
         {"id": "vendor/nan-price", "pricing": {"prompt": "NaN", "completion": "0"}},
+        {"id": "vendor/request-surcharge", "pricing": {"prompt": "0", "completion": "0", "request": "0.01"}},
     ]
     _install_models(monkeypatch, entries)
     catalog = ProviderCatalog(providers=(_provider_spec(),), storage_path=tmp_path / "catalog.json")
     router = Router(client=ProviderClient(), catalog=catalog)
     provider = router.add_provider("openrouter", "fake-key")
     models = {m.id: m for m in provider.spec.models}
-    assert len(models) == 135  # 134 discovered + built-in openrouter/free
+    assert len(models) == 136  # 135 discovered + built-in openrouter/free
     assert models["vendor/free-zero"].billing_status == "free"
     assert models["vendor/misleading:free"].billing_status == "paid"
     assert models["vendor/missing-price"].billing_status == "unknown"
     selected = {d.model for d in rank([provider], RouteRequest("hola"))}
     assert selected == {"openrouter/free", "vendor/free-zero"}
     coverage = model_coverage([provider], RouteRequest("hola"))
-    assert coverage["totals"]["cataloged_models"] == 135
+    assert coverage["totals"]["cataloged_models"] == 136
     assert coverage["totals"]["eligible_models"] == 2
-    assert coverage["providers"][0]["excluded_by_reason"]["billing_paid"] == 131
+    assert coverage["providers"][0]["excluded_by_reason"]["billing_paid"] == 132
     assert coverage["providers"][0]["excluded_by_reason"]["billing_unverified"] == 2
     # Reloading the catalog cannot turn paid or unknown models into eligible.
     loaded = ProviderCatalog(providers=(_provider_spec(),), storage_path=tmp_path / "catalog.json")

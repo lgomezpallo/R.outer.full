@@ -1,0 +1,66 @@
+"""Guards for the frozen-release live-provider smoke (no Oracle access in CI)."""
+from __future__ import annotations
+
+import importlib.util
+import sqlite3
+from pathlib import Path
+
+import pytest
+
+MODULE = Path(__file__).resolve().parents[1] / "scripts" / "router_release_live_smoke.py"
+spec = importlib.util.spec_from_file_location("router_release_live_smoke", MODULE)
+assert spec is not None and spec.loader is not None
+smoke = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(smoke)
+
+
+def test_pin_and_private_output_allowlist():
+    assert smoke.PINNED_SHA == "339898a6081061b41ad2557b600e06efbc1f00ef"
+    assert smoke.VALID_STATUSES == ("live_health=passed", "live_chat=passed", "live_fallback=passed")
+
+
+def test_environment_file_parser():
+    assert smoke.environment_files(
+        "/etc/router-providers.env (ignore_errors=no) /etc/iachat-router.env (ignore_errors=yes)"
+    ) == ["/etc/router-providers.env", "/etc/iachat-router.env"]
+    with pytest.raises(smoke.SmokeBlocked):
+        smoke.environment_files("")
+    with pytest.raises(smoke.SmokeBlocked):
+        smoke.environment_files("/etc/../secrets (ignore_errors=no)")
+    with pytest.raises(smoke.SmokeBlocked):
+        smoke.environment_files("garbled data")
+
+
+def test_private_dir_rejects_symlink(tmp_path):
+    actual = tmp_path / "real"
+    actual.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(actual, target_is_directory=True)
+    with pytest.raises(smoke.SmokeBlocked):
+        smoke.private_dir(alias)
+
+
+def test_sqlite_online_snapshot_does_not_change_source(tmp_path):
+    source = tmp_path / "source.db"
+    with sqlite3.connect(source) as db:
+        db.execute("PRAGMA journal_mode=WAL")
+        db.execute("CREATE TABLE items (name TEXT)")
+        db.execute("INSERT INTO items VALUES ('kept')")
+    target = tmp_path / "snapshot.db"
+    smoke.backup_sqlite(source, target)
+    with sqlite3.connect(target) as db:
+        assert db.execute("SELECT name FROM items").fetchone() == ("kept",)
+    with sqlite3.connect(source) as db:
+        assert db.execute("SELECT COUNT(*) FROM items").fetchone() == (1,)
+    assert target.stat().st_mode & 0o777 == 0o600
+
+
+def test_live_smoke_cannot_deploy_or_mutate_checkout():
+    source = MODULE.read_text()
+    for forbidden in (
+        "git reset --hard", "git clean -fd", "systemctl restart router.service",
+        "systemctl stop router.service", "git checkout -f",
+    ):
+        assert forbidden not in source
+    assert 'os.environ["ROUTER_DB_FILE"] = str(isolated_db)' in source
+    assert 'os.environ["ROUTER_CATALOG_FILE"] = str(work / "smoke-catalog.json")' in source

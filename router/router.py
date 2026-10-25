@@ -39,9 +39,15 @@ class Router:
             self.store.save_credential(registered.spec.id, api_key)
         if discover and registered.spec.discover_models and hasattr(self.client, "discover_models"):
             try:
-                model_ids = self.client.discover_models(registered)
+                if hasattr(self.client, "discover_inventory"):
+                    model_ids, billing_statuses = self.client.discover_inventory(registered)
+                else:
+                    model_ids = self.client.discover_models(registered)
+                    billing_statuses = {}
                 if model_ids:
-                    registered.spec = self.catalog.merge_discovered_models(registered.spec.id, model_ids)
+                    registered.spec = self.catalog.merge_discovered_models(
+                        registered.spec.id, model_ids, billing_statuses
+                    )
             except Exception:
                 pass
         self._hydrate_provider_metrics(registered)

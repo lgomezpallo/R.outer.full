@@ -29,6 +29,7 @@ class ModelSpec:
     priority: int = 50
     strategic_cost: int = 50
     evidence: tuple[CapabilityEvidence, ...] = ()
+    billing_status: str = "unknown"  # free, paid, unknown; provider-reported
 
     @property
     def verified_capabilities(self) -> frozenset[str]:
@@ -172,13 +173,23 @@ class ProviderCatalog:
             self._persist_unlocked()
         return provider
 
-    def merge_discovered_models(self, provider_id: str, model_ids: list[str]) -> ProviderSpec:
+    def merge_discovered_models(
+        self, provider_id: str, model_ids: list[str], billing_statuses: dict[str, str] | None = None
+    ) -> ProviderSpec:
         with self._lock:
             provider = self._providers[provider_id]
             existing = {model.id: model for model in provider.models}
             for model_id in model_ids:
+                billing_status = (billing_statuses or {}).get(model_id, "unknown")
+                if billing_status not in {"free", "paid", "unknown"}:
+                    billing_status = "unknown"
                 if model_id in existing:
                     old = existing[model_id]
+                    # Never retain a previously free price after a newer inventory
+                    # marks it paid/unknown. Only OpenRouter uses this metadata.
+                    if provider_id == "openrouter":
+                        existing[model_id] = replace(old, billing_status=billing_status)
+                        old = existing[model_id]
                     # Remove falsely inferred chat from specialist-only model IDs.
                     # Keep verified capabilities even when metadata changes.
                     inferred = infer_discovered_capabilities(model_id)
@@ -191,7 +202,15 @@ class ProviderCatalog:
                         model_class="unknown",
                         priority=45,
                         strategic_cost=provider.strategic_cost,
+                        billing_status=billing_status if provider_id == "openrouter" else "unknown",
                     )
+            if provider_id == "openrouter":
+                # Catalog entries absent from the latest successful inventory
+                # remain visible, but must not inherit obsolete free approval.
+                discovered = set(model_ids)
+                for model_id, old in existing.items():
+                    if model_id not in discovered:
+                        existing[model_id] = replace(old, billing_status="unknown")
             updated = replace(provider, models=tuple(existing.values()))
             self._providers[provider_id] = updated
             self._persist_unlocked()
@@ -248,6 +267,7 @@ class ProviderCatalog:
                         "model_class": model.model_class,
                         "priority": model.priority,
                         "strategic_cost": model.strategic_cost,
+                        "billing_status": model.billing_status,
                         "declared_capabilities": sorted(model.capabilities),
                         "verified_capabilities": sorted(model.verified_capabilities),
                         "unsupported_capabilities": sorted(model.unsupported_capabilities),
@@ -292,6 +312,7 @@ class ProviderCatalog:
                     priority=int(model.get("priority", 50)),
                     strategic_cost=int(model.get("strategic_cost", item.get("strategic_cost", 50))),
                     evidence=evidence,
+                    billing_status=model.get("billing_status", "unknown") if model.get("billing_status") in {"free", "paid", "unknown"} else "unknown",
                 ))
             provider = ProviderSpec(
                 id=item["id"],

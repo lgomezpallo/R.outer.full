@@ -29,8 +29,16 @@ class ProviderClient:
         raise RuntimeError(f"unsupported_protocol:{protocol}")
 
     def discover_models(self, provider: RegisteredProvider, timeout_s: float = 12.0) -> list[str]:
+        """Compatibility interface: list every discovered model, including paid ones."""
+        ids, _ = self.discover_inventory(provider, timeout_s)
+        return ids
+
+    def discover_inventory(
+        self, provider: RegisteredProvider, timeout_s: float = 12.0
+    ) -> tuple[list[str], dict[str, str]]:
+        """Inventory plus explicit OpenRouter billing classification (no inference of free)."""
         if provider.spec.protocol != "openai-compatible":
-            return []
+            return [], {}
         base = provider.spec.base_url.rstrip("/")
         if _is_cloudflare_workers_ai(base):
             result: list[str] = []
@@ -55,7 +63,7 @@ class ProviderClient:
                             result.append(model_id)
                     if len(source) < 100:
                         break
-            return list(dict.fromkeys(result))
+            return list(dict.fromkeys(result)), {}
 
         with httpx.Client(timeout=timeout_s, follow_redirects=False) as client:
             response = client.get(
@@ -68,8 +76,9 @@ class ProviderClient:
         if not isinstance(source, list):
             source = data.get("models") if isinstance(data, dict) else None
         if not isinstance(source, list):
-            return []
+            return [], {}
         result: list[str] = []
+        billing: dict[str, str] = {}
         is_openrouter = base == "https://openrouter.ai/api/v1"
         # NVIDIA /models is inventory, not proof of free billing.
         # Routing authorization is enforced independently in selector.py.
@@ -79,23 +88,33 @@ class ProviderClient:
                 continue
             model_id = model_id.strip()
             if is_openrouter:
+                # A price is free only if both prompt and completion prices
+                # are explicitly numeric zero. Missing or invalid prices are unknown.
                 pricing = item.get("pricing") if isinstance(item, dict) and isinstance(item.get("pricing"), dict) else {}
                 prompt_price = pricing.get("prompt")
                 completion_price = pricing.get("completion")
-                zero_priced = False
+                status = "unknown"
                 try:
-                    zero_priced = (
-                        prompt_price is not None
-                        and completion_price is not None
-                        and float(prompt_price) == 0.0
-                        and float(completion_price) == 0.0
-                    )
-                except (TypeError, ValueError):
-                    zero_priced = False
-                if not (model_id.endswith(":free") or model_id == "openrouter/free" or zero_priced):
-                    continue
+                    if prompt_price is not None and completion_price is not None:
+                        from decimal import Decimal, InvalidOperation
+                        prompt = Decimal(str(prompt_price))
+                        completion = Decimal(str(completion_price))
+                        if prompt.is_finite() and completion.is_finite() and prompt >= 0 and completion >= 0:
+                            # Request, image and reasoning surcharges also matter:
+                            # a zero token price alone does not mean a free request.
+                            charges = []
+                            for key in ("request", "image", "web_search", "internal_reasoning", "input_cache_read", "input_cache_write"):
+                                if pricing.get(key) is not None:
+                                    charge = Decimal(str(pricing[key]))
+                                    if not charge.is_finite() or charge < 0:
+                                        raise InvalidOperation
+                                    charges.append(charge)
+                            status = "free" if prompt == 0 and completion == 0 and all(c == 0 for c in charges) else "paid"
+                except (InvalidOperation, ValueError, TypeError):
+                    pass
+                billing[model_id] = status
             result.append(model_id)
-        return list(dict.fromkeys(result))
+        return list(dict.fromkeys(result)), billing
 
     def probe_capability(self, provider: RegisteredProvider, model: str, capability: str) -> dict:
         base = provider.spec.base_url.rstrip("/")

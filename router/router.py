@@ -7,7 +7,7 @@ from .catalog import ProviderCatalog
 from .client import ProviderClient
 from .orchestrator import Orchestrator
 from .registry import ProviderRegistry, RegisteredProvider
-from .selector import rank
+from .selector import billing_ineligibility_reason, rank
 from .storage import RouterStore
 from .types import Attempt, ProviderCredential, RouteRequest, RouteResponse
 
@@ -208,8 +208,22 @@ class Router:
         provider = next((item for item in self.registry.all() if item.spec.id == provider_id), None)
         if provider is None:
             raise ValueError("provider_not_registered")
-        if not any(model.id == model_id for model in provider.spec.models):
+        model_spec = next((model for model in provider.spec.models if model.id == model_id), None)
+        if model_spec is None:
             raise ValueError("model_not_cataloged")
+
+        # Active probes bypass normal ranking; enforce the same no-charge gate
+        # BEFORE making any inference request, including admin-triggered audits.
+        blocked = billing_ineligibility_reason(provider, model_spec)
+        if blocked is not None:
+            return {
+                "provider": provider_id,
+                "model": model_id,
+                "capability": capability,
+                "status": "inconclusive",
+                "latency_ms": 0,
+                "evidence": f"probe_blocked:{blocked}",
+            }
 
         started = perf_counter()
         if hasattr(self.client, "probe_capability"):
@@ -312,13 +326,15 @@ class Router:
             raise ValueError("provider_not_registered")
         candidates = [
             model for model in provider.spec.models
-            if "chat" in model.capabilities and "chat" not in model.unsupported_capabilities
+            if "chat" in model.capabilities
+            and "chat" not in model.unsupported_capabilities
+            and billing_ineligibility_reason(provider, model) is None
         ]
         if not candidates:
             return {
                 "provider": provider_id,
                 "status": "inconclusive",
-                "reason": "no_chat_model",
+                "reason": "no_billing_verified_chat_model",
                 "health_status": provider.state.health_status,
                 "checked": [],
             }

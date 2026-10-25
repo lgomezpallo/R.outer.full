@@ -6,6 +6,8 @@ on:
     paths:
       - "router/**"
       - "scripts/oracle_reconcile.sh"
+      - "scripts/oracle_*.py"
+      - "scripts/report_oracle_status.py"
       - ".github/workflows/router-oracle-monitor.yml"
       - ".github/workflows/oracle-deploy.yml"
   schedule:

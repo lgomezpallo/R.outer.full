@@ -1,18 +1,10 @@
 from __future__ import annotations
 import json
 import httpx
+from .billing import CLOUDFLARE_PAID_ONLY
 from .registry import RegisteredProvider
 from .types import RouteRequest
 
-CLOUDFLARE_PAID_ONLY = frozenset({
-    "@cf/moonshotai/kimi-k2.6",
-    "@cf/moonshotai/kimi-k2.7-code",
-    "@cf/zai-org/glm-5.2",
-    "@cf/zai-org/glm-5.3",
-    "@cf/zai-org/glm-5.3-flash",
-    "@cf/deepseek-ai/deepseek-v4-flash-0731",
-    "@cf/deepseek-ai/deepseek-v4-pro-0813",
-})
 
 def _is_cloudflare_workers_ai(base_url: str) -> bool:
     return base_url.startswith("https://api.cloudflare.com/client/v4/accounts/") and base_url.rstrip("/").endswith("/ai")
@@ -41,29 +33,34 @@ class ProviderClient:
             return [], {}
         base = provider.spec.base_url.rstrip("/")
         if _is_cloudflare_workers_ai(base):
+            # Inventory is not billing authorization. Include even known paid
+            # models for honest diagnostics, but never infer a free account plan.
             result: list[str] = []
+            billing: dict[str, str] = {}
             with httpx.Client(timeout=timeout_s, follow_redirects=False) as client:
-                for page in range(1, 6):
+                for page in range(1, 51):
                     response = client.get(
                         base + f"/models/search?hide_experimental=true&include_deprecated=false&per_page=100&page={page}",
                         headers={"Authorization": f"Bearer {provider.api_key}", "Accept": "application/json"},
                     )
                     response.raise_for_status()
                     payload = response.json()
-                    source = payload.get("result", []) if isinstance(payload, dict) else []
+                    if not isinstance(payload, dict) or payload.get("success") is False:
+                        raise ValueError("cloudflare_inventory_invalid_response")
+                    source = payload.get("result")
                     if not isinstance(source, list):
-                        break
+                        raise ValueError("cloudflare_inventory_invalid_result")
                     for item in source:
                         model_id = item.get("name") if isinstance(item, dict) else None
-                        if (
-                            isinstance(model_id, str)
-                            and model_id.startswith("@cf/")
-                            and model_id not in CLOUDFLARE_PAID_ONLY
-                        ):
+                        if isinstance(model_id, str) and model_id.startswith("@cf/") and len(model_id) <= 200:
                             result.append(model_id)
+                            billing[model_id] = "paid" if model_id in CLOUDFLARE_PAID_ONLY else "unknown"
                     if len(source) < 100:
                         break
-            return list(dict.fromkeys(result)), {}
+                else:
+                    # Never persist a partial inventory as a complete snapshot.
+                    raise RuntimeError("cloudflare_inventory_pagination_limit")
+            return list(dict.fromkeys(result)), billing
 
         with httpx.Client(timeout=timeout_s, follow_redirects=False) as client:
             response = client.get(

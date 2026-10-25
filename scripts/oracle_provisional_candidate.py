@@ -259,7 +259,12 @@ def run(app: Path, upstream: str, candidate: Path, test_enabled: bool) -> int:
                 )
                 if staged.returncode == 0:
                     # Only sanitized integer counts, never private paths.
-                    for key in ("total", "eligible", "copied", "blocked", "skipped"):
+                    for key in ("total", "eligible", "copied", "blocked", "skipped",
+                                "skipped_unsafe_path", "skipped_python_outside_roots",
+                                "skipped_other_source_like", "skipped_other",
+                                "blocked_symlink", "blocked_unsafe_layout",
+                                "blocked_collision", "blocked_nonregular",
+                                "blocked_oversize", "blocked_io"):
                         match = re.search(
                             rb"(?m)^untracked_overlay_" + key.encode() + rb"=([0-9]+)$",
                             staged.stdout,

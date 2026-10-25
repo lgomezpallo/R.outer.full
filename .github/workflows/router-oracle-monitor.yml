@@ -14,6 +14,7 @@ on:
 
 permissions:
   contents: read
+  statuses: write
 
 concurrency:
   group: router-oracle-monitor
@@ -35,7 +36,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - uses: actions/checkout@v4
       - name: Check Router and Git divergence without changes
+        id: reconcile
         env:
           SSH_HOST: ${{ secrets.ORACLE_SSH_HOST }}
           SSH_USER: ${{ secrets.ORACLE_SSH_USER }}
@@ -62,3 +65,9 @@ jobs:
           git show origin/main:scripts/oracle_reconcile.sh | ROUTER_APP_DIR="$PWD" bash
           echo "Production source, database and service unchanged."
           REMOTE
+      - name: Publish sanitized reconciliation commit status
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RECONCILE_OUTCOME: ${{ steps.reconcile.outcome }}
+        run: python3 scripts/report_oracle_status.py

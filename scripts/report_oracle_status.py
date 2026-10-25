@@ -18,7 +18,7 @@ def build_payload(outcome: str, repository: str, run_id: str) -> dict[str, str]:
     if not re.fullmatch(r"[0-9]+", run_id):
         raise ValueError("invalid run id")
     states = {
-        "success": ("success", "Oracle reconciliation candidate passed; review untracked files"),
+        "success": ("success", "Oracle reconciliation candidate passed; production unchanged"),
         "failure": ("failure", "Oracle reconciliation blocked; inspect private workflow diagnostics"),
         "skipped": ("error", "Oracle reconciliation skipped"),
         "cancelled": ("error", "Oracle reconciliation cancelled"),

@@ -120,3 +120,32 @@ def test_full_reconcile_tests_private_untracked_overlay_and_still_blocks_release
     assert git(app, "status", "--porcelain") == before
     assert git(app, "worktree", "list", "--porcelain") == before_worktrees
     assert git(app, "rev-parse", "HEAD") == base
+
+
+def test_failing_local_overlay_never_prints_private_test_identifiers(tmp_path: Path):
+    app, _ = make_repo(tmp_path)
+    base = git(app, "rev-parse", "HEAD")
+    (app / "scripts").mkdir()
+    (app / "scripts/oracle_untracked_overlay.py").write_text(SCRIPT.read_text())
+    (app / "README.md").write_text("upstream\\n")
+    git(app, "add", ".")
+    git(app, "commit", "-qm", "upstream with overlay")
+    git(app, "update-ref", "refs/remotes/origin/main", "HEAD")
+    git(app, "reset", "--hard", base)
+    (app / "tests/test_private_oracle_only.py").write_text(
+        "def test_private_internal_customer_name():\\n"
+        "    assert False, 'NEVER_LOG_PRIVATE_ASSERTION'\\n"
+    )
+    before = git(app, "status", "--porcelain")
+    env = os.environ.copy()
+    env.update({"ROUTER_APP_DIR": str(app), "ROUTER_UPSTREAM_REF": "origin/main",
+                "ROUTER_RECONCILE_TESTS": "1", "ROUTER_PYTHON": sys.executable})
+    result = subprocess.run(["bash", str(RECONCILE)], env=env,
+                            capture_output=True, text=True, check=False)
+    assert result.returncode == 5, result.stdout + result.stderr
+    assert "candidate_tests=passed" in result.stdout
+    assert "untracked_overlay_tests=failed" in result.stdout
+    assert "test_private_oracle_only" not in result.stdout + result.stderr
+    assert "test_private_internal_customer_name" not in result.stdout + result.stderr
+    assert "NEVER_LOG_PRIVATE_ASSERTION" not in result.stdout + result.stderr
+    assert git(app, "status", "--porcelain") == before

@@ -192,6 +192,7 @@ def stage() -> None:
     env.update({
         "PYTHONPATH": str(release),
         "PYTHONDONTWRITEBYTECODE": "1",
+        "ROUTER_PYTHON": str(python),
         "ROUTER_DB_FILE": str(snapshot / "pytest.db"),
         "ROUTER_CATALOG_FILE": str(snapshot / "pytest-catalog.json"),
     })

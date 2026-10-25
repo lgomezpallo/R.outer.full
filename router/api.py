@@ -415,6 +415,26 @@ def health():
         })
     return {"status": "ok", "providers": providers}
 
+@app.get("/diagnostics/model-coverage", dependencies=[Depends(require_admin)])
+def diagnostics_model_coverage(capability: str = "chat", max_strategic_cost: int | None = None):
+    """Read-only model counts; does not probe providers or spend API credits."""
+    from .selector import model_coverage
+    if capability not in {
+        "chat", "reasoning", "json", "vision", "tools", "code", "coding",
+        "summarization", "document", "transcription", "speech",
+        "image_generation", "image_editing", "long_context", "fast",
+    }:
+        raise HTTPException(status_code=422, detail="unsupported_capability")
+    return model_coverage(
+        router.registry.all(),
+        RouteRequest(
+            task="",
+            required_capabilities=frozenset({capability}),
+            max_strategic_cost=max_strategic_cost,
+        ),
+    )
+
+
 @app.get("/performance")
 def performance():
     """Operational measurements only; API success does not prove answer quality."""

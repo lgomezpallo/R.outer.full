@@ -282,6 +282,42 @@ def run(app: Path, upstream: str, candidate: Path, test_enabled: bool) -> int:
                     print("router_provisional_overlay=blocked")
             else:
                 print("router_provisional_overlay=unavailable")
+        # Test the one upstream-path collision as an ALTERNATIVE only, never
+        # replace the live Oracle file or approve the candidate for release.
+        # The helper restores the disposable worktree file in a finally block.
+        collision_source = git(app, "show", upstream + ":scripts/oracle_collision_probe.py")
+        if collision_source.returncode == 0:
+            helper = Path(temp) / "collision_probe.py"
+            helper.write_bytes(collision_source.stdout)
+            try:
+                result = subprocess.run(
+                    [sys.executable, str(helper), str(app), str(candidate), str(python)],
+                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                    env=env, timeout=240, check=False,
+                )
+                if result.returncode == 0:
+                    for key, allowed in (
+                        ("status", {"none", "multiple", "identical",
+                                    "tested_private_variant", "blocked_layout",
+                                    "blocked_inventory", "blocked_path",
+                                    "blocked_untracked_target", "blocked_file",
+                                    "blocked_io"}),
+                        ("tests", {"skipped", "passed", "failed", "timeout",
+                                   "interpreter_unavailable"}),
+                    ):
+                        match = re.search(
+                            rb"(?m)^oracle_collision_" + key.encode()
+                            + rb"=([a-z_]+)$", result.stdout,
+                        )
+                        if match and match.group(1).decode("ascii") in allowed:
+                            print("router_provisional_collision_" + key + "="
+                                  + match.group(1).decode("ascii"))
+                else:
+                    print("router_provisional_collision_status=blocked")
+            except subprocess.TimeoutExpired:
+                print("router_provisional_collision_status=timeout")
+        else:
+            print("router_provisional_collision_status=unavailable")
         print("router_provisional_production_unchanged=yes")
     return 0
 

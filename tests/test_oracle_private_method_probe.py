@@ -48,11 +48,11 @@ def test_transplant_replaces_only_named_method():
 
 def test_failing_test_ids_never_include_assertion_values_or_other_files():
     output = (
-        "FAILED tests/test_router.py::test_timeout - SECRET_ASSERTION_VALUE\\n"
-        "FAILED tests/test_router.py::test_timeout - DUPLICATE\\n"
-        "FAILED tests/test_router.py::test_auth[private-param] - SECRET_PARAM\\n"
-        "FAILED tests/test_other.py::test_private - PRIVATE_OTHER\\n"
-        "E  SECRET_TRACEBACK\\n"
+        "FAILED tests/test_router.py::test_timeout - SECRET_ASSERTION_VALUE\n"
+        "FAILED tests/test_router.py::test_timeout - DUPLICATE\n"
+        "FAILED tests/test_router.py::test_auth[private-param] - SECRET_PARAM\n"
+        "FAILED tests/test_other.py::test_private - PRIVATE_OTHER\n"
+        "E  SECRET_TRACEBACK\n"
     )
     ids = module.failing_test_ids(output, "tests/test_router.py")
     assert ids == [

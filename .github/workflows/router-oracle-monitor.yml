@@ -1,0 +1,55 @@
+name: Router Oracle Daily Monitor
+
+on:
+  schedule:
+    - cron: "20 12 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: router-oracle-monitor
+  cancel-in-progress: false
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - run: pytest -q
+
+  oracle-check:
+    needs: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check Router and Git divergence without changes
+        env:
+          SSH_HOST: ${{ secrets.ORACLE_SSH_HOST }}
+          SSH_USER: ${{ secrets.ORACLE_SSH_USER }}
+          SSH_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.ORACLE_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$SSH_HOST" && test -n "$SSH_USER" && test -n "$SSH_KEY" && test -n "$SSH_KNOWN_HOSTS"
+          mkdir -m 700 -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/router_oracle
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/router_oracle ~/.ssh/known_hosts
+          ssh -i ~/.ssh/router_oracle -o BatchMode=yes -o StrictHostKeyChecking=yes "$SSH_USER@$SSH_HOST" 'bash -se' <<'REMOTE'
+          set -euo pipefail
+          cd /home/ubuntu/Proyecto/Herramientas/Router
+          test "$(systemctl is-active router.service)" = active
+          curl -fsS --max-time 15 http://127.0.0.1:8010/health | python3 -c 'import json,sys; assert json.load(sys.stdin)["status"] == "ok"'
+          git fetch origin main --quiet
+          echo "Oracle commit: $(git rev-parse --short HEAD)"
+          echo "GitHub commit: $(git rev-parse --short origin/main)"
+          echo "Tracked local changes: $(git status --porcelain --untracked-files=no | wc -l)"
+          echo "Ahead/behind: $(git rev-list --left-right --count HEAD...origin/main)"
+          echo "Read-only check completed. No deployment performed."
+          REMOTE

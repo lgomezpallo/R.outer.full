@@ -149,7 +149,7 @@ def test_private_collision_alternate_runs_without_changing_oracle(tmp_path: Path
     before_local = (repo / "router/collision.py").read_bytes()
     result = run_reconcile(repo)
     assert result.returncode == 3, result.stdout + result.stderr
-    assert "router_provisional_collision_status=tested_private_variant" in result.stdout
+    assert "router_provisional_collision_status=tested_private_variant" in result.stdout, [line for line in result.stdout.splitlines() if "collision_" in line]
     assert "router_provisional_collision_tests=passed" in result.stdout
     assert "router_provisional_semantic_merge_approved=no" in result.stdout
     assert "router_provisional_deployment_approved=no" in result.stdout

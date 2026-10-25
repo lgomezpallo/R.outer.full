@@ -26,6 +26,8 @@ def make_repo(tmp_path: Path, upstream_change: str | None) -> Path:
     git(repo, "config", "user.name", "Router Test")
     (repo / "router").mkdir()
     (repo / "router" / "router.py").write_text("value = 1\n")
+    (repo / "tests").mkdir()
+    (repo / "tests" / "test_candidate.py").write_text("def test_candidate():\n    assert True\n")
     git(repo, "add", ".")
     git(repo, "commit", "-qm", "base")
     base = git(repo, "rev-parse", "HEAD")
@@ -84,3 +86,22 @@ def test_reconcile_is_private_and_does_not_modify_oracle(
         assert "router/router.py" in result.stdout
     else:
         assert "candidate_tests=skipped" in result.stdout
+
+
+def test_candidate_tests_run_in_isolated_worktree(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path, upstream_change=None)
+    env = os.environ.copy()
+    env.update({
+        "ROUTER_APP_DIR": str(repo),
+        "ROUTER_RECONCILE_TESTS": "1",
+        "ROUTER_UPSTREAM_REF": "origin/main",
+    })
+    before = git(repo, "status", "--porcelain")
+    result = subprocess.run(
+        ["bash", str(SCRIPT)], env=env, text=True, capture_output=True,
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "reconcile_status=candidate_applied" in result.stdout
+    assert "candidate_tests=passed" in result.stdout
+    assert git(repo, "status", "--porcelain") == before
+    assert len(git(repo, "worktree", "list", "--porcelain").split("worktree ")) == 2

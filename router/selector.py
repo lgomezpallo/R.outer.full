@@ -1,5 +1,5 @@
 from __future__ import annotations
-from .billing import NVIDIA_ROUTING_ALLOWLIST
+from .billing import CLOUDFLARE_PAID_ONLY, NVIDIA_ROUTING_ALLOWLIST
 from .catalog import infer_discovered_capabilities
 from .registry import RegisteredProvider
 from .types import Decision, RouteRequest
@@ -34,6 +34,28 @@ def _specialization_penalty(model, required: frozenset[str]) -> int:
     extras = (set(model.capabilities) | set(infer_discovered_capabilities(model.id))) - set(required) - set(GENERIC_EXTRAS)
     return sum(1 for item in extras if item in SPECIALIZED_CAPABILITIES)
 
+def billing_ineligibility_reason(provider: RegisteredProvider, model) -> str | None:
+    """Pure billing gate shared by routing, probes, and provider audits.
+
+    Cloudflare Workers AI's per-model inventory does not attest account plan
+    or remaining free neurons. Until an account-level no-charge guarantee can
+    be verified, Cloudflare models must not generate inference requests.
+    """
+    if provider.spec.id == "openrouter":
+        if model.billing_status != "free" and not (
+            model.id == "openrouter/free" and model.billing_status == "unknown"
+        ):
+            return "billing_paid" if model.billing_status == "paid" else "billing_unverified"
+    if provider.spec.id == "nvidia" and model.id not in NVIDIA_ROUTING_ALLOWLIST:
+        return "billing_unverified"
+    if provider.spec.id == "cloudflare":
+        if model.id in CLOUDFLARE_PAID_ONLY or model.billing_status == "paid":
+            return "billing_paid"
+        # A free allocation can become billable on Workers Paid accounts.
+        return "billing_unverified"
+    return None
+
+
 def ineligibility_reason(provider: RegisteredProvider, model, req: RouteRequest) -> str | None:
     """Explain why a cataloged provider/model cannot enter this request's ranking.
 
@@ -54,14 +76,9 @@ def ineligibility_reason(provider: RegisteredProvider, model, req: RouteRequest)
     effective_capabilities = model.capabilities | model.verified_capabilities
     if req.required_capabilities - effective_capabilities:
         return "missing_capability"
-    # Catalog visibility does not authorize paid or unpriced OpenRouter models.
-    # The legacy openrouter/free virtual route remains a free-only bootstrap.
-    if provider.spec.id == "openrouter" and model.billing_status != "free" and not (model.id == "openrouter/free" and model.billing_status == "unknown"):
-        return "billing_paid" if model.billing_status == "paid" else "billing_unverified"
-    # A discovered NVIDIA model is not automatically approved for billing.
-    # Preserve the pre-existing routing allowlist until price/terms are verified.
-    if provider.spec.id == "nvidia" and model.id not in NVIDIA_ROUTING_ALLOWLIST:
-        return "billing_unverified"
+    billing_reason = billing_ineligibility_reason(provider, model)
+    if billing_reason is not None:
+        return billing_reason
     if not provider.state.available:
         return "provider_cooldown"
     model_state = provider.state.models.get(model.id)

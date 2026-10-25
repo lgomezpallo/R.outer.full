@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -57,6 +58,19 @@ def transplant(upstream: str, local: str, selected: tuple[str, ...]) -> str:
     result = "".join(lines)
     ast.parse(result)
     return result
+
+
+def failing_test_ids(output: str, test_target: str) -> list[str]:
+    """Extract public test function names only; never print assertion details."""
+    pattern = re.compile("^FAILED " + re.escape(test_target) + "::([A-Za-z_][A-Za-z0-9_]*)")
+    result: list[str] = []
+    for line in output.splitlines():
+        match = pattern.match(line)
+        if match:
+            test_id = test_target + "::" + match.group(1)
+            if test_id not in result:
+                result.append(test_id)
+    return result[:20]
 
 
 def git(app: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -118,6 +132,13 @@ def run_probe(app: Path, upstream: str, *, test_target: str = "tests/test_router
                 # Do not print pytest output: Oracle source or secrets could appear
                 # in failures, assertions, tracebacks, and repr().
                 print(f"router_private_probe_{name}={status}")
+                if status == "failed":
+                    # The public test names are safe; pytest's assertions,
+                    # exception repr and private source remain undisclosed.
+                    ids = failing_test_ids(run.stdout, test_target)
+                    print(f"router_private_probe_{name}_failed_test_count={len(ids)}")
+                    if ids:
+                        print(f"router_private_probe_{name}_failed_tests={','.join(ids)}")
             print("router_private_probe=completed")
             print("router_private_probe_untracked_copied=no")
             print("router_private_probe_production_unchanged=yes")

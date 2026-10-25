@@ -164,3 +164,58 @@ def test_untracked_oracle_files_block_false_success_without_exposing_contents(tm
     assert secret.read_text() == "PRIVATE_LOCAL_VALUE=do_not_publish\\n"
     assert git(repo, "rev-parse", "HEAD") == before_head
     assert git(repo, "worktree", "list", "--porcelain") == before_worktrees
+
+
+def test_conflict_is_not_masked_by_untracked_files(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path, upstream_change="value = 3\n")
+    secret = repo / "secret-local.env"
+    secret.write_text("NEVER_PRINT_THIS_SECRET\n")
+    before = git(repo, "status", "--porcelain")
+    result = reconcile(repo)
+    assert result.returncode == 3, result.stderr + result.stdout
+    assert "reconcile_status=conflicts" in result.stdout
+    assert "router/router.py" in result.stdout
+    assert "untracked_files_not_included=1" in result.stdout
+    assert "untracked_other_count=1" in result.stdout
+    assert "NEVER_PRINT_THIS_SECRET" not in result.stdout
+    assert git(repo, "status", "--porcelain") == before
+
+
+def test_private_symbol_diagnostics_identify_overlapping_methods(tmp_path: Path) -> None:
+    repo = tmp_path / "oracle"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    git(repo, "config", "user.email", "router-test@example.invalid")
+    git(repo, "config", "user.name", "Router Test")
+    (repo / "router").mkdir()
+    path = repo / "router" / "router.py"
+    path.write_text("class Router:\n    def route(self):\n        return 1\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "base")
+    base = git(repo, "rev-parse", "HEAD")
+
+    # The diagnostic helper exists in upstream, but not in the live checkout.
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "oracle_reconcile_symbols.py").write_text(
+        (SCRIPT.parent / "oracle_reconcile_symbols.py").read_text()
+    )
+    path.write_text("class Router:\n    def route(self):\n        return 3\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "upstream")
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    git(repo, "reset", "--hard", base)
+    path.write_text(
+        "class Router:\n"
+        "    def route(self):\n"
+        "        return 2\n"
+        "    def add_provider(self):\n"
+        "        return 'SECRET_NOT_FOR_PUBLIC_LOGS'\n"
+    )
+    before = path.read_text()
+    result = reconcile(repo)
+    assert result.returncode == 3, result.stderr + result.stdout
+    assert "router_symbol_diagnostics=available" in result.stdout
+    assert "router_overlapping_methods=route" in result.stdout
+    assert "router_local_only_modified_methods=add_provider" in result.stdout
+    assert "SECRET_NOT_FOR_PUBLIC_LOGS" not in result.stdout
+    assert path.read_text() == before

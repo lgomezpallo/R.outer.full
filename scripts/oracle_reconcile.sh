@@ -39,10 +39,17 @@ print(f"untracked_source_like_count={source}")
 print(f"untracked_other_count={len(paths) - source}")
 '
 git -C "$APP" worktree add --detach "$TMP/candidate" "$UPSTREAM" >/dev/null 2>&1
-set +e
-git -C "$TMP/candidate" apply --3way --index "$TMP/local.patch" > "$TMP/apply.log" 2>&1
-APPLY_RC=$?
-set -e
+# A clean Oracle checkout can still contain untracked local files.
+# git apply rejects an empty patch by default; do not misreport this as a
+# reconciliation failure (exit 4).
+if test -s "$TMP/local.patch"; then
+  set +e
+  git -C "$TMP/candidate" apply --3way --index "$TMP/local.patch" > "$TMP/apply.log" 2>&1
+  APPLY_RC=$?
+  set -e
+else
+  APPLY_RC=0
+fi
 # If only Router methods conflict, try a conservative private three-way merge.
 # A clean result stays in the disposable worktree; never touches the live tree.
 if test "$APPLY_RC" -ne 0; then
@@ -120,8 +127,35 @@ else
   # Only report test identifiers, not assertion values, secrets or patch contents.
   grep -E '^(FAILED|ERROR) [A-Za-z0-9_./:\[\]-]+' "$TMP/pytest.log" | sed -E 's/ - .*//' | head -20 || true
 fi
+# Privately test a conservative subset of Oracle-only Python sources.
+# Only copies router/ and tests/ *.py into the disposable candidate, never
+# credentials/config, symlinks, or any path already present in upstream.
+# All remaining untracked files STILL block successful reconciliation.
+if test "$UNTRACKED_COUNT" -ne 0 && test "$TEST_RC" -eq 0 &&
+   git -C "$APP" cat-file -e "$UPSTREAM:scripts/oracle_untracked_overlay.py" 2>/dev/null; then
+  git -C "$APP" show "$UPSTREAM:scripts/oracle_untracked_overlay.py" > "$TMP/untracked_overlay.py"
+  if python3 "$TMP/untracked_overlay.py" "$APP" "$TMP/candidate" > "$TMP/overlay.log" 2>&1; then
+    grep -E '^untracked_overlay_(total|eligible|copied|blocked|skipped)=[0-9]+' "$TMP/overlay.log" || true
+    if grep -Eq '^untracked_overlay_copied=[1-9][0-9]*' "$TMP/overlay.log"; then
+      set +e
+      (cd "$TMP/candidate" && PYTHONPATH="$TMP/candidate" PYTHONDONTWRITEBYTECODE=1 "$PYTHON" -m pytest -q > "$TMP/overlay_pytest.log" 2>&1)
+      OVERLAY_TEST_RC=$?
+      set -e
+      if test "$OVERLAY_TEST_RC" -eq 0; then
+        echo "untracked_overlay_tests=passed"
+      else
+        echo "untracked_overlay_tests=failed"
+        grep -E '^(FAILED|ERROR) [A-Za-z0-9_./:\[\]-]+' "$TMP/overlay_pytest.log" | sed -E 's/ - .*//' | head -20 || true
+      fi
+    else
+      echo "untracked_overlay_tests=skipped"
+    fi
+  else
+    echo "untracked_overlay=blocked"
+  fi
+fi
 echo "production_checkout_unchanged=yes"
-# Even passing tracked-code tests cannot authorize deployment while local
-# untracked files remain unreviewed.
+# Even passing tracked-code and overlay tests cannot authorize deployment
+# while any Oracle untracked files remain unreviewed.
 if test "$UNTRACKED_COUNT" -ne 0; then exit 5; fi
 exit "$TEST_RC"

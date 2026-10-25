@@ -33,34 +33,96 @@ def _specialization_penalty(model, required: frozenset[str]) -> int:
     extras = (set(model.capabilities) | set(infer_discovered_capabilities(model.id))) - set(required) - set(GENERIC_EXTRAS)
     return sum(1 for item in extras if item in SPECIALIZED_CAPABILITIES)
 
-def _score(provider: RegisteredProvider, model, req: RouteRequest, scarcity: dict[str, int] | None = None) -> Decision | None:
-    # Discovered /models endpoints include language-specific and experimental
-    # architectures that should not be treated as general-purpose chat models.
-    # Keep Arabic-specialized models eligible when the task is in Arabic.
+def ineligibility_reason(provider: RegisteredProvider, model, req: RouteRequest) -> str | None:
+    """Explain why a cataloged provider/model cannot enter this request's ranking.
+
+    This is the same gate used by _score, so coverage counts never pretend that
+    an unavailable or incompatible catalog entry is actually selectable.
+    """
     model_name = model.id.casefold()
     if "chat" in req.required_capabilities and not infer_discovered_capabilities(model.id) and "chat" not in model.verified_capabilities:
-        return None
+        return "not_chat_model"
     if "diffusiongemma" in model_name and "chat" in req.required_capabilities:
-        return None
+        return "not_chat_model"
     if "allam-" in model_name and "chat" in req.required_capabilities:
         task_text = req.task + " " + req.context
         if not any("\u0600" <= char <= "\u06ff" for char in task_text):
-            return None
+            return "language_mismatch"
     if req.required_capabilities & model.unsupported_capabilities:
-        return None
+        return "unsupported_capability"
     effective_capabilities = model.capabilities | model.verified_capabilities
     if req.required_capabilities - effective_capabilities:
-        return None
+        return "missing_capability"
     if not provider.state.available:
-        return None
+        return "provider_cooldown"
     model_state = provider.state.models.get(model.id)
     if model_state is not None and not model_state.available:
+        return "model_cooldown"
+    strategic_cost = provider.spec.strategic_cost + model.strategic_cost
+    if req.max_strategic_cost is not None and strategic_cost > req.max_strategic_cost:
+        return "strategic_cost"
+    return None
+
+
+def model_coverage(providers: list[RegisteredProvider], req: RouteRequest) -> dict:
+    """Read-only accounting of catalog entries versus actually rankable models.
+
+    A catalog entry is not proof that a provider accepts requests or that its
+    answer quality has been measured. Counts are for configured providers only.
+    """
+    rows = []
+    totals = {
+        "cataloged_models": 0,
+        "eligible_models": 0,
+        "excluded_models": 0,
+        "observed_models": 0,
+        "observed_attempts": 0,
+        "verified_eligible_models": 0,
+    }
+    for provider in providers:
+        row = {
+            "provider": provider.spec.id,
+            "cataloged_models": len(provider.spec.models),
+            "eligible_models": 0,
+            "excluded_models": 0,
+            "excluded_by_reason": {},
+            "observed_models": 0,
+            "observed_attempts": 0,
+            "verified_eligible_models": 0,
+        }
+        for model in provider.spec.models:
+            state = provider.state.models.get(model.id)
+            samples = (state.success_count + state.failure_count) if state else 0
+            if samples:
+                row["observed_models"] += 1
+                row["observed_attempts"] += samples
+            reason = ineligibility_reason(provider, model, req)
+            if reason is not None:
+                row["excluded_models"] += 1
+                row["excluded_by_reason"][reason] = row["excluded_by_reason"].get(reason, 0) + 1
+            else:
+                row["eligible_models"] += 1
+                if req.required_capabilities.issubset(model.verified_capabilities):
+                    row["verified_eligible_models"] += 1
+        rows.append(row)
+        for key in totals:
+            totals[key] += row[key]
+    return {
+        "required_capabilities": sorted(req.required_capabilities),
+        "max_strategic_cost": req.max_strategic_cost,
+        "catalog_scope": "configured_providers_only",
+        "selection_scope": "current_request_and_runtime_cooldowns",
+        "quality_measured": False,
+        "totals": totals,
+        "providers": rows,
+    }
+
+
+def _score(provider: RegisteredProvider, model, req: RouteRequest, scarcity: dict[str, int] | None = None) -> Decision | None:
+    if ineligibility_reason(provider, model, req) is not None:
         return None
 
     strategic_cost = provider.spec.strategic_cost + model.strategic_cost
-    if req.max_strategic_cost is not None and strategic_cost > req.max_strategic_cost:
-        return None
-
     health_rank = _provider_health_rank(provider)
     verification_tier = _verification_tier(model, req.required_capabilities)
     specialization_penalty = _specialization_penalty(model, req.required_capabilities)

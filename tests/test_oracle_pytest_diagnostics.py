@@ -81,3 +81,35 @@ def test_private_diagnostic_rejects_unknown_public_label(capsys: pytest.CaptureF
     with pytest.raises(ValueError, match="invalid diagnostic label"):
         report_test_outcome("secret_private_filename", TestOutcome(False, "other_failure"))
     assert capsys.readouterr().out == ""
+
+
+def test_public_baseline_failure_ids_strip_secret_param_values(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    candidate, env = _private_test(
+        tmp_path,
+        "import pytest\n"
+        "@pytest.mark.parametrize('token', ['PRIVATE_PARAM_VALUE'])\n"
+        "def test_public_behavior(token):\n"
+        "    assert False, 'PRIVATE_ASSERTION_VALUE'\n",
+    )
+    outcome = run_tests(Path(sys.executable), candidate, env, public_failures=True)
+    assert outcome.phase == "assertions_failed"
+    assert outcome.failed_public_tests == ("test_public_behavior",)
+    report_test_outcome("baseline", outcome)
+    output = capsys.readouterr()
+    assert "router_provisional_baseline_failed_public_tests=test_public_behavior" in output.out
+    assert "PRIVATE_PARAM_VALUE" not in output.out + output.err
+    assert "PRIVATE_ASSERTION_VALUE" not in output.out + output.err
+
+
+def test_private_candidate_failures_never_emit_ids(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    candidate, env = _private_test(
+        tmp_path, "def test_oracle_secret_function():\n    assert False\n",
+    )
+    outcome = run_tests(Path(sys.executable), candidate, env)
+    assert outcome.failed_public_tests == ()
+    report_test_outcome("tracked", outcome)
+    assert "test_oracle_secret_function" not in capsys.readouterr().out

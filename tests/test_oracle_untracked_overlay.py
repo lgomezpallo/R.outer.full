@@ -149,3 +149,48 @@ def test_failing_local_overlay_never_prints_private_test_identifiers(tmp_path: P
     assert "test_private_internal_customer_name" not in result.stdout + result.stderr
     assert "NEVER_LOG_PRIVATE_ASSERTION" not in result.stdout + result.stderr
     assert git(app, "status", "--porcelain") == before
+
+
+def test_private_reason_counts_explain_skips_and_blocks_without_paths(tmp_path: Path):
+    app, candidate = make_repo(tmp_path)
+    (app / "router/collision.py").write_text("ORACLE_PRIVATE_CONTENT = 1\n")
+    (candidate / "router/collision.py").write_text("UPSTREAM = 1\n")
+    (app / "router/oversize.py").write_bytes(b"x" * 256_001)
+    (app / "router/link.py").symlink_to("/etc/passwd")
+    (app / "scripts").mkdir()
+    (app / "scripts/legacy.py").write_text("PRIVATE_LEGACY = 1\n")
+    (app / "scripts/old.sh").write_text("PRIVATE_SCRIPT = 1\n")
+    (app / "docs").mkdir()
+    (app / "docs/notes.txt").write_text("PRIVATE_NOTES = 1\n")
+    (app / ".env").write_text("PRIVATE_TOKEN = 1\n")
+
+    before = git(app, "status", "--porcelain")
+    result = run_overlay(app, candidate)
+    assert result.returncode == 0, result.stderr
+    counts = {}
+    for line in result.stdout.splitlines():
+        if line.startswith("untracked_overlay_") and "=" in line:
+            key, value = line.split("=", 1)
+            if value.isdigit():
+                counts[key.removeprefix("untracked_overlay_")] = int(value)
+    assert counts["total"] == 7
+    assert counts["eligible"] == 3
+    assert counts["blocked"] == 3
+    assert counts["copied"] == 0
+    assert counts["skipped"] == 4
+    for key in ("blocked_collision", "blocked_oversize", "blocked_symlink",
+                "skipped_python_outside_roots", "skipped_other_source_like",
+                "skipped_other", "skipped_unsafe_path"):
+        assert counts[key] == 1
+    assert sum(counts[k] for k in (
+        "blocked_collision", "blocked_oversize", "blocked_symlink",
+        "blocked_unsafe_layout", "blocked_nonregular", "blocked_io")) == counts["blocked"]
+    assert sum(counts[k] for k in (
+        "skipped_python_outside_roots", "skipped_other_source_like",
+        "skipped_other", "skipped_unsafe_path")) == counts["skipped"]
+    assert "ORACLE_PRIVATE_CONTENT" not in result.stdout + result.stderr
+    assert "PRIVATE_TOKEN" not in result.stdout + result.stderr
+    for private_name in ("collision.py", "oversize.py", "link.py", "legacy.py", "old.sh", ".env"):
+        assert private_name not in result.stdout + result.stderr
+    assert (candidate / "router/collision.py").read_text() == "UPSTREAM = 1\n"
+    assert git(app, "status", "--porcelain") == before

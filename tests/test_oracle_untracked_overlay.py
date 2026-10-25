@@ -22,6 +22,7 @@ def make_repo(tmp_path: Path) -> tuple[Path, Path]:
     git(app, "config", "user.name", "Router Test")
     git(app, "config", "user.email", "router@example.invalid")
     (app / "router").mkdir()
+    (app / "router/__init__.py").write_text("")
     (app / "router/base.py").write_text("VALUE = 1\n")
     (app / "tests").mkdir()
     (app / "tests/test_base.py").write_text("def test_base():\n    assert True\n")
@@ -30,6 +31,7 @@ def make_repo(tmp_path: Path) -> tuple[Path, Path]:
     candidate = tmp_path / "candidate"
     candidate.mkdir()
     (candidate / "router").mkdir()
+    (candidate / "router/__init__.py").write_text("")
     (candidate / "router/base.py").write_text("VALUE = 1\n")
     return app, candidate
 

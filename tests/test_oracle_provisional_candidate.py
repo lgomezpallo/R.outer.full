@@ -18,7 +18,8 @@ def git(repo: Path, *args: str) -> str:
     ).stdout.strip()
 
 
-def make_conflicted_oracle(tmp_path: Path, *, overlay_passes: bool = True) -> Path:
+def make_conflicted_oracle(tmp_path: Path, *, overlay_passes: bool = True,
+                           tracked_passes: bool = True) -> Path:
     repo = tmp_path / "oracle"
     repo.mkdir()
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
@@ -29,12 +30,13 @@ def make_conflicted_oracle(tmp_path: Path, *, overlay_passes: bool = True) -> Pa
     router = repo / "router/router.py"
     router.write_text("class Router:\n    def route(self):\n        return 1\n")
     (repo / "settings.txt").write_text("base\n")
+    expected_settings = "local" if tracked_passes else "base"
     (repo / "tests/test_candidate.py").write_text(
         "from pathlib import Path\n"
         "from router.router import Router\n"
         "def test_combined_candidate():\n"
         "    assert Router().route() == 3\n"
-        "    assert Path('settings.txt').read_text() == 'local\\n'\n"
+        f"    assert Path('settings.txt').read_text() == '{expected_settings}\\n'\n"
     )
     git(repo, "add", ".")
     git(repo, "commit", "-qm", "base")
@@ -90,6 +92,7 @@ def test_conflict_runs_private_provisional_tests_without_changing_oracle(
     assert "router_provisional=upstream_methods_unreviewed" in result.stdout
     assert "router_provisional_semantic_merge_approved=no" in result.stdout
     assert "router_provisional_deployment_approved=no" in result.stdout
+    assert "router_provisional_baseline_tests=failed" in result.stdout
     assert "router_provisional_tracked_tests=passed" in result.stdout
     assert "router_provisional_overlay_copied=2" in result.stdout
     assert "router_provisional_overlay_tests=" + ("passed" if overlay_passes else "failed") in result.stdout
@@ -113,3 +116,19 @@ def test_conflict_provisional_candidate_skips_tests_when_disabled(tmp_path: Path
     assert "router_provisional_tracked_tests=skipped" in result.stdout
     assert "router_provisional_overlay_tests=" not in result.stdout
     assert git(repo, "status", "--porcelain") == before
+
+
+def test_overlay_is_counted_even_when_other_oracle_tracked_edits_fail(tmp_path: Path) -> None:
+    repo = make_conflicted_oracle(tmp_path, tracked_passes=False)
+    before = git(repo, "status", "--porcelain")
+    before_worktrees = git(repo, "worktree", "list", "--porcelain")
+    result = run_reconcile(repo)
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert "router_provisional_baseline_tests=passed" in result.stdout
+    assert "router_provisional_tracked_tests=failed" in result.stdout
+    assert "router_provisional_overlay_copied=2" in result.stdout
+    assert "router_provisional_overlay_tests=failed" in result.stdout
+    assert "router_provisional_deployment_approved=no" in result.stdout
+    assert "test_secret_private_name" not in result.stdout + result.stderr
+    assert git(repo, "status", "--porcelain") == before
+    assert git(repo, "worktree", "list", "--porcelain") == before_worktrees

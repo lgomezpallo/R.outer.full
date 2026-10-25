@@ -339,9 +339,14 @@ def _startup_routing_smoke() -> None:
 def _startup_capability_profile() -> None:
     if os.getenv("ROUTER_STARTUP_CAPABILITY_PROFILE", "").strip() != "1":
         return
+    from .selector import billing_ineligibility_reason
     for item in router.registry.all():
         for capability in ("json", "reasoning", "code", "summarization", "document", "tools", "long_context", "vision", "transcription", "speech", "image_generation", "image_editing"):
-            candidates = [m for m in item.spec.models if ("chat" in m.capabilities if capability in {"json","reasoning","code","summarization","document","tools","long_context"} else capability in m.capabilities)]
+            candidates = [
+                m for m in item.spec.models
+                if ("chat" in m.capabilities if capability in {"json","reasoning","code","summarization","document","tools","long_context"} else capability in m.capabilities)
+                and billing_ineligibility_reason(item, m) is None
+            ]
             verified = None
             checked = 0
             print(f"ROUTER_CAPABILITY_CANDIDATES provider={item.spec.id} capability={capability} candidates={len(candidates)}", flush=True)
@@ -521,6 +526,7 @@ def audit_budget():
 def audit_step(payload: AuditStepInput):
     """Bounded, opt-in probes. Never retry a model already tested for chat."""
     from .catalog import infer_discovered_capabilities
+    from .selector import billing_ineligibility_reason
     provider_id = payload.provider.strip().lower()
     limit = AUDIT_DAILY_LIMITS.get(provider_id)
     if limit is None:
@@ -533,6 +539,7 @@ def audit_step(payload: AuditStepInput):
         if "chat" in m.capabilities
         and "chat" in infer_discovered_capabilities(m.id)
         and not any(e.capability == "chat" for e in m.evidence)
+        and billing_ineligibility_reason(provider, m) is None
     ]
     candidates.sort(key=lambda m: (len(m.capabilities - {"chat", "json", "fast"}), m.strategic_cost, m.id))
     results = []

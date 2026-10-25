@@ -75,3 +75,5 @@ def test_workflow_reports_even_when_oracle_check_fails():
     assert "id: reconcile" in workflow
     assert "if: always()" in workflow
     assert "run: python3 scripts/report_oracle_status.py" in workflow
+    assert '"scripts/oracle_*.py"' in workflow
+    assert '"scripts/report_oracle_status.py"' in workflow

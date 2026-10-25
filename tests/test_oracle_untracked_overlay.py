@@ -228,20 +228,20 @@ def test_outside_python_ast_audit_is_private_nonexecuting_and_read_only(tmp_path
     for root in ("apps", "old_tests", "archive", "large", "backup", "legacy"):
         (app / root).mkdir()
     (app / "apps/module.py").write_text(
-        "import router.api\\n"
-        "class Internal:\\n    def work(self):\\n        return 1\\n"
-        "if __name__ == '__main__':\\n    print('PRIVATE_MAIN_VALUE')\\n"
+        "import router.api\n"
+        "class Internal:\n    def work(self):\n        return 1\n"
+        "if __name__ == '__main__':\n    print('PRIVATE_MAIN_VALUE')\n"
     )
     (app / "old_tests/check.py").write_text(
-        "def test_private_customer():\\n    assert True\\n"
+        "def test_private_customer():\n    assert True\n"
     )
-    (app / "archive/bad.py").write_text("def invalid(:\\n")
+    (app / "archive/bad.py").write_text("def invalid(:\n")
     (app / "large/huge.py").write_bytes(b"x" * 256_001)
     (app / "backup/link.py").symlink_to("/etc/passwd")
     (app / "legacy/runner.py").write_text(
-        "def work():\\n    return 2\\nwork()\\n"
+        "def work():\n    return 2\nwork()\n"
     )
-    (app / "apps/api_token.py").write_text("NEVER_AUDIT = 1\\n")
+    (app / "apps/api_token.py").write_text("NEVER_AUDIT = 1\n")
     before = git(app, "status", "--porcelain")
     result = run_overlay(app, candidate)
     assert result.returncode == 0, result.stderr

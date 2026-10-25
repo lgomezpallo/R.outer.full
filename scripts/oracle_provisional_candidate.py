@@ -123,7 +123,7 @@ def run(app: Path, upstream: str, candidate: Path, test_enabled: bool) -> int:
         # sources to learn how many are eligible. It still cannot be deployed.
         untracked = git(app, "ls-files", "--others", "--exclude-standard", "-z")
         if untracked.returncode == 0 and untracked.stdout:
-        overlay_source = git(app, "show", upstream + ":scripts/oracle_untracked_overlay.py")
+            overlay_source = git(app, "show", upstream + ":scripts/oracle_untracked_overlay.py")
             if overlay_source.returncode == 0:
                 overlay = Path(temp) / "overlay.py"
                 overlay.write_bytes(overlay_source.stdout)

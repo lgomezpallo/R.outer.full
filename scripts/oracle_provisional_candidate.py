@@ -101,42 +101,59 @@ def run(app: Path, upstream: str, candidate: Path, test_enabled: bool) -> int:
             "PYTHONDONTWRITEBYTECODE": "1",
             "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
         }
+        # Run a clean upstream baseline with the same Python and environment.
+        # If this fails too, the candidate failure cannot be attributed to
+        # Oracle's tracked changes without additional evidence.
+        baseline = Path(temp) / "upstream"
+        if git(app, "worktree", "add", "--detach", str(baseline), upstream).returncode == 0:
+            try:
+                baseline_env = dict(env)
+                baseline_env["PYTHONPATH"] = str(baseline)
+                baseline_ok = run_tests(python, baseline, baseline_env)
+                print("router_provisional_baseline_tests="
+                      + ("passed" if baseline_ok else "failed"))
+            finally:
+                git(app, "worktree", "remove", "--force", str(baseline))
+        else:
+            print("router_provisional_baseline_tests=unavailable")
+
         tracked_ok = run_tests(python, candidate, env)
         print("router_provisional_tracked_tests=" + ("passed" if tracked_ok else "failed"))
-        if tracked_ok:
-            untracked = git(app, "ls-files", "--others", "--exclude-standard", "-z")
-            if untracked.returncode == 0 and untracked.stdout:
-                overlay_source = git(app, "show", upstream + ":scripts/oracle_untracked_overlay.py")
-                if overlay_source.returncode == 0:
-                    overlay = Path(temp) / "overlay.py"
-                    overlay.write_bytes(overlay_source.stdout)
-                    staged = subprocess.run(
-                        [sys.executable, str(overlay), str(app), str(candidate)],
-                        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                        env=env, timeout=60, check=False,
-                    )
-                    if staged.returncode == 0:
-                        # Only sanitized integer counts, never private paths.
-                        for key in ("total", "eligible", "copied", "blocked", "skipped"):
-                            match = re.search(
-                                rb"(?m)^untracked_overlay_" + key.encode() + rb"=([0-9]+)$",
-                                staged.stdout,
-                            )
-                            if match:
-                                print("router_provisional_overlay_" + key + "="
-                                      + match.group(1).decode("ascii"))
-                        copied = re.search(rb"(?m)^untracked_overlay_copied=([0-9]+)$",
-                                           staged.stdout)
-                        if copied and int(copied.group(1)) > 0:
-                            overlay_ok = run_tests(python, candidate, env)
-                            print("router_provisional_overlay_tests="
-                                  + ("passed" if overlay_ok else "failed"))
-                        else:
-                            print("router_provisional_overlay_tests=skipped")
+        # Even a failing tracked candidate can be staged with safe local-only
+        # sources to learn how many are eligible. It still cannot be deployed.
+        untracked = git(app, "ls-files", "--others", "--exclude-standard", "-z")
+        if untracked.returncode == 0 and untracked.stdout:
+        overlay_source = git(app, "show", upstream + ":scripts/oracle_untracked_overlay.py")
+            if overlay_source.returncode == 0:
+                overlay = Path(temp) / "overlay.py"
+                overlay.write_bytes(overlay_source.stdout)
+                staged = subprocess.run(
+                    [sys.executable, str(overlay), str(app), str(candidate)],
+                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                    env=env, timeout=60, check=False,
+                )
+                if staged.returncode == 0:
+                    # Only sanitized integer counts, never private paths.
+                    for key in ("total", "eligible", "copied", "blocked", "skipped"):
+                        match = re.search(
+                            rb"(?m)^untracked_overlay_" + key.encode() + rb"=([0-9]+)$",
+                            staged.stdout,
+                        )
+                        if match:
+                            print("router_provisional_overlay_" + key + "="
+                                  + match.group(1).decode("ascii"))
+                    copied = re.search(rb"(?m)^untracked_overlay_copied=([0-9]+)$",
+                                       staged.stdout)
+                    if copied and int(copied.group(1)) > 0:
+                        overlay_ok = run_tests(python, candidate, env)
+                        print("router_provisional_overlay_tests="
+                              + ("passed" if overlay_ok else "failed"))
                     else:
-                        print("router_provisional_overlay=blocked")
+                        print("router_provisional_overlay_tests=skipped")
                 else:
-                    print("router_provisional_overlay=unavailable")
+                    print("router_provisional_overlay=blocked")
+            else:
+                print("router_provisional_overlay=unavailable")
         print("router_provisional_production_unchanged=yes")
     return 0
 

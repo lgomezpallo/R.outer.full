@@ -1,12 +1,17 @@
 """Commit status reporting is intentionally limited to non-sensitive metadata."""
 from __future__ import annotations
 
+import importlib.util
 import json
 from pathlib import Path
 
 import pytest
 
-from scripts import report_oracle_status as reporter
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts/report_oracle_status.py"
+spec = importlib.util.spec_from_file_location("report_oracle_status", SCRIPT)
+assert spec is not None and spec.loader is not None
+reporter = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(reporter)
 
 
 @pytest.mark.parametrize(("outcome", "state"), [

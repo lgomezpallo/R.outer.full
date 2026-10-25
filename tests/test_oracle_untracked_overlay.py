@@ -221,3 +221,41 @@ def test_outside_python_roles_are_aggregated_and_sensitive_paths_are_never_copie
     assert not (candidate / "router/api_key.py").exists()
     assert not (candidate / "tests/test_private.py").exists()
     assert git(app, "status", "--porcelain") == before
+
+
+def test_outside_python_ast_audit_is_private_nonexecuting_and_read_only(tmp_path: Path):
+    app, candidate = make_repo(tmp_path)
+    for root in ("apps", "old_tests", "archive", "large", "backup", "legacy"):
+        (app / root).mkdir()
+    (app / "apps/module.py").write_text(
+        "import router.api\n"
+        "class Internal:\n    def work(self):\n        return 1\n"
+        "if __name__ == '__main__':\n    print('PRIVATE_MAIN_VALUE')\n"
+    )
+    (app / "old_tests/check.py").write_text(
+        "def test_private_customer():\n    assert True\n"
+    )
+    (app / "archive/bad.py").write_text("def invalid(:\n")
+    (app / "large/huge.py").write_bytes(b"x" * 256_001)
+    (app / "backup/link.py").symlink_to("/etc/passwd")
+    (app / "legacy/runner.py").write_text(
+        "def work():\n    return 2\nwork()\n"
+    )
+    (app / "apps/api_token.py").write_text("NEVER_AUDIT = 1\n")
+    before = git(app, "status", "--porcelain")
+    result = run_overlay(app, candidate)
+    assert result.returncode == 0, result.stderr
+    assert "untracked_overlay_skipped_python_outside_roots=6" in result.stdout
+    assert "untracked_overlay_skipped_sensitive_path=1" in result.stdout
+    for key, value in (
+        ("valid", 3), ("syntax_error", 1), ("unsafe", 1),
+        ("oversize", 1), ("io", 0), ("router_imports", 1),
+        ("tests", 1), ("main_guard", 1), ("top_level_calls", 1),
+        ("declarations_only", 2),
+    ):
+        assert f"untracked_overlay_outside_python_audit_{key}={value}" in result.stdout
+    for secret in ("PRIVATE_MAIN_VALUE", "test_private_customer", "NEVER_AUDIT",
+                   "module.py", "runner.py", "link.py", "api_token.py"):
+        assert secret not in result.stdout + result.stderr
+    assert not (candidate / "apps").exists()
+    assert git(app, "status", "--porcelain") == before

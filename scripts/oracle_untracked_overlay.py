@@ -7,6 +7,7 @@ The result is only a diagnostic candidate, NOT a deployable release.
 """
 from __future__ import annotations
 
+import ast
 import os
 import re
 from pathlib import Path, PurePosixPath
@@ -62,6 +63,83 @@ def _skip_reason(name: str) -> str | None:
     return "skipped_other"
 
 
+# This audit never executes Oracle source or publishes its identifiers.
+# AST flags are heuristics, not evidence that a file is safe to merge/deploy.
+OUTSIDE_AUDIT_KEYS = (
+    "outside_python_audit_valid", "outside_python_audit_syntax_error",
+    "outside_python_audit_unsafe", "outside_python_audit_oversize",
+    "outside_python_audit_io", "outside_python_audit_router_imports",
+    "outside_python_audit_tests", "outside_python_audit_main_guard",
+    "outside_python_audit_top_level_calls",
+    "outside_python_audit_declarations_only",
+)
+
+
+def _audit_outside_python(app: Path, name: str) -> dict[str, int]:
+    counts = {key: 0 for key in OUTSIDE_AUDIT_KEYS}
+    source = app / name
+    try:
+        if (any(part.is_symlink() for part in (source, *source.parents) if part != app)
+                or not source.resolve().is_relative_to(app)):
+            counts["outside_python_audit_unsafe"] = 1
+            return counts
+        info = source.stat(follow_symlinks=False)
+        if not stat.S_ISREG(info.st_mode):
+            counts["outside_python_audit_unsafe"] = 1
+            return counts
+        if info.st_size > MAX_SOURCE_BYTES:
+            counts["outside_python_audit_oversize"] = 1
+            return counts
+        data = source.read_bytes()
+        if len(data) > MAX_SOURCE_BYTES:
+            counts["outside_python_audit_oversize"] = 1
+            return counts
+    except (OSError, ValueError):
+        counts["outside_python_audit_io"] = 1
+        return counts
+    try:
+        tree = ast.parse(data.decode("utf-8"))
+    except (SyntaxError, UnicodeError, ValueError):
+        counts["outside_python_audit_syntax_error"] = 1
+        return counts
+
+    counts["outside_python_audit_valid"] = 1
+    nodes = list(ast.walk(tree))
+    counts["outside_python_audit_router_imports"] = int(any(
+        (isinstance(node, ast.Import)
+         and any(alias.name == "router" or alias.name.startswith("router.")
+                 for alias in node.names))
+        or (isinstance(node, ast.ImportFrom)
+            and (node.module or "").split(".", 1)[0] == "router")
+        for node in nodes
+    ))
+    counts["outside_python_audit_tests"] = int(any(
+        (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+         and node.name.startswith("test_"))
+        or (isinstance(node, ast.ClassDef) and node.name.startswith("Test"))
+        for node in nodes
+    ))
+    counts["outside_python_audit_main_guard"] = int(any(
+        isinstance(node, ast.If)
+        and any(isinstance(child, ast.Name) and child.id == "__name__"
+                for child in ast.walk(node.test))
+        for node in tree.body
+    ))
+    top_level_calls = any(
+        isinstance(node, (ast.Expr, ast.Assign, ast.AnnAssign, ast.AugAssign))
+        and any(isinstance(child, ast.Call) for child in ast.walk(node))
+        for node in tree.body
+    )
+    counts["outside_python_audit_top_level_calls"] = int(top_level_calls)
+    counts["outside_python_audit_declarations_only"] = int(
+        not top_level_calls and any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            for node in tree.body
+        )
+    )
+    return counts
+
+
 def stage(app: Path, candidate: Path) -> dict[str, int]:
     app, candidate = app.resolve(), candidate.resolve()
     if (not app.is_dir() or not candidate.is_dir()
@@ -78,6 +156,7 @@ def stage(app: Path, candidate: Path) -> dict[str, int]:
     counts.update({reason: 0 for reason in reasons})
     counts.update({"outside_python_scripts": 0, "outside_python_tools": 0,
                    "outside_python_other": 0})
+    counts.update({key: 0 for key in OUTSIDE_AUDIT_KEYS})
 
     for name in untracked_paths(app):
         counts["total"] += 1
@@ -90,6 +169,8 @@ def stage(app: Path, candidate: Path) -> dict[str, int]:
                 role = ("scripts" if root == "scripts" else
                         "tools" if root in {"tools", "tooling", "utilities"} else "other")
                 counts["outside_python_" + role] += 1
+                for key, value in _audit_outside_python(app, name).items():
+                    counts[key] += value
             continue
 
         counts["eligible"] += 1

@@ -94,6 +94,16 @@ if test "$APPLY_RC" -ne 0; then
     echo "reconcile_status=patch_cannot_apply"
     echo "Manual investigation required; private patch and apply log were not published."
   fi
+  # Diagnostic only: if the two Router methods cannot be merged, test a
+  # provisional upstream-method candidate in this disposable worktree. Other
+  # tracked Oracle edits remain staged; untracked safe Python files may be
+  # overlaid privately. This MUST still return exit 3, never authorize deploy.
+  if test "$CONFLICTS" = "router/router.py" &&
+     git -C "$APP" cat-file -e "$UPSTREAM:scripts/oracle_provisional_candidate.py" 2>/dev/null; then
+    git -C "$APP" show "$UPSTREAM:scripts/oracle_provisional_candidate.py" > "$TMP/provisional.py"
+    python3 "$TMP/provisional.py" "$APP" "$UPSTREAM" "$TMP/candidate" "$RUN_TESTS" ||
+      echo "router_provisional=unavailable"
+  fi
   echo "production_checkout_unchanged=yes"
   # An unresolved candidate must never appear as a successful CI run.
   if test -n "$CONFLICTS"; then exit 3; fi

@@ -7,11 +7,13 @@ No Oracle filenames, test names, tracebacks, source, or secrets go to stdout.
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
 import re
 import subprocess
 import sys
 import tempfile
+import xml.etree.ElementTree as ET
 
 CONFLICT_PATH = "router/router.py"
 TEST_TIMEOUT_S = 180
@@ -53,16 +55,88 @@ def safe_candidate(app: Path, candidate: Path, upstream: str) -> bool:
     )
 
 
-def run_tests(python: Path, candidate: Path, env: dict[str, str]) -> bool:
-    try:
-        completed = subprocess.run(
-            [str(python), "-m", "pytest", "-q", "-p", "no:cacheprovider"],
-            cwd=candidate, env=env, stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL, timeout=TEST_TIMEOUT_S, check=False,
-        )
-        return completed.returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
-        return False
+@dataclass(frozen=True)
+class TestOutcome:
+    ok: bool
+    phase: str
+    failures: int = 0
+    errors: int = 0
+    missing_imports: int = 0
+
+
+def run_tests(python: Path, candidate: Path, env: dict[str, str]) -> TestOutcome:
+    """Diagnose only aggregate public-safe pytest outcomes, never test content.
+
+    JUnit XML is generated in a private, short-lived directory; no traceback,
+    test identifier, import path, assertion or secret is emitted to CI logs.
+    Collection is checked separately so environment/import failures are not
+    confused with behavioral test failures.
+    """
+    with tempfile.TemporaryDirectory(prefix="router-pytest-private-", dir=env.get("HOME")) as private:
+        xml = Path(private) / "results.xml"
+        try:
+            completed = subprocess.run(
+                [str(python), "-m", "pytest", "-q", "-p", "no:cacheprovider",
+                 "--junitxml=" + str(xml)],
+                cwd=candidate, env=env, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, timeout=TEST_TIMEOUT_S, check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return TestOutcome(False, "timeout")
+        except OSError:
+            return TestOutcome(False, "interpreter_unavailable")
+        if completed.returncode == 0:
+            return TestOutcome(True, "passed")
+
+        failures = errors = missing_imports = 0
+        try:
+            if xml.is_file() and xml.stat().st_size <= 2_000_000:
+                root = ET.parse(xml).getroot()
+                for case in root.iter("testcase"):
+                    failures += int(case.find("failure") is not None)
+                    error = case.find("error")
+                    if error is not None:
+                        errors += 1
+                        # Only count the exception class, never reveal module names.
+                        detail = (error.get("message") or "") + (error.text or "")
+                        missing_imports += int(
+                            "ModuleNotFoundError" in detail or
+                            "No module named" in detail
+                        )
+        except (ET.ParseError, OSError, ValueError):
+            pass
+
+        try:
+            collected = subprocess.run(
+                [str(python), "-m", "pytest", "--collect-only", "-q",
+                 "-p", "no:cacheprovider"],
+                cwd=candidate, env=env, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, timeout=60, check=False,
+            )
+            if collected.returncode != 0:
+                phase = "collection_failed"
+            elif failures:
+                phase = "assertions_failed"
+            elif errors:
+                phase = "runtime_errors"
+            else:
+                phase = "other_failure"
+        except subprocess.TimeoutExpired:
+            phase = "collection_timeout"
+        except OSError:
+            phase = "interpreter_unavailable"
+        return TestOutcome(False, phase, failures, errors, missing_imports)
+
+
+def report_test_outcome(label: str, outcome: TestOutcome) -> None:
+    if label not in {"baseline", "tracked", "overlay"}:
+        raise ValueError("invalid diagnostic label")
+    prefix = "router_provisional_" + label
+    print(prefix + "_tests=" + ("passed" if outcome.ok else "failed"))
+    print(prefix + "_phase=" + outcome.phase)
+    print(prefix + "_failures=" + str(outcome.failures))
+    print(prefix + "_errors=" + str(outcome.errors))
+    print(prefix + "_missing_imports=" + str(outcome.missing_imports))
 
 
 def run(app: Path, upstream: str, candidate: Path, test_enabled: bool) -> int:
@@ -109,16 +183,13 @@ def run(app: Path, upstream: str, candidate: Path, test_enabled: bool) -> int:
             try:
                 baseline_env = dict(env)
                 baseline_env["PYTHONPATH"] = str(baseline)
-                baseline_ok = run_tests(python, baseline, baseline_env)
-                print("router_provisional_baseline_tests="
-                      + ("passed" if baseline_ok else "failed"))
+                report_test_outcome("baseline", run_tests(python, baseline, baseline_env))
             finally:
                 git(app, "worktree", "remove", "--force", str(baseline))
         else:
             print("router_provisional_baseline_tests=unavailable")
 
-        tracked_ok = run_tests(python, candidate, env)
-        print("router_provisional_tracked_tests=" + ("passed" if tracked_ok else "failed"))
+        report_test_outcome("tracked", run_tests(python, candidate, env))
         # Even a failing tracked candidate can be staged with safe local-only
         # sources to learn how many are eligible. It still cannot be deployed.
         untracked = git(app, "ls-files", "--others", "--exclude-standard", "-z")
@@ -145,9 +216,7 @@ def run(app: Path, upstream: str, candidate: Path, test_enabled: bool) -> int:
                     copied = re.search(rb"(?m)^untracked_overlay_copied=([0-9]+)$",
                                        staged.stdout)
                     if copied and int(copied.group(1)) > 0:
-                        overlay_ok = run_tests(python, candidate, env)
-                        print("router_provisional_overlay_tests="
-                              + ("passed" if overlay_ok else "failed"))
+                        report_test_outcome("overlay", run_tests(python, candidate, env))
                     else:
                         print("router_provisional_overlay_tests=skipped")
                 else:

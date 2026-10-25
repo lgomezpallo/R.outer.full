@@ -66,6 +66,10 @@ jobs:
           set -euo pipefail
           APP=/home/ubuntu/Proyecto/Herramientas/Router
           cd "$APP"
+          case "$DEPLOY_MODE" in
+            preflight|snapshot|compare|reconcile-check|deploy) ;;
+            *) echo "BLOCKED: invalid or missing deployment mode."; exit 2 ;;
+          esac
           git fetch origin main
           echo "Oracle commit: $(git rev-parse --short HEAD)"
           echo "GitHub commit: $(git rev-parse --short origin/main)"
@@ -78,14 +82,14 @@ jobs:
             git rev-parse HEAD > "$SNAP/oracle_commit"
             git rev-parse origin/main > "$SNAP/github_commit"
             git status --porcelain=v1 > "$SNAP/status.txt"
-            git diff --binary > "$SNAP/local-tracked.patch"
-            git diff --name-only -z | tar --null -T - -cf "$SNAP/modified-tracked.tar"
+            git diff --binary HEAD -- > "$SNAP/local-tracked.patch"
+            git diff --name-only HEAD -z | tar --null -T - -cf "$SNAP/modified-tracked.tar"
             if test -f tests/test_vision.py; then cp -p tests/test_vision.py "$SNAP/test_vision.py"; fi
             if test -f router.db; then
               python3 -c 'import sqlite3,sys; src=sqlite3.connect("file:router.db?mode=ro",uri=True); dst=sqlite3.connect(sys.argv[1]); src.backup(dst); dst.close(); src.close()' "$SNAP/router.db"
             fi
             echo "Snapshot saved privately on Oracle: $SNAP"
-            echo "Tracked files saved: $(git diff --name-only | wc -l)"
+            echo "Tracked files saved: $(git diff --name-only HEAD | wc -l)"
             echo "Repository and service unchanged."
             exit 0
           fi
@@ -104,31 +108,8 @@ jobs:
             exit 0
           fi
           if test "$DEPLOY_MODE" = reconcile-check; then
-            # Test local changes against latest GitHub source in an isolated directory.
-            # No patch content is sent to CI logs, and production is not modified.
-            umask 077
-            TMP=$(mktemp -d "$HOME/router-reconcile-XXXXXX")
-            trap 'git worktree remove --force "$TMP/worktree" >/dev/null 2>&1 || true; rm -rf "$TMP"' EXIT
-            git diff --binary > "$TMP/local.patch"
-            git worktree add --detach "$TMP/worktree" origin/main >/dev/null
-            cd "$TMP/worktree"
-            set +e
-            git apply --3way "$TMP/local.patch" > "$TMP/apply.log" 2>&1
-            APPLY_RC=$?
-            set -e
-            echo "=== Isolated integration test ==="
-            if test "$APPLY_RC" = 0; then
-              echo "Patch applied cleanly to current GitHub version."
-              echo "Changed paths:"
-              git diff --name-only
-              git diff --cached --name-only
-            else
-              echo "Automatic integration requires manual review."
-              echo "Conflicting paths:"
-              git diff --name-only --diff-filter=U
-              echo "Git apply exit code: $APPLY_RC"
-            fi
-            echo "Production source, database and service unchanged."
+            # Candidate is isolated; the private patch never leaves Oracle.
+            git show origin/main:scripts/oracle_reconcile.sh | ROUTER_APP_DIR="$APP" bash
             exit 0
           fi
           if test "$DEPLOY_MODE" = preflight; then

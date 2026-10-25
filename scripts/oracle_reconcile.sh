@@ -135,8 +135,8 @@ if test "$UNTRACKED_COUNT" -ne 0 && test "$TEST_RC" -eq 0 &&
    git -C "$APP" cat-file -e "$UPSTREAM:scripts/oracle_untracked_overlay.py" 2>/dev/null; then
   git -C "$APP" show "$UPSTREAM:scripts/oracle_untracked_overlay.py" > "$TMP/untracked_overlay.py"
   if python3 "$TMP/untracked_overlay.py" "$APP" "$TMP/candidate" > "$TMP/overlay.log" 2>&1; then
-    grep -E '^untracked_overlay_(total|eligible|copied|blocked|skipped)=[0-9]+ "$TMP/overlay.log" || true
-    if grep -Eq '^untracked_overlay_copied=[1-9][0-9]* "$TMP/overlay.log"; then
+    grep -E '^untracked_overlay_(total|eligible|copied|blocked|skipped)=[0-9]+' "$TMP/overlay.log" || true
+    if grep -Eq '^untracked_overlay_copied=[1-9][0-9]*' "$TMP/overlay.log"; then
       set +e
       (cd "$TMP/candidate" && PYTHONPATH="$TMP/candidate" PYTHONDONTWRITEBYTECODE=1 "$PYTHON" -m pytest -q > "$TMP/overlay_pytest.log" 2>&1)
       OVERLAY_TEST_RC=$?

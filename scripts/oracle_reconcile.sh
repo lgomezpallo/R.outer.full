@@ -28,13 +28,16 @@ echo "local_unique_commits=$LOCAL_UNIQUE_COMMITS"
 echo "untracked_files_not_included=$UNTRACKED_COUNT"
 echo "oracle_head=$(git -C "$APP" rev-parse --short HEAD)"
 echo "upstream_head=$(git -C "$APP" rev-parse --short "$UPSTREAM")"
-# An untracked source file can contain a local-only feature or a secret.
-# Do not report a successful integration when such files are omitted.
-if test "$UNTRACKED_COUNT" -ne 0; then
-  echo "reconcile_status=untracked_files_require_review"
-  echo "production_checkout_unchanged=yes"
-  exit 5
-fi
+# Classify untracked paths without printing names or contents to public CI.
+# An untracked file may be local-only source, data, or a secret.
+git -C "$APP" ls-files --others --exclude-standard -z | python3 -c '
+import pathlib, sys
+paths = [p for p in sys.stdin.buffer.read().split(b"\0") if p]
+source_suffixes = {".py", ".sh", ".js", ".ts", ".tsx", ".json", ".toml", ".yaml", ".yml", ".md", ".html", ".css", ".sql", ".ini", ".cfg", ".service"}
+source = sum(pathlib.PurePosixPath(p.decode("utf-8", "surrogateescape")).suffix.lower() in source_suffixes for p in paths)
+print(f"untracked_source_like_count={source}")
+print(f"untracked_other_count={len(paths) - source}")
+'
 git -C "$APP" worktree add --detach "$TMP/candidate" "$UPSTREAM" >/dev/null 2>&1
 set +e
 git -C "$TMP/candidate" apply --3way --index "$TMP/local.patch" > "$TMP/apply.log" 2>&1
@@ -46,6 +49,12 @@ if test "$APPLY_RC" -ne 0; then
     echo "reconcile_status=conflicts"
     echo "conflicting_paths:"
     printf '%s\n' "$CONFLICTS"
+    # Only print method names and counts, not private Oracle code.
+    if printf '%s\n' "$CONFLICTS" | grep -Fxq 'router/router.py' &&
+       git -C "$APP" cat-file -e "$UPSTREAM:scripts/oracle_reconcile_symbols.py" 2>/dev/null; then
+      git -C "$APP" show "$UPSTREAM:scripts/oracle_reconcile_symbols.py" |
+        python3 - "$APP" "$BASE" "$UPSTREAM" || echo "router_symbol_diagnostics=unavailable"
+    fi
   else
     echo "reconcile_status=patch_cannot_apply"
     echo "Manual investigation required; private patch and apply log were not published."
@@ -54,6 +63,13 @@ if test "$APPLY_RC" -ne 0; then
   # An unresolved candidate must never appear as a successful CI run.
   if test -n "$CONFLICTS"; then exit 3; fi
   exit 4
+fi
+# A clean patch is still incomplete if Oracle has untracked local files.
+# Report conflicts first so untracked files cannot hide the real merge blocker.
+if test "$UNTRACKED_COUNT" -ne 0; then
+  echo "reconcile_status=untracked_files_require_review"
+  echo "production_checkout_unchanged=yes"
+  exit 5
 fi
 echo "reconcile_status=candidate_applied"
 echo "candidate_changed_paths:"

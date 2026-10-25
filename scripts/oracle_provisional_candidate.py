@@ -179,6 +179,21 @@ def report_test_outcome(label: str, outcome: TestOutcome) -> None:
         print(prefix + "_failed_public_tests=" + ",".join(outcome.failed_public_tests))
 
 
+def select_test_python(app: Path) -> Path:
+    """Use the same pytest-capable interpreter through nested diagnostics.
+
+    The caller may explicitly supply ROUTER_PYTHON; otherwise prefer the
+    Oracle application's venv. A synthetic git fixture has no venv, so the
+    final fallback is the interpreter running this diagnostic helper.
+    """
+    configured = os.environ.get("ROUTER_PYTHON")
+    candidates = ([Path(configured)] if configured else []) + [app / ".venv/bin/python"]
+    for path in candidates:
+        if path.is_file() and os.access(path, os.X_OK):
+            return path
+    return Path(sys.executable)
+
+
 def run(app: Path, upstream: str, candidate: Path, test_enabled: bool) -> int:
     app, candidate = app.resolve(), candidate.resolve()
     if not safe_candidate(app, candidate, upstream):
@@ -202,9 +217,7 @@ def run(app: Path, upstream: str, candidate: Path, test_enabled: bool) -> int:
         print("router_provisional_production_unchanged=yes")
         return 0
 
-    python = app / ".venv/bin/python"
-    if not python.is_file():
-        python = Path(sys.executable)
+    python = select_test_python(app)
 
     with tempfile.TemporaryDirectory(prefix="router-provisional-private-") as temp:
         # Strip credentials, tokens and Oracle service environment from tests.

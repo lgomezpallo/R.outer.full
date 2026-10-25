@@ -43,6 +43,26 @@ set +e
 git -C "$TMP/candidate" apply --3way --index "$TMP/local.patch" > "$TMP/apply.log" 2>&1
 APPLY_RC=$?
 set -e
+# If only Router methods conflict, try a conservative private three-way merge.
+# A clean result stays in the disposable worktree; never touches the live tree.
+if test "$APPLY_RC" -ne 0; then
+  CONFLICTS="$(git -C "$TMP/candidate" ls-files -u | awk '{print $4}' | sort -u)"
+  if test "$CONFLICTS" = "router/router.py" &&
+     git -C "$APP" cat-file -e "$UPSTREAM:scripts/oracle_method_three_way.py" 2>/dev/null; then
+    git -C "$APP" show "$UPSTREAM:scripts/oracle_method_three_way.py" > "$TMP/method_merge.py"
+    if python3 "$TMP/method_merge.py" "$APP" "$BASE" "$UPSTREAM" "$TMP/candidate/router/router.py" > "$TMP/method_merge.log" 2>&1; then
+      git -C "$TMP/candidate" add -- router/router.py
+      if test -z "$(git -C "$TMP/candidate" ls-files -u)"; then
+        echo "router_method_merge=clean"
+        APPLY_RC=0
+      else
+        echo "router_method_merge=blocked"
+      fi
+    else
+      echo "router_method_merge=blocked"
+    fi
+  fi
+fi
 if test "$APPLY_RC" -ne 0; then
   CONFLICTS="$(git -C "$TMP/candidate" ls-files -u | awk '{print $4}' | sort -u)"
   if test -n "$CONFLICTS"; then
@@ -72,19 +92,19 @@ if test "$APPLY_RC" -ne 0; then
   if test -n "$CONFLICTS"; then exit 3; fi
   exit 4
 fi
-# A clean patch is still incomplete if Oracle has untracked local files.
-# Report conflicts first so untracked files cannot hide the real merge blocker.
+# Untracked Oracle files are not copied: they still block a completed merge.
+# However, test the tracked candidate to learn whether the method merge works.
 if test "$UNTRACKED_COUNT" -ne 0; then
   echo "reconcile_status=untracked_files_require_review"
-  echo "production_checkout_unchanged=yes"
-  exit 5
+else
+  echo "reconcile_status=candidate_applied"
 fi
-echo "reconcile_status=candidate_applied"
 echo "candidate_changed_paths:"
 git -C "$TMP/candidate" diff --name-only HEAD
 if test "$RUN_TESTS" = 0; then
   echo "candidate_tests=skipped"
   echo "production_checkout_unchanged=yes"
+  if test "$UNTRACKED_COUNT" -ne 0; then exit 5; fi
   exit 0
 fi
 PYTHON="${ROUTER_PYTHON:-$APP/.venv/bin/python}"
@@ -101,4 +121,7 @@ else
   grep -E '^(FAILED|ERROR) [A-Za-z0-9_./:\[\]-]+' "$TMP/pytest.log" | sed -E 's/ - .*//' | head -20 || true
 fi
 echo "production_checkout_unchanged=yes"
+# Even passing tracked-code tests cannot authorize deployment while local
+# untracked files remain unreviewed.
+if test "$UNTRACKED_COUNT" -ne 0; then exit 5; fi
 exit "$TEST_RC"

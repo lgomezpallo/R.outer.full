@@ -219,3 +219,59 @@ def test_private_symbol_diagnostics_identify_overlapping_methods(tmp_path: Path)
     assert "router_local_only_modified_methods=add_provider" in result.stdout
     assert "SECRET_NOT_FOR_PUBLIC_LOGS" not in result.stdout
     assert path.read_text() == before
+
+
+
+def test_private_method_merge_refuses_same_line_conflict(tmp_path: Path) -> None:
+    repo = tmp_path / "oracle"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    git(repo, "config", "user.email", "router-test@example.invalid")
+    git(repo, "config", "user.name", "Router Test")
+    (repo / "router").mkdir()
+    path = repo / "router/router.py"
+    path.write_text(
+        "class Router:\n"
+        "    def _classify_failure(self, exc):\n"
+        "        return 1\n"
+        "    def route(self):\n"
+        "        return 1\n"
+    )
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "base")
+    base = git(repo, "rev-parse", "HEAD")
+    (repo / "scripts").mkdir()
+    (repo / "scripts/oracle_method_three_way.py").write_text(
+        (SCRIPT.parent / "oracle_method_three_way.py").read_text()
+    )
+    path.write_text(path.read_text().replace("return 1\n    def route", "return 3\n    def route"))
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "upstream")
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    git(repo, "reset", "--hard", base)
+    path.write_text(path.read_text().replace("return 1\n    def route", "return 2\n    def route"))
+    before = path.read_text()
+    result = reconcile(repo)
+    assert result.returncode == 3, result.stderr + result.stdout
+    assert "router_method_merge=blocked" in result.stdout
+    assert "reconcile_status=conflicts" in result.stdout
+    assert path.read_text() == before
+
+
+def test_untracked_files_do_not_prevent_tracked_candidate_tests(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path, upstream_change=None)
+    (repo / "local-only.py").write_text("PRIVATE=secret\n")
+    before = git(repo, "status", "--porcelain")
+    env = os.environ.copy()
+    env.update({
+        "ROUTER_APP_DIR": str(repo),
+        "ROUTER_RECONCILE_TESTS": "1",
+        "ROUTER_UPSTREAM_REF": "origin/main",
+    })
+    result = subprocess.run(["bash", str(SCRIPT)], env=env,
+                            text=True, capture_output=True, check=False)
+    assert result.returncode == 5, result.stderr + result.stdout
+    assert "candidate_tests=passed" in result.stdout
+    assert "reconcile_status=untracked_files_require_review" in result.stdout
+    assert "secret" not in result.stdout + result.stderr
+    assert git(repo, "status", "--porcelain") == before

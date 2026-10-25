@@ -6,6 +6,7 @@ No Oracle filenames, test names, tracebacks, source, or secrets go to stdout.
 """
 from __future__ import annotations
 
+import ast
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -62,9 +63,31 @@ class TestOutcome:
     failures: int = 0
     errors: int = 0
     missing_imports: int = 0
+    failed_public_tests: tuple[str, ...] = ()
 
 
-def run_tests(python: Path, candidate: Path, env: dict[str, str]) -> TestOutcome:
+def _public_test_functions(root: Path) -> set[str]:
+    """AST allowlist from the clean GitHub worktree only, never from Oracle."""
+    names: set[str] = set()
+    tests = root / "tests"
+    if not tests.is_dir():
+        return names
+    for path in tests.rglob("test_*.py"):
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 256_000:
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except (SyntaxError, UnicodeError, OSError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if re.fullmatch(r"test_[A-Za-z0-9_]+", node.name):
+                    names.add(node.name)
+    return names
+
+
+def run_tests(python: Path, candidate: Path, env: dict[str, str],
+              *, public_failures: bool = False) -> TestOutcome:
     """Diagnose only aggregate public-safe pytest outcomes, never test content.
 
     JUnit XML is generated in a private, short-lived directory; no traceback,
@@ -89,11 +112,21 @@ def run_tests(python: Path, candidate: Path, env: dict[str, str]) -> TestOutcome
             return TestOutcome(True, "passed")
 
         failures = errors = missing_imports = 0
+        failed_public: set[str] = set()
+        allowed = _public_test_functions(candidate) if public_failures else set()
         try:
             if xml.is_file() and xml.stat().st_size <= 2_000_000:
                 root = ET.parse(xml).getroot()
                 for case in root.iter("testcase"):
-                    failures += int(case.find("failure") is not None)
+                    failure = case.find("failure")
+                    failures += int(failure is not None)
+                    if failure is not None and allowed:
+                        # Parametrized IDs may contain arbitrary data. Emit only
+                        # the AST-validated public function name, not parameters.
+                        raw_name = case.get("name", "")
+                        base_name = raw_name.split("[", 1)[0]
+                        if base_name in allowed:
+                            failed_public.add(base_name)
                     error = case.find("error")
                     if error is not None:
                         errors += 1
@@ -125,7 +158,8 @@ def run_tests(python: Path, candidate: Path, env: dict[str, str]) -> TestOutcome
             phase = "collection_timeout"
         except OSError:
             phase = "interpreter_unavailable"
-        return TestOutcome(False, phase, failures, errors, missing_imports)
+        return TestOutcome(False, phase, failures, errors, missing_imports,
+                           tuple(sorted(failed_public)[:20]))
 
 
 def report_test_outcome(label: str, outcome: TestOutcome) -> None:
@@ -137,6 +171,8 @@ def report_test_outcome(label: str, outcome: TestOutcome) -> None:
     print(prefix + "_failures=" + str(outcome.failures))
     print(prefix + "_errors=" + str(outcome.errors))
     print(prefix + "_missing_imports=" + str(outcome.missing_imports))
+    if label == "baseline" and outcome.failed_public_tests:
+        print(prefix + "_failed_public_tests=" + ",".join(outcome.failed_public_tests))
 
 
 def run(app: Path, upstream: str, candidate: Path, test_enabled: bool) -> int:
@@ -183,7 +219,8 @@ def run(app: Path, upstream: str, candidate: Path, test_enabled: bool) -> int:
             try:
                 baseline_env = dict(env)
                 baseline_env["PYTHONPATH"] = str(baseline)
-                report_test_outcome("baseline", run_tests(python, baseline, baseline_env))
+                report_test_outcome("baseline", run_tests(python, baseline, baseline_env,
+                                                          public_failures=True))
             finally:
                 git(app, "worktree", "remove", "--force", str(baseline))
         else:

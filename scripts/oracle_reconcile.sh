@@ -155,7 +155,8 @@ if test "$UNTRACKED_COUNT" -ne 0 && test "$TEST_RC" -eq 0 &&
         echo "untracked_overlay_tests=passed"
       else
         echo "untracked_overlay_tests=failed"
-        grep -E '^(FAILED|ERROR) [A-Za-z0-9_./:\[\]-]+' "$TMP/overlay_pytest.log" | sed -E 's/ - .*//' | head -20 || true
+        # Local-only tests may have private filenames or names. Never print
+        # their identifiers, traceback, assertions or source into public CI.
       fi
     else
       echo "untracked_overlay_tests=skipped"

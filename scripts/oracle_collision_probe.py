@@ -77,7 +77,8 @@ def probe(app: Path, candidate: Path, python: Path) -> tuple[str, str]:
         if not item:
             continue
         name = os.fsdecode(item)
-        if safe_name(name) and (candidate / name).exists():
+        if (safe_name(name) and (candidate / name).exists()
+                and git(candidate, "ls-files", "--error-unmatch", "--", name).returncode == 0):
             collisions.append(name)
     if not collisions:
         return "none", "skipped"

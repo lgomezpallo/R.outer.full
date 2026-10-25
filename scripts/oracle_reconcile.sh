@@ -55,6 +55,14 @@ if test "$APPLY_RC" -ne 0; then
       git -C "$APP" show "$UPSTREAM:scripts/oracle_reconcile_symbols.py" |
         python3 - "$APP" "$BASE" "$UPSTREAM" || echo "router_symbol_diagnostics=unavailable"
     fi
+    # Diagnose method compatibility privately in a second isolated worktree.
+    # Never print private source or pytest tracebacks in public Actions logs.
+    if printf '%s\n' "$CONFLICTS" | grep -Fxq 'router/router.py' &&
+       git -C "$APP" cat-file -e "$UPSTREAM:scripts/oracle_private_method_probe.py" 2>/dev/null; then
+      git -C "$APP" show "$UPSTREAM:scripts/oracle_private_method_probe.py" > "$TMP/private_probe.py"
+      python3 "$TMP/private_probe.py" "$APP" "$UPSTREAM" ||
+        echo "router_private_probe=unavailable"
+    fi
   else
     echo "reconcile_status=patch_cannot_apply"
     echo "Manual investigation required; private patch and apply log were not published."

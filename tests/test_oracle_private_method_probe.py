@@ -46,6 +46,23 @@ def test_transplant_replaces_only_named_method():
     assert module.transplant(upstream, oracle, ()) == upstream
 
 
+def test_failing_test_ids_never_include_assertion_values_or_other_files():
+    output = (
+        "FAILED tests/test_router.py::test_timeout - SECRET_ASSERTION_VALUE\\n"
+        "FAILED tests/test_router.py::test_timeout - DUPLICATE\\n"
+        "FAILED tests/test_router.py::test_auth[private-param] - SECRET_PARAM\\n"
+        "FAILED tests/test_other.py::test_private - PRIVATE_OTHER\\n"
+        "E  SECRET_TRACEBACK\\n"
+    )
+    ids = module.failing_test_ids(output, "tests/test_router.py")
+    assert ids == [
+        "tests/test_router.py::test_timeout",
+        "tests/test_router.py::test_auth",
+    ]
+    assert "SECRET" not in str(ids)
+    assert "private-param" not in str(ids)
+
+
 def test_private_probe_uses_detached_worktree_and_sanitizes_failures(tmp_path: Path):
     repo = tmp_path / "oracle"
     repo.mkdir()
@@ -107,6 +124,9 @@ def test_private_probe_uses_detached_worktree_and_sanitizes_failures(tmp_path: P
     assert "router_private_probe_oracle_classify=failed" in run.stdout
     assert "router_private_probe_oracle_route=failed" in run.stdout
     assert "router_private_probe_oracle_both=failed" in run.stdout
+    assert "router_private_probe_oracle_classify_failed_test_count=1" in run.stdout
+    assert "router_private_probe_oracle_route_failed_test_count=1" in run.stdout
+    assert "router_private_probe_oracle_both_failed_tests=tests/test_router.py::test_expected_upstream_behavior" in run.stdout
     assert "router_private_probe_untracked_copied=no" in run.stdout
     assert "PRIVATE_LOCAL_VALUE" not in run.stdout + run.stderr
     assert "PRIVATE_FAILURE_NEVER_LOG" not in run.stdout + run.stderr

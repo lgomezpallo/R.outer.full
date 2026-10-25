@@ -54,6 +54,10 @@ def ineligibility_reason(provider: RegisteredProvider, model, req: RouteRequest)
     effective_capabilities = model.capabilities | model.verified_capabilities
     if req.required_capabilities - effective_capabilities:
         return "missing_capability"
+    # Catalog visibility does not authorize paid or unpriced OpenRouter models.
+    # The legacy openrouter/free virtual route remains a free-only bootstrap.
+    if provider.spec.id == "openrouter" and model.id != "openrouter/free" and model.billing_status != "free":
+        return "billing_paid" if model.billing_status == "paid" else "billing_unverified"
     # A discovered NVIDIA model is not automatically approved for billing.
     # Preserve the pre-existing routing allowlist until price/terms are verified.
     if provider.spec.id == "nvidia" and model.id not in NVIDIA_ROUTING_ALLOWLIST:

@@ -382,3 +382,46 @@ def test_model_cooldown_persists_across_router_restart(tmp_path):
     assert not second.registry.all()[0].state.model("primary").available
     result = second.route(RouteRequest("second"))
     assert result.ok and result.model == "backup"
+
+
+
+def test_model_server_error_falls_back_within_same_provider():
+    from router.catalog import ModelSpec, ProviderCatalog, ProviderSpec
+    catalog = ProviderCatalog(providers=(ProviderSpec(
+        id="one", aliases=("one",), base_url="https://example.invalid/v1",
+        models=(ModelSpec("primary", frozenset({"chat"}), "standard", 90, 10),
+                ModelSpec("backup", frozenset({"chat"}), "standard", 50, 10)),
+    ),))
+    response = httpx.Response(503, request=httpx.Request("POST", "https://example.invalid/v1/chat/completions"))
+    fake = FakeClient([httpx.HTTPStatusError("model unavailable", request=response.request, response=response),
+                       "backup works", "backup works again"])
+    router = Router(fake, max_retries=0, catalog=catalog)
+    router.add_provider("one", "key", discover=False)
+    first = router.route(RouteRequest("first"))
+    assert first.ok and first.model == "backup"
+    state = router.registry.all()[0].state
+    assert state.available
+    assert not state.model("primary").available
+    second = router.route(RouteRequest("second"))
+    assert second.ok and second.model == "backup"
+    assert len(second.attempts) == 1
+
+
+def test_provider_authorization_failure_does_not_try_other_models_of_same_platform():
+    from router.catalog import ModelSpec, ProviderCatalog, ProviderSpec
+    catalog = ProviderCatalog(providers=(
+        ProviderSpec(id="one", aliases=("one",), base_url="https://example.invalid/v1",
+                     models=(ModelSpec("a", frozenset({"chat"}), "standard", 90, 10),
+                             ModelSpec("b", frozenset({"chat"}), "standard", 50, 10))),
+        ProviderSpec(id="two", aliases=("two",), base_url="https://example.invalid/v1",
+                     models=(ModelSpec("c", frozenset({"chat"}), "standard", 70, 10),)),
+    ))
+    response = httpx.Response(401, request=httpx.Request("POST", "https://example.invalid/v1/chat/completions"))
+    fake = FakeClient([httpx.HTTPStatusError("invalid key", request=response.request, response=response), "other provider works"])
+    router = Router(fake, max_retries=0, catalog=catalog)
+    router.add_provider("one", "bad", discover=False)
+    router.add_provider("two", "good", discover=False)
+    result = router.route(RouteRequest("hola"))
+    assert result.ok and result.provider == "two"
+    assert [attempt.provider for attempt in result.attempts] == ["one", "two"]
+    assert not router.registry.all()[0].state.available

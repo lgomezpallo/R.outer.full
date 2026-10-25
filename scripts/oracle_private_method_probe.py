@@ -61,13 +61,13 @@ def transplant(upstream: str, local: str, selected: tuple[str, ...]) -> str:
 
 
 def failing_test_ids(output: str, test_target: str) -> list[str]:
-    """Extract public test identifiers only; never print pytest assertion details."""
-    pattern = re.compile(r"^FAILED\\s+(tests/[A-Za-z0-9_./-]+::[A-Za-z0-9_\\[\\],.-]+)(?:\\s|$)")
+    """Extract public test function names only; never print assertion details."""
+    pattern = re.compile("^FAILED " + re.escape(test_target) + "::([A-Za-z_][A-Za-z0-9_]*)")
     result: list[str] = []
     for line in output.splitlines():
         match = pattern.match(line)
-        if match and match.group(1).startswith(test_target + "::"):
-            test_id = match.group(1)
+        if match:
+            test_id = test_target + "::" + match.group(1)
             if test_id not in result:
                 result.append(test_id)
     return result[:20]

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from .billing import NVIDIA_ROUTING_ALLOWLIST
 from .catalog import infer_discovered_capabilities
 from .registry import RegisteredProvider
 from .types import Decision, RouteRequest
@@ -53,6 +54,10 @@ def ineligibility_reason(provider: RegisteredProvider, model, req: RouteRequest)
     effective_capabilities = model.capabilities | model.verified_capabilities
     if req.required_capabilities - effective_capabilities:
         return "missing_capability"
+    # A discovered NVIDIA model is not automatically approved for billing.
+    # Preserve the pre-existing routing allowlist until price/terms are verified.
+    if provider.spec.id == "nvidia" and model.id not in NVIDIA_ROUTING_ALLOWLIST:
+        return "billing_unverified"
     if not provider.state.available:
         return "provider_cooldown"
     model_state = provider.state.models.get(model.id)

@@ -74,7 +74,7 @@ def test_reconcile_is_private_and_does_not_modify_oracle(
     original_worktrees = git(repo, "worktree", "list", "--porcelain")
     result = reconcile(repo)
 
-    assert result.returncode == 0, result.stderr
+    assert result.returncode == (3 if expected_status == "conflicts" else 0), result.stderr
     assert f"reconcile_status={expected_status}" in result.stdout
     assert "production_checkout_unchanged=yes" in result.stdout
     assert git(repo, "rev-parse", "HEAD") == original_head
@@ -143,7 +143,24 @@ def test_reconcile_reports_conflict_with_oracle_only_commit(tmp_path: Path) -> N
     git(repo, "add", "router/router.py")
     git(repo, "commit", "-qm", "oracle-only conflicting feature")
     result = reconcile(repo)
-    assert result.returncode == 0, result.stderr
+    assert result.returncode == 3, result.stderr
     assert "local_unique_commits=1" in result.stdout
     assert "reconcile_status=conflicts" in result.stdout
     assert "router/router.py" in result.stdout
+
+
+def test_untracked_oracle_files_block_false_success_without_exposing_contents(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path, upstream_change=None)
+    secret = repo / "local-only-provider.py"
+    secret.write_text("PRIVATE_LOCAL_VALUE=do_not_publish\\n")
+    before_head = git(repo, "rev-parse", "HEAD")
+    before_worktrees = git(repo, "worktree", "list", "--porcelain")
+    result = reconcile(repo)
+    assert result.returncode == 5, result.stderr
+    assert "untracked_files_not_included=1" in result.stdout
+    assert "reconcile_status=untracked_files_require_review" in result.stdout
+    assert "production_checkout_unchanged=yes" in result.stdout
+    assert "PRIVATE_LOCAL_VALUE" not in result.stdout
+    assert secret.read_text() == "PRIVATE_LOCAL_VALUE=do_not_publish\\n"
+    assert git(repo, "rev-parse", "HEAD") == before_head
+    assert git(repo, "worktree", "list", "--porcelain") == before_worktrees

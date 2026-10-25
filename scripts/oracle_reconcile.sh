@@ -28,6 +28,13 @@ echo "local_unique_commits=$LOCAL_UNIQUE_COMMITS"
 echo "untracked_files_not_included=$UNTRACKED_COUNT"
 echo "oracle_head=$(git -C "$APP" rev-parse --short HEAD)"
 echo "upstream_head=$(git -C "$APP" rev-parse --short "$UPSTREAM")"
+# An untracked source file can contain a local-only feature or a secret.
+# Do not report a successful integration when such files are omitted.
+if test "$UNTRACKED_COUNT" -ne 0; then
+  echo "reconcile_status=untracked_files_require_review"
+  echo "production_checkout_unchanged=yes"
+  exit 5
+fi
 git -C "$APP" worktree add --detach "$TMP/candidate" "$UPSTREAM" >/dev/null 2>&1
 set +e
 git -C "$TMP/candidate" apply --3way --index "$TMP/local.patch" > "$TMP/apply.log" 2>&1
@@ -44,7 +51,9 @@ if test "$APPLY_RC" -ne 0; then
     echo "Manual investigation required; private patch and apply log were not published."
   fi
   echo "production_checkout_unchanged=yes"
-  exit 0
+  # An unresolved candidate must never appear as a successful CI run.
+  if test -n "$CONFLICTS"; then exit 3; fi
+  exit 4
 fi
 echo "reconcile_status=candidate_applied"
 echo "candidate_changed_paths:"

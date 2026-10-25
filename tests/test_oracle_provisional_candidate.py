@@ -157,3 +157,22 @@ def test_private_collision_alternate_runs_without_changing_oracle(tmp_path: Path
     assert git(repo, "status", "--porcelain") == before
     assert git(repo, "worktree", "list", "--porcelain") == before_worktrees
     assert (repo / "router/collision.py").read_bytes() == before_local
+
+
+def test_conflicted_oracle_reports_private_ast_audit_without_leaking_sources(tmp_path: Path) -> None:
+    repo = make_conflicted_oracle(tmp_path)
+    (repo / "legacy").mkdir()
+    (repo / "legacy/internal.py").write_text(
+        "import router.router\n"
+        "def private_business_logic():\n    return 5\n"
+    )
+    before = git(repo, "status", "--porcelain")
+    result = run_reconcile(repo)
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert "router_provisional_overlay_outside_python_audit_valid=1" in result.stdout
+    assert "router_provisional_overlay_outside_python_audit_router_imports=1" in result.stdout
+    assert "router_provisional_overlay_outside_python_audit_declarations_only=1" in result.stdout
+    assert "router_provisional_deployment_approved=no" in result.stdout
+    assert "internal.py" not in result.stdout + result.stderr
+    assert "private_business_logic" not in result.stdout + result.stderr
+    assert git(repo, "status", "--porcelain") == before

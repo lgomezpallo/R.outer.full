@@ -19,7 +19,8 @@ def git(repo: Path, *args: str) -> str:
 
 
 def make_conflicted_oracle(tmp_path: Path, *, overlay_passes: bool = True,
-                           tracked_passes: bool = True) -> Path:
+                           tracked_passes: bool = True,
+                           with_collision: bool = False) -> Path:
     repo = tmp_path / "oracle"
     repo.mkdir()
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
@@ -43,8 +44,13 @@ def make_conflicted_oracle(tmp_path: Path, *, overlay_passes: bool = True,
     base = git(repo, "rev-parse", "HEAD")
 
     router.write_text("class Router:\n    def route(self):\n        return 3\n")
+    if with_collision:
+        (repo / "router/collision.py").write_text("VALUE = 1\n")
     (repo / "scripts").mkdir()
-    for name in ("oracle_provisional_candidate.py", "oracle_untracked_overlay.py"):
+    helper_names = ["oracle_provisional_candidate.py", "oracle_untracked_overlay.py"]
+    if with_collision:
+        helper_names.append("oracle_collision_probe.py")
+    for name in helper_names:
         (repo / "scripts" / name).write_text((ROOT / "scripts" / name).read_text())
     git(repo, "add", ".")
     git(repo, "commit", "-qm", "upstream")
@@ -52,6 +58,8 @@ def make_conflicted_oracle(tmp_path: Path, *, overlay_passes: bool = True,
     git(repo, "reset", "--hard", base)
 
     router.write_text("class Router:\n    def route(self):\n        return 2\n")
+    if with_collision:
+        (repo / "router/collision.py").write_text("VALUE = 2\n")
     (repo / "settings.txt").write_text("local\n")
     (repo / "router/local_only.py").write_text("VALUE = 7\n")
     (repo / "tests/test_local_only.py").write_text(
@@ -132,3 +140,20 @@ def test_overlay_is_counted_even_when_other_oracle_tracked_edits_fail(tmp_path: 
     assert "test_secret_private_name" not in result.stdout + result.stderr
     assert git(repo, "status", "--porcelain") == before
     assert git(repo, "worktree", "list", "--porcelain") == before_worktrees
+
+
+def test_private_collision_alternate_runs_without_changing_oracle(tmp_path: Path) -> None:
+    repo = make_conflicted_oracle(tmp_path, with_collision=True)
+    before = git(repo, "status", "--porcelain")
+    before_worktrees = git(repo, "worktree", "list", "--porcelain")
+    before_local = (repo / "router/collision.py").read_bytes()
+    result = run_reconcile(repo)
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert "router_provisional_collision_status=tested_private_variant" in result.stdout
+    assert "router_provisional_collision_tests=passed" in result.stdout
+    assert "router_provisional_semantic_merge_approved=no" in result.stdout
+    assert "router_provisional_deployment_approved=no" in result.stdout
+    assert "router/collision.py" not in result.stdout + result.stderr
+    assert git(repo, "status", "--porcelain") == before
+    assert git(repo, "worktree", "list", "--porcelain") == before_worktrees
+    assert (repo / "router/collision.py").read_bytes() == before_local

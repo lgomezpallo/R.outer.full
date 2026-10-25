@@ -55,7 +55,7 @@ def health() -> bool:
 
 def wait_health() -> bool:
     for _ in range(25):
-        if command("systemctl", "is-active", "router.service") == "active" and health():
+        if subprocess.run(["systemctl", "is-active", "--quiet", "router.service"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0 and health():
             return True
         time.sleep(1)
     return False
@@ -256,7 +256,7 @@ if __name__ == "__main__":
     try:
         if len(sys.argv) == 2 and sys.argv[1] == "promote":
             promote(Path(__file__).resolve())
-        elif len(sys.argv) == 4 and sys.argv[1] in ("backup", "verify"):
+        elif len(sys.argv) == 3 and sys.argv[1] in ("backup", "verify"):
             if not Path(sys.argv[2]).is_dir():
                 raise PromoteBlocked("private_directory_missing")
             if sys.argv[1] == "backup":

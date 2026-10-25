@@ -15,3 +15,16 @@ NVIDIA_ROUTING_ALLOWLIST = frozenset({
     "meta/llama-3.2-90b-vision-instruct",
     "google/diffusiongemma-26b-a4b-it",
 })
+
+# These Cloudflare models explicitly require paid billing or prepaid credits.
+# Other Workers AI models are NOT automatically free: Cloudflare's daily
+# neuron allocation depends on account plan and remaining quota.
+CLOUDFLARE_PAID_ONLY = frozenset({
+    "@cf/moonshotai/kimi-k2.6",
+    "@cf/moonshotai/kimi-k2.7-code",
+    "@cf/zai-org/glm-5.2",
+    "@cf/zai-org/glm-5.3",
+    "@cf/zai-org/glm-5.3-flash",
+    "@cf/deepseek-ai/deepseek-v4-flash-0731",
+    "@cf/deepseek-ai/deepseek-v4-pro-0813",
+})

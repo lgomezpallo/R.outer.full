@@ -127,14 +127,14 @@ def test_failing_local_overlay_never_prints_private_test_identifiers(tmp_path: P
     base = git(app, "rev-parse", "HEAD")
     (app / "scripts").mkdir()
     (app / "scripts/oracle_untracked_overlay.py").write_text(SCRIPT.read_text())
-    (app / "README.md").write_text("upstream\\n")
+    (app / "README.md").write_text("upstream\n")
     git(app, "add", ".")
     git(app, "commit", "-qm", "upstream with overlay")
     git(app, "update-ref", "refs/remotes/origin/main", "HEAD")
     git(app, "reset", "--hard", base)
     (app / "tests/test_private_oracle_only.py").write_text(
-        "def test_private_internal_customer_name():\\n"
-        "    assert False, 'NEVER_LOG_PRIVATE_ASSERTION'\\n"
+        "def test_private_internal_customer_name():\n"
+        "    assert False, 'NEVER_LOG_PRIVATE_ASSERTION'\n"
     )
     before = git(app, "status", "--porcelain")
     env = os.environ.copy()

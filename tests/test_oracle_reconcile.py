@@ -105,3 +105,45 @@ def test_candidate_tests_run_in_isolated_worktree(tmp_path: Path) -> None:
     assert "candidate_tests=passed" in result.stdout
     assert git(repo, "status", "--porcelain") == before
     assert len(git(repo, "worktree", "list", "--porcelain").split("worktree ")) == 2
+
+
+def test_reconcile_includes_oracle_only_commits_in_candidate(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path, upstream_change=None)
+    # Oracle HEAD may diverge from GitHub even with a clean working tree.
+    git(repo, "add", "router/router.py")
+    git(repo, "commit", "-qm", "oracle-only feature")
+    original_head = git(repo, "rev-parse", "HEAD")
+    original_worktrees = git(repo, "worktree", "list", "--porcelain")
+    # Executed inside the candidate: catches lost committed Oracle changes.
+    (repo / "tests" / "test_candidate.py").write_text(
+        "from pathlib import Path\n"
+        "def test_preserved_local_commit():\n"
+        "    assert Path('router/router.py').read_text() == 'value = 2\\n'\n"
+    )
+    env = os.environ.copy()
+    env.update({
+        "ROUTER_APP_DIR": str(repo),
+        "ROUTER_RECONCILE_TESTS": "1",
+        "ROUTER_UPSTREAM_REF": "origin/main",
+    })
+    result = subprocess.run(
+        ["bash", str(SCRIPT)], env=env, text=True, capture_output=True,
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "local_unique_commits=1" in result.stdout
+    assert "reconcile_status=candidate_applied" in result.stdout
+    assert "candidate_tests=passed" in result.stdout
+    assert git(repo, "rev-parse", "HEAD") == original_head
+    assert git(repo, "worktree", "list", "--porcelain") == original_worktrees
+    assert (repo / "router" / "router.py").read_text() == "value = 2\n"
+
+
+def test_reconcile_reports_conflict_with_oracle_only_commit(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path, upstream_change="value = 3\n")
+    git(repo, "add", "router/router.py")
+    git(repo, "commit", "-qm", "oracle-only conflicting feature")
+    result = reconcile(repo)
+    assert result.returncode == 0, result.stderr
+    assert "local_unique_commits=1" in result.stdout
+    assert "reconcile_status=conflicts" in result.stdout
+    assert "router/router.py" in result.stdout

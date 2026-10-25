@@ -39,10 +39,17 @@ print(f"untracked_source_like_count={source}")
 print(f"untracked_other_count={len(paths) - source}")
 '
 git -C "$APP" worktree add --detach "$TMP/candidate" "$UPSTREAM" >/dev/null 2>&1
-set +e
-git -C "$TMP/candidate" apply --3way --index "$TMP/local.patch" > "$TMP/apply.log" 2>&1
-APPLY_RC=$?
-set -e
+# A clean Oracle checkout can still contain untracked local files.
+# git apply rejects an empty patch by default; do not misreport this as a
+# reconciliation failure (exit 4).
+if test -s "$TMP/local.patch"; then
+  set +e
+  git -C "$TMP/candidate" apply --3way --index "$TMP/local.patch" > "$TMP/apply.log" 2>&1
+  APPLY_RC=$?
+  set -e
+else
+  APPLY_RC=0
+fi
 # If only Router methods conflict, try a conservative private three-way merge.
 # A clean result stays in the disposable worktree; never touches the live tree.
 if test "$APPLY_RC" -ne 0; then

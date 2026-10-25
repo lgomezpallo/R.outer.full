@@ -1,8 +1,8 @@
-name: Router Oracle Daily Monitor
+name: Router Oracle Hourly Integration Monitor
 
 on:
   schedule:
-    - cron: "20 12 * * *"
+    - cron: "13 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -51,5 +51,7 @@ jobs:
           echo "GitHub commit: $(git rev-parse --short origin/main)"
           echo "Tracked local changes: $(git status --porcelain --untracked-files=no | wc -l)"
           echo "Ahead/behind: $(git rev-list --left-right --count HEAD...origin/main)"
-          echo "Read-only check completed. No deployment performed."
+          echo "=== Private isolated reconciliation candidate ==="
+          git show origin/main:scripts/oracle_reconcile.sh | ROUTER_APP_DIR="$PWD" bash
+          echo "Production source, database and service unchanged."
           REMOTE

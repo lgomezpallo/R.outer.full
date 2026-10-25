@@ -98,3 +98,15 @@ def test_rejects_candidate_nested_under_live_app(tmp_path: Path):
     app, candidate = fixtures(tmp_path)
     result = run(app, app / "router")
     assert "oracle_collision_status=blocked_layout" in result.stdout
+
+
+def test_staged_untracked_overlay_does_not_count_as_collision(tmp_path: Path):
+    app, candidate = fixtures(tmp_path)
+    (app / "router/overlay.py").write_text("VALUE = 3\\n")
+    (candidate / "router/overlay.py").write_text("VALUE = 3\\n")
+    before = (candidate / "router/collision.py").read_bytes()
+    result = run(app, candidate)
+    assert result.returncode == 0
+    assert "oracle_collision_status=tested_private_variant" in result.stdout
+    assert "oracle_collision_tests=passed" in result.stdout
+    assert (candidate / "router/collision.py").read_bytes() == before

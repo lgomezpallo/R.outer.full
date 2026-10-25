@@ -1,6 +1,13 @@
 name: Router Oracle Hourly Integration Monitor
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "router/**"
+      - "scripts/oracle_reconcile.sh"
+      - ".github/workflows/router-oracle-monitor.yml"
+      - ".github/workflows/oracle-deploy.yml"
   schedule:
     - cron: "13 * * * *"
   workflow_dispatch:

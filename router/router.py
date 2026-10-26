@@ -145,8 +145,21 @@ class Router:
         for decision in decisions:
             if decision.provider in blocked_providers:
                 continue
-            provider = by_id[decision.provider]
+            # Ranking is advisory, not authorization. A stale/forged decision
+            # must not reach even an injected client that skips ProviderClient's
+            # independent last-mile billing gate.
+            provider = by_id.get(decision.provider)
+            if provider is None:
+                continue
+            model_spec = next((m for m in provider.spec.models if m.id == decision.model), None)
+            if model_spec is None or billing_ineligibility_reason(provider, model_spec) is not None:
+                continue
             for attempt_index in range(self.max_retries + 1):
+                # Recheck on every retry/fallback: catalog prices or account
+                # authorization can change after ranking and after an attempt.
+                model_spec = next((m for m in provider.spec.models if m.id == decision.model), None)
+                if model_spec is None or billing_ineligibility_reason(provider, model_spec) is not None:
+                    break
                 started = perf_counter()
                 try:
                     text, raw = self.client.complete(provider, decision.model, req)
@@ -202,7 +215,10 @@ class Router:
                         blocked_providers.add(decision.provider)
                     break
 
-        return RouteResponse(False, None, None, None, attempts, decisions, "all_attempts_failed")
+        return RouteResponse(
+            False, None, None, None, attempts, decisions,
+            "all_attempts_failed" if attempts else "no_eligible_provider",
+        )
 
     def verify_capability(self, provider_id: str, model_id: str, capability: str) -> dict:
         provider = next((item for item in self.registry.all() if item.spec.id == provider_id), None)

@@ -1,3 +1,7 @@
+import pytest
+
+pytestmark = pytest.mark.usefixtures("allow_offline_selector_fixture")
+
 from types import SimpleNamespace
 
 from router.catalog import ModelSpec, ProviderSpec

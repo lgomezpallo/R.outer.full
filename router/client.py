@@ -29,9 +29,14 @@ class ProviderClient:
         if endpoint_block is not None:
             raise RuntimeError(f"inference_blocked:{endpoint_block}")
 
-        model_spec = next((item for item in provider.spec.models if item.id == model), None)
-        if model_spec is None:
+        matches = [item for item in provider.spec.models if item.id == model]
+        if not matches:
             raise RuntimeError("inference_blocked:billing_unverified_model")
+        # Independently reject ambiguous persisted catalogs, even if a custom
+        # selector or ranking implementation incorrectly picks the free row.
+        if len(matches) != 1:
+            raise RuntimeError("inference_blocked:billing_ambiguous_model")
+        model_spec = matches[0]
         # Independent account-level guard: a bypassed/mocked selector must not
         # turn a free catalog price into permission to incur account overages.
         from . import billing

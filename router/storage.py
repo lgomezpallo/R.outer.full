@@ -363,6 +363,38 @@ class RouterStore:
             })
         return sorted(output, key=lambda item: (-item["attempts"], item["provider"], item["model"]))
 
+    def provider_routing_report(self, limit: int = 2000) -> list[dict]:
+        """Provider totals over exactly the same routing attempts as model reports.
+
+        Do not use provider_runtime counters for these totals: those counters
+        also reflect active health checks and are not a routing-only sample.
+        This report never changes cooldowns, health, or persisted state.
+        """
+        groups: dict[str, dict] = {}
+        for model in self.model_performance_report(limit=limit):
+            provider_id = model["provider"]
+            row = groups.setdefault(provider_id, {
+                "provider": provider_id,
+                "attempts": 0,
+                "successful_requests": 0,
+                "failed_attempts": 0,
+                "models_observed": 0,
+                "errors": {},
+            })
+            row["attempts"] += model["attempts"]
+            row["successful_requests"] += model["successful_requests"]
+            row["failed_attempts"] += model["attempts"] - model["successful_requests"]
+            row["models_observed"] += 1
+            for error_type, count in model["errors"].items():
+                row["errors"][error_type] = row["errors"].get(error_type, 0) + count
+
+        for row in groups.values():
+            row["success_rate"] = round(
+                row["successful_requests"] / row["attempts"], 4
+            )
+            row["observation_scope"] = "routing_attempts_only"
+        return sorted(groups.values(), key=lambda row: row["provider"])
+
     def create_app_token(self, name: str) -> str:
         token = "rtr_" + secrets.token_urlsafe(32)
         digest = hashlib.sha256(token.encode("utf-8")).hexdigest()

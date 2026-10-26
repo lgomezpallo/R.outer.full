@@ -5,6 +5,7 @@ inference requests through an unexpected HTTPS_PROXY/ALL_PROXY. The tests
 replace HTTP entirely; they never contact model providers.
 """
 import ast
+from dataclasses import replace
 from pathlib import Path
 
 import httpx
@@ -50,6 +51,8 @@ def test_provider_http_ignores_proxy_environment_with_mock_transport(monkeypatch
     monkeypatch.setattr(billing, "account_billing_ineligibility_reason", lambda _: None)
 
     spec = next(item for item in BUILTINS if item.id == "groq")
+    # Simulate zero model price as well as account approval for this HTTP-only test.
+    spec = replace(spec, models=(replace(spec.models[0], billing_status="free"),))
     provider = RegisteredProvider(spec, "offline-fake-token", RuntimeState())
     model = spec.models[0].id
     constructions = []

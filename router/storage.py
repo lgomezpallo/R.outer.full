@@ -312,7 +312,12 @@ class RouterStore:
         return {row["provider_id"]: row["used"] for row in rows}
 
     def model_performance_report(self, limit: int = 2000) -> list[dict]:
-        """Recent execution statistics, not a measure of answer correctness."""
+        """Routing-attempt reliability and successful-completion latency.
+
+        Failed attempt durations are useful for troubleshooting, but must not
+        inflate the latency reported for successful model completions.
+        Probe and audit phases are excluded, just as in recent_model_stats.
+        """
         with self._connect() as conn:
             rows = conn.execute(
                 """SELECT provider_id, model_id, success, latency_ms, error_type
@@ -328,12 +333,15 @@ class RouterStore:
             key = (row["provider_id"], row["model_id"])
             entry = groups.setdefault(key, {
                 "provider": key[0], "model": key[1], "attempts": 0,
-                "successful_requests": 0, "total_latency_ms": 0, "errors": {},
+                "successful_requests": 0, "total_latency_ms": 0,
+                "successful_latency_ms": 0, "errors": {},
             })
             entry["attempts"] += 1
-            entry["successful_requests"] += int(row["success"])
             entry["total_latency_ms"] += int(row["latency_ms"])
-            if not row["success"]:
+            if row["success"]:
+                entry["successful_requests"] += 1
+                entry["successful_latency_ms"] += int(row["latency_ms"])
+            else:
                 kind = row["error_type"] or "unknown"
                 entry["errors"][kind] = entry["errors"].get(kind, 0) + 1
         output = []
@@ -343,7 +351,14 @@ class RouterStore:
                 "provider": entry["provider"], "model": entry["model"],
                 "attempts": n, "successful_requests": entry["successful_requests"],
                 "success_rate": round(entry["successful_requests"] / n, 4),
-                "avg_latency_ms": round(entry["total_latency_ms"] / n),
+                # None means no successful completion was observed.
+                "avg_latency_ms": (
+                    round(entry["successful_latency_ms"] / entry["successful_requests"])
+                    if entry["successful_requests"] else None
+                ),
+                "latency_samples": entry["successful_requests"],
+                "latency_scope": "successful_completions_only",
+                "avg_attempt_duration_ms": round(entry["total_latency_ms"] / n),
                 "errors": entry["errors"],
             })
         return sorted(output, key=lambda item: (-item["attempts"], item["provider"], item["model"]))

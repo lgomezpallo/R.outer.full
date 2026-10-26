@@ -41,10 +41,13 @@ def billing_ineligibility_reason(provider: RegisteredProvider, model) -> str | N
     or remaining free neurons. Until an account-level no-charge guarantee can
     be verified, Cloudflare models must not generate inference requests.
     """
+    # Unknown providers cannot inherit permissive routing defaults.
+    if provider.spec.id not in {"groq", "nvidia", "cloudflare", "openrouter"}:
+        return "billing_unverified"
     if provider.spec.id == "openrouter":
-        if model.billing_status != "free" and not (
-            model.id == "openrouter/free" and model.billing_status == "unknown"
-        ):
+        # Even the aggregate openrouter/free endpoint needs current zero-price
+        # evidence. A legacy built-in name is not billing authorization.
+        if model.billing_status != "free":
             return "billing_paid" if model.billing_status == "paid" else "billing_unverified"
     if provider.spec.id == "nvidia" and model.id not in NVIDIA_ROUTING_ALLOWLIST:
         return "billing_unverified"

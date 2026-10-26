@@ -79,7 +79,7 @@ class ProviderClient:
             # models for honest diagnostics, but never infer a free account plan.
             result: list[str] = []
             billing: dict[str, str] = {}
-            with httpx.Client(timeout=timeout_s, follow_redirects=False) as client:
+            with httpx.Client(timeout=timeout_s, follow_redirects=False, trust_env=False) as client:
                 for page in range(1, 51):
                     response = client.get(
                         base + f"/models/search?hide_experimental=true&include_deprecated=false&per_page=100&page={page}",
@@ -104,7 +104,7 @@ class ProviderClient:
                     raise RuntimeError("cloudflare_inventory_pagination_limit")
             return list(dict.fromkeys(result)), billing
 
-        with httpx.Client(timeout=timeout_s, follow_redirects=False) as client:
+        with httpx.Client(timeout=timeout_s, follow_redirects=False, trust_env=False) as client:
             response = client.get(
                 base + "/models",
                 headers={"Authorization": f"Bearer {provider.api_key}", "Accept": "application/json"},
@@ -239,7 +239,7 @@ class ProviderClient:
                     "max_tokens": 128,
                 }
                 path = "/v1/chat/completions" if _is_cloudflare_workers_ai(base) else "/chat/completions"
-                with httpx.Client(timeout=30, follow_redirects=False) as client:
+                with httpx.Client(timeout=30, follow_redirects=False, trust_env=False) as client:
                     response = client.post(base + path, headers={**headers, "Content-Type": "application/json"}, json=payload)
                 if not (200 <= response.status_code < 300):
                     return self._probe_http_result(response, "active_tools_probe")
@@ -283,7 +283,7 @@ class ProviderClient:
                 ]
                 payload = {"model": model, "messages": [{"role": "user", "content": content}], "max_tokens": 12}
                 path = "/v1/chat/completions" if _is_cloudflare_workers_ai(base) else "/chat/completions"
-                with httpx.Client(timeout=30, follow_redirects=False) as client:
+                with httpx.Client(timeout=30, follow_redirects=False, trust_env=False) as client:
                     response = client.post(base + path, headers={**headers, "Content-Type": "application/json"}, json=payload)
                 return self._probe_http_result(response, "active_vision_probe")
 
@@ -306,7 +306,7 @@ class ProviderClient:
                     else:
                         voice = "alloy"
                     payload = {"model": model, "input": "Hello", "voice": voice, "response_format": "wav"}
-                with httpx.Client(timeout=45, follow_redirects=False) as client:
+                with httpx.Client(timeout=45, follow_redirects=False, trust_env=False) as client:
                     response = client.post(url, headers={**headers, "Content-Type": "application/json"}, json=payload)
                 return self._probe_http_result(response, "active_speech_probe")
 
@@ -318,7 +318,7 @@ class ProviderClient:
                         "audio": base64.b64encode(wav).decode("ascii"),
                         "task": "transcribe",
                     }
-                    with httpx.Client(timeout=45, follow_redirects=False) as client:
+                    with httpx.Client(timeout=45, follow_redirects=False, trust_env=False) as client:
                         response = client.post(
                             base + "/run/" + model,
                             headers={**headers, "Content-Type": "application/json"},
@@ -327,7 +327,7 @@ class ProviderClient:
                 else:
                     files = {"file": ("probe.wav", wav, "audio/wav")}
                     data = {"model": model, "response_format": "json"}
-                    with httpx.Client(timeout=45, follow_redirects=False) as client:
+                    with httpx.Client(timeout=45, follow_redirects=False, trust_env=False) as client:
                         response = client.post(base + "/audio/transcriptions", headers=headers, files=files, data=data)
                 return self._probe_http_result(response, "active_transcription_probe")
 
@@ -335,7 +335,7 @@ class ProviderClient:
                 if _is_cloudflare_workers_ai(base):
                     url = base + "/run/" + model
                     prompt = "A red circle on a white background"
-                    with httpx.Client(timeout=60, follow_redirects=False) as client:
+                    with httpx.Client(timeout=60, follow_redirects=False, trust_env=False) as client:
                         if any(token in model.lower() for token in ("flux-2-dev", "flux-2-klein")):
                             response = client.post(
                                 url,
@@ -351,7 +351,7 @@ class ProviderClient:
                 else:
                     url = base + "/images/generations"
                     payload = {"model": model, "prompt": "A red circle on a white background", "n": 1}
-                    with httpx.Client(timeout=60, follow_redirects=False) as client:
+                    with httpx.Client(timeout=60, follow_redirects=False, trust_env=False) as client:
                         response = client.post(url, headers={**headers, "Content-Type": "application/json"}, json=payload)
                 return self._probe_http_result(response, "active_image_generation_probe")
 
@@ -365,13 +365,13 @@ class ProviderClient:
                         "prompt": (None, prompt),
                         "input_image_0": ("probe.png", pixel, "image/png"),
                     }
-                    with httpx.Client(timeout=60, follow_redirects=False) as client:
+                    with httpx.Client(timeout=60, follow_redirects=False, trust_env=False) as client:
                         response = client.post(url, headers=headers, files=files)
                 else:
                     url = base + "/images/edits"
                     files = {"image": ("probe.png", pixel, "image/png")}
                     data = {"model": model, "prompt": prompt}
-                    with httpx.Client(timeout=60, follow_redirects=False) as client:
+                    with httpx.Client(timeout=60, follow_redirects=False, trust_env=False) as client:
                         response = client.post(url, headers=headers, files=files, data=data)
                 return self._probe_http_result(response, "active_image_editing_probe")
 
@@ -423,7 +423,7 @@ class ProviderClient:
         payload = {"model": model, "messages": self._messages(req), "temperature": 0.2}
         base = provider.spec.base_url.rstrip("/")
         chat_path = "/v1/chat/completions" if _is_cloudflare_workers_ai(base) else "/chat/completions"
-        with httpx.Client(timeout=req.timeout_s, follow_redirects=False) as client:
+        with httpx.Client(timeout=req.timeout_s, follow_redirects=False, trust_env=False) as client:
             response = client.post(
                 base + chat_path,
                 headers={"Authorization": f"Bearer {provider.api_key}", "Content-Type": "application/json"},
@@ -454,7 +454,7 @@ class ProviderClient:
             "anthropic-version": "2023-06-01",
             "content-type": "application/json",
         }
-        with httpx.Client(timeout=req.timeout_s, follow_redirects=False) as client:
+        with httpx.Client(timeout=req.timeout_s, follow_redirects=False, trust_env=False) as client:
             response = client.post(provider.spec.base_url.rstrip("/") + "/v1/messages", headers=headers, json=payload)
             response.raise_for_status()
             data = response.json()
@@ -474,7 +474,7 @@ class ProviderClient:
                                 "data": source.split(",", 1)[1]}
             } for source in req.images)
         payload = {"contents": [{"parts": parts}]}
-        with httpx.Client(timeout=req.timeout_s, follow_redirects=False) as client:
+        with httpx.Client(timeout=req.timeout_s, follow_redirects=False, trust_env=False) as client:
             response = client.post(url, params={"key": provider.api_key}, json=payload)
             response.raise_for_status()
             data = response.json()

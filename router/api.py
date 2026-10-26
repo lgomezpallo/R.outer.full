@@ -541,6 +541,19 @@ def performance():
     """Operational measurements only; API success does not prove answer quality."""
     return {"metrics": store.model_performance_report(), "quality_measured": False}
 
+@app.get("/diagnostics/provider-performance", dependencies=[Depends(require_admin)])
+def diagnostics_provider_performance(limit: int = 2000):
+    """Offline SQLite aggregation, excluding probes and audits.
+
+    Provider health/cooldown counters are deliberately not conflated with
+    routing-only observations. No provider APIs or billing endpoints are used.
+    """
+    return {
+        "providers": store.provider_routing_report(limit=limit),
+        "observation_scope": "routing_attempts_only",
+        "quality_measured": False,
+    }
+
 @app.get("/diagnostics/requests", dependencies=[Depends(require_admin)])
 def recent_request_traces(limit: int = 30, application_name: str | None = None):
     """Admin-only attempt timing and fallback diagnostics; no message content."""

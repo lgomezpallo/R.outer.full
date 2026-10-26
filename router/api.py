@@ -467,6 +467,13 @@ def diagnostics_inventory():
     return inventory_report(router.registry.all())
 
 
+@app.get("/diagnostics/capabilities", dependencies=[Depends(require_admin)])
+def diagnostics_capabilities():
+    """Read-only evidence matrix; never triggers a probe or inference."""
+    from .capability_evidence import capability_report
+    return capability_report(router.registry.all())
+
+
 @app.get("/diagnostics/model-coverage", dependencies=[Depends(require_admin)])
 def diagnostics_model_coverage(capability: str = "chat", max_strategic_cost: int | None = None):
     """Read-only model counts; does not probe providers or spend API credits."""

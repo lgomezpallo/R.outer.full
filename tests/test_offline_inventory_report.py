@@ -128,3 +128,39 @@ def test_inventory_endpoint_is_admin_only_and_never_touches_network(monkeypatch)
     assert response.json()["totals"]["reported_free_price"] == 1
     assert "offline-placeholder" not in response.text
     assert "offline-admin" not in response.text
+
+
+def test_successful_empty_inventory_clears_stale_free_and_discovered_flags():
+    spec = ProviderSpec("groq", ("groq",), ENDPOINTS["groq"], (
+        ModelSpec("old-free", frozenset({"chat"}), "standard",
+                  billing_status="free", discovered_in_last_snapshot=True),
+    ))
+
+    class EmptyInventory:
+        def discover_inventory(self, *args, **kwargs):
+            return [], {}
+
+    router = Router(client=EmptyInventory(), catalog=ProviderCatalog(providers=(spec,)))
+    registered = router.add_provider("groq", "offline-placeholder", discover=True)
+    model = registered.spec.models[0]
+    assert model.billing_status == "unknown"
+    assert model.discovered_in_last_snapshot is False
+    report = inventory_report([registered])
+    assert report["totals"]["reported_free_price"] == 0
+    assert report["totals"]["discovered_in_last_snapshot"] == 0
+
+
+def test_failed_discovery_does_not_claim_new_snapshot():
+    spec = ProviderSpec("groq", ("groq",), ENDPOINTS["groq"], (
+        ModelSpec("previous", frozenset({"chat"}), "standard",
+                  billing_status="unknown", discovered_in_last_snapshot=True),
+    ))
+
+    class FailedInventory:
+        def discover_inventory(self, *args, **kwargs):
+            raise RuntimeError("offline_inventory_failure")
+
+    router = Router(client=FailedInventory(), catalog=ProviderCatalog(providers=(spec,)))
+    registered = router.add_provider("groq", "offline-placeholder", discover=True)
+    assert registered.spec.models[0].discovered_in_last_snapshot is True
+    assert registered.spec.models[0].billing_status == "unknown"

@@ -51,7 +51,8 @@ def test_openrouter_discovers_all_but_ranks_only_verified_free(monkeypatch, tmp_
     assert models["vendor/misleading:free"].billing_status == "paid"
     assert models["vendor/missing-price"].billing_status == "unknown"
     selected = {d.model for d in rank([provider], RouteRequest("hola"))}
-    assert selected == {"openrouter/free", "vendor/free-zero"}
+    # Legacy openrouter/free without explicit zero-price evidence is blocked.
+    assert selected == {"vendor/free-zero"}
     coverage = model_coverage([provider], RouteRequest("hola"))
     assert coverage["totals"]["cataloged_models"] == 136
     assert coverage["totals"]["eligible_models"] == 2

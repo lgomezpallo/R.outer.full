@@ -5,8 +5,6 @@ capability eligibility remain independent fail-closed gates.
 """
 from __future__ import annotations
 
-from .capability_evidence import _dimension
-
 _ALIASES = {
     "code": ("code", "coding"),
     "coding": ("code", "coding"),
@@ -19,6 +17,8 @@ def verification_tier(model, required: frozenset[str]) -> int:
     Legacy migrations, model-name guesses and declarations cannot earn a
     verified bonus. Contradictory records count as unsupported for ranking.
     """
+    # Lazy import avoids selector -> evidence -> inventory -> selector cycle.
+    from .capability_evidence import _dimension
     if not required:
         return 1
     statuses = [

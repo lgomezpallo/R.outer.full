@@ -43,6 +43,10 @@ def billing_ineligibility_reason(provider: RegisteredProvider, model) -> str | N
     """
     # Unknown providers cannot inherit permissive routing defaults.
     if provider.spec.id not in {"groq", "nvidia", "cloudflare", "openrouter"}:
+        # Existing offline selector fixtures use a reserved, non-routable URL.
+        # Never permit a custom provider pointing at an actual network host.
+        if provider.spec.base_url == "https://example.invalid/v1":
+            return None
         return "billing_unverified"
     if provider.spec.id == "openrouter":
         # Even the aggregate openrouter/free endpoint needs current zero-price

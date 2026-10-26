@@ -124,6 +124,27 @@ class RouteInput(BaseModel):
     decompose: bool | None = None
     max_subtasks: int = Field(default=12, ge=1, le=50)
 
+def _startup_has_eligible_inference() -> bool:
+    """Fail closed before scheduling any opt-in startup inference activity.
+
+    Catalog discovery is read-only and remains independent of this check.
+    An account's advertised free models do not establish no-overage status.
+    Route and transport still recheck authorization for every attempt.
+    """
+    from .billing import account_billing_ineligibility_reason
+    from .selector import billing_ineligibility_reason
+
+    for provider in router.registry.all():
+        if account_billing_ineligibility_reason(provider.spec.id) is not None:
+            continue
+        if any(
+            billing_ineligibility_reason(provider, model) is None
+            for model in provider.spec.models
+        ):
+            return True
+    return False
+
+
 @app.on_event("startup")
 def load_environment_providers() -> None:
     router.load_persisted_providers()
@@ -161,7 +182,26 @@ def load_environment_providers() -> None:
             except ValueError:
                 pass
 
-    if os.getenv("ROUTER_STARTUP_PROVIDER_TESTS", "").strip() == "1":
+    # Environment flags are requests to run diagnostics, NOT permission to
+    # spend. With no verified no-overage account, do not even schedule tests
+    # or background smoke/profiling threads.
+    active_startup_flags = (
+        "ROUTER_STARTUP_PROVIDER_TESTS",
+        "ROUTER_STARTUP_CAPABILITY_PROFILE",
+        "ROUTER_STARTUP_ROUTING_SMOKE",
+        "ROUTER_STARTUP_ORCHESTRATION_SMOKE",
+        "ROUTER_STARTUP_HETEROGENEOUS_SMOKE",
+    )
+    requested_active_checks = any(
+        os.getenv(flag, "").strip() == "1" for flag in active_startup_flags
+    )
+    startup_inference_allowed = (
+        _startup_has_eligible_inference() if requested_active_checks else False
+    )
+    if requested_active_checks and not startup_inference_allowed:
+        print("ROUTER_STARTUP_ACTIVE_CHECKS_SKIPPED reason=no_billing_eligible_model", flush=True)
+
+    if startup_inference_allowed and os.getenv("ROUTER_STARTUP_PROVIDER_TESTS", "").strip() == "1":
         for item in router.registry.all():
             provider_id = item.spec.id
             print(f"ROUTER_PROVIDER_DISCOVERY provider={provider_id} models={len(item.spec.models)}")
@@ -182,13 +222,13 @@ def load_environment_providers() -> None:
                     f"error={type(exc).__name__}"
                 )
 
-    if os.getenv("ROUTER_STARTUP_CAPABILITY_PROFILE", "").strip() == "1":
+    if startup_inference_allowed and os.getenv("ROUTER_STARTUP_CAPABILITY_PROFILE", "").strip() == "1":
         threading.Thread(target=_startup_capability_profile, daemon=True).start()
-    if os.getenv("ROUTER_STARTUP_ROUTING_SMOKE", "").strip() == "1":
+    if startup_inference_allowed and os.getenv("ROUTER_STARTUP_ROUTING_SMOKE", "").strip() == "1":
         threading.Thread(target=_startup_routing_smoke, daemon=True).start()
-    if os.getenv("ROUTER_STARTUP_ORCHESTRATION_SMOKE", "").strip() == "1":
+    if startup_inference_allowed and os.getenv("ROUTER_STARTUP_ORCHESTRATION_SMOKE", "").strip() == "1":
         threading.Thread(target=_startup_orchestration_smoke, daemon=True).start()
-    if os.getenv("ROUTER_STARTUP_HETEROGENEOUS_SMOKE", "").strip() == "1":
+    if startup_inference_allowed and os.getenv("ROUTER_STARTUP_HETEROGENEOUS_SMOKE", "").strip() == "1":
         threading.Thread(target=_startup_heterogeneous_smoke, daemon=True).start()
 
 def _startup_heterogeneous_smoke() -> None:

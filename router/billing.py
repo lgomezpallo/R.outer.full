@@ -28,3 +28,41 @@ CLOUDFLARE_PAID_ONLY = frozenset({
     "@cf/deepseek-ai/deepseek-v4-flash-0731",
     "@cf/deepseek-ai/deepseek-v4-pro-0813",
 })
+
+
+# A catalog file is mutable. Its provider id alone must never authorize a
+# network destination: a spoofed Groq/OpenRouter URL could send credentials or
+# inference to an arbitrary, potentially billable service.
+def billing_endpoint_ineligibility_reason(provider_id: str, base_url: str, protocol: str) -> str | None:
+    from urllib.parse import urlsplit
+    import re
+
+    if protocol != "openai-compatible":
+        return "billing_unverified_endpoint"
+    try:
+        parsed = urlsplit(base_url)
+    except ValueError:
+        return "billing_unverified_endpoint"
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.netloc != parsed.hostname
+        or parsed.query
+        or parsed.fragment
+    ):
+        return "billing_unverified_endpoint"
+    expected = {
+        "groq": ("api.groq.com", "/openai/v1"),
+        "nvidia": ("integrate.api.nvidia.com", "/v1"),
+        "openrouter": ("openrouter.ai", "/api/v1"),
+    }
+    if provider_id in expected:
+        hostname, path = expected[provider_id]
+        if parsed.hostname == hostname and parsed.path.rstrip("/") == path:
+            return None
+    elif provider_id == "cloudflare":
+        if parsed.hostname == "api.cloudflare.com" and re.fullmatch(
+            r"/client/v4/accounts/[A-Za-z0-9_-]+/ai/?", parsed.path
+        ):
+            return None
+    return "billing_unverified_endpoint"

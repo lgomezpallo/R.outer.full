@@ -218,9 +218,13 @@ def rank(providers: list[RegisteredProvider], req: RouteRequest) -> list[Decisio
     decisions: list[Decision] = []
     scarcity: dict[str, int] = {}
     for provider in providers:
-        if not provider.state.available:
-            continue
         for model in provider.spec.models:
+            # Scarcity must describe the *rankable* pool for this request.
+            # Paid, unverified, incompatible or cooling models cannot supply
+            # a specialized capability and must not dilute its scarcity cost.
+            # Reuse the exact gate that _score applies below.
+            if ineligibility_reason(provider, model, req) is not None:
+                continue
             for capability in (model.capabilities | model.verified_capabilities | infer_discovered_capabilities(model.id)) - model.unsupported_capabilities:
                 scarcity[capability] = scarcity.get(capability, 0) + 1
     for provider in providers:

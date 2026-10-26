@@ -58,6 +58,15 @@ class ProviderClient:
         """Inventory plus explicit OpenRouter billing classification (no inference of free)."""
         if provider.spec.protocol != "openai-compatible":
             return [], {}
+        # Discovery sends the configured API key too. Check its destination
+        # independently of routing so catalog refresh cannot leak credentials
+        # to an arbitrary URL supplied by a mutable provider configuration.
+        from .billing import billing_endpoint_ineligibility_reason
+        endpoint_block = billing_endpoint_ineligibility_reason(
+            provider.spec.id, provider.spec.base_url, provider.spec.protocol
+        )
+        if endpoint_block is not None:
+            raise RuntimeError(f"inventory_blocked:{endpoint_block}")
         base = provider.spec.base_url.rstrip("/")
         if _is_cloudflare_workers_ai(base):
             # Inventory is not billing authorization. Include even known paid

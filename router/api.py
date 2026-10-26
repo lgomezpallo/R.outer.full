@@ -474,6 +474,25 @@ def diagnostics_capabilities():
     return capability_report(router.registry.all())
 
 
+class TaskRequirementsInput(BaseModel):
+    task: str = Field(min_length=1, max_length=100000)
+    requirements: list[str] = Field(default_factory=list, max_length=100)
+    required_capabilities: list[str] = Field(default_factory=lambda: ["chat"], max_length=30)
+    images_present: bool = False
+
+
+@app.post("/diagnostics/task-requirements", dependencies=[Depends(require_admin)])
+def diagnostics_task_requirements(payload: TaskRequirementsInput):
+    """Offline interpretation only: no model ranking, inference, or provider calls."""
+    from .task_requirements import analyze_task
+    return analyze_task(
+        payload.task,
+        requirements=tuple(payload.requirements),
+        required_capabilities=frozenset(payload.required_capabilities),
+        images_present=payload.images_present,
+    )
+
+
 @app.get("/diagnostics/model-coverage", dependencies=[Depends(require_admin)])
 def diagnostics_model_coverage(capability: str = "chat", max_strategic_cost: int | None = None):
     """Read-only model counts; does not probe providers or spend API credits."""

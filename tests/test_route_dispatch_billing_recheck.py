@@ -22,7 +22,7 @@ def _router(client, *, include_openrouter=False, retries=0):
     groq = next(spec for spec in BUILTINS if spec.id == "groq")
     groq = replace(
         groq,
-        models=(ModelSpec("openai/gpt-oss-20b", frozenset({"chat"}), "standard"),),
+        models=(ModelSpec("openai/gpt-oss-20b", frozenset({"chat"}), "standard", billing_status="free"),),
     )
     specs = [groq]
     if include_openrouter:

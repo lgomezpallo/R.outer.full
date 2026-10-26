@@ -118,8 +118,14 @@ class ProviderClient:
                 prompt_price = pricing.get("prompt")
                 completion_price = pricing.get("completion")
                 status = "unknown"
+                # Fail closed when OpenRouter adds an unfamiliar pricing field:
+                # even zero token prices cannot authorize an unexamined fee.
+                known_pricing_fields = {
+                    "prompt", "completion", "request", "image", "web_search",
+                    "internal_reasoning", "input_cache_read", "input_cache_write",
+                }
                 try:
-                    if prompt_price is not None and completion_price is not None:
+                    if set(pricing).issubset(known_pricing_fields) and prompt_price is not None and completion_price is not None:
                         from decimal import Decimal, InvalidOperation
                         prompt = Decimal(str(prompt_price))
                         completion = Decimal(str(completion_price))

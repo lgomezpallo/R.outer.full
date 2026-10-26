@@ -53,12 +53,15 @@ def inventory_report(providers: list[RegisteredProvider]) -> dict:
         rows.append({
             "provider": provider_id,
             "configured": provider is not None,
+            "last_inventory_merge_at": provider.spec.last_inventory_merge_at if provider else None,
+            "last_inventory_source": provider.spec.last_inventory_source if provider else None,
             "counts": counts,
             "models": models,
         })
     return {
         "scope": "configured_providers_and_local_catalog_only",
         "discovery_freshness": "not_verified",
+        "merge_timestamps_do_not_prove_live_discovery": True,
         "live_discovery_performed": False,
         "account_billing_verified": False,
         "reported_free_price_is_not_no_charge_guarantee": True,

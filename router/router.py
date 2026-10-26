@@ -37,7 +37,9 @@ class Router:
         registered = self.registry.add(ProviderCredential(name, api_key))
         if persist and self.store is not None:
             self.store.save_credential(registered.spec.id, api_key)
-        if discover and registered.spec.discover_models and hasattr(self.client, "discover_models"):
+        if discover and registered.spec.discover_models and (
+            hasattr(self.client, "discover_inventory") or hasattr(self.client, "discover_models")
+        ):
             try:
                 if hasattr(self.client, "discover_inventory"):
                     model_ids, billing_statuses = self.client.discover_inventory(registered)

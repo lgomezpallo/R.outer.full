@@ -55,9 +55,9 @@ def test_openrouter_discovers_all_but_ranks_only_verified_free(monkeypatch, tmp_
     assert selected == {"vendor/free-zero"}
     coverage = model_coverage([provider], RouteRequest("hola"))
     assert coverage["totals"]["cataloged_models"] == 136
-    assert coverage["totals"]["eligible_models"] == 2
+    assert coverage["totals"]["eligible_models"] == 1
     assert coverage["providers"][0]["excluded_by_reason"]["billing_paid"] == 132
-    assert coverage["providers"][0]["excluded_by_reason"]["billing_unverified"] == 2
+    assert coverage["providers"][0]["excluded_by_reason"]["billing_unverified"] == 3
     # Reloading the catalog cannot turn paid or unknown models into eligible.
     loaded = ProviderCatalog(providers=(_provider_spec(),), storage_path=tmp_path / "catalog.json")
     assert {m.id: m.billing_status for m in loaded.get("openrouter").models} == {

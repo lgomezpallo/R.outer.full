@@ -1,4 +1,5 @@
 from __future__ import annotations
+from . import billing
 from .billing import CLOUDFLARE_PAID_ONLY, NVIDIA_ROUTING_ALLOWLIST, billing_endpoint_ineligibility_reason
 from .catalog import infer_discovered_capabilities
 from .registry import RegisteredProvider
@@ -48,6 +49,8 @@ def billing_ineligibility_reason(provider: RegisteredProvider, model) -> str | N
     )
     if endpoint_block is not None:
         return endpoint_block
+    if model.billing_status == "paid":
+        return "billing_paid"
     if provider.spec.id == "openrouter":
         # Even the aggregate openrouter/free endpoint needs current zero-price
         # evidence. A legacy built-in name is not billing authorization.
@@ -60,7 +63,7 @@ def billing_ineligibility_reason(provider: RegisteredProvider, model) -> str | N
             return "billing_paid"
         # A free allocation can become billable on Workers Paid accounts.
         return "billing_unverified"
-    return None
+    return billing.account_billing_ineligibility_reason(provider.spec.id)
 
 
 def ineligibility_reason(provider: RegisteredProvider, model, req: RouteRequest) -> str | None:

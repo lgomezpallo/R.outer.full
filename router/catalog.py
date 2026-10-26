@@ -50,6 +50,9 @@ class ProviderSpec:
     priority: int = 50
     strategic_cost: int = 50
     discover_models: bool = True
+    # Timestamp records a successful LOCAL catalog merge, not live freshness or billing approval.
+    last_inventory_merge_at: str | None = None
+    last_inventory_source: str | None = None
 
 def _m(model_id: str, caps: set[str], model_class: str, priority: int, cost: int) -> ModelSpec:
     return ModelSpec(model_id, frozenset(caps), model_class, priority, cost)
@@ -175,8 +178,11 @@ class ProviderCatalog:
         return provider
 
     def merge_discovered_models(
-        self, provider_id: str, model_ids: list[str], billing_statuses: dict[str, str] | None = None
+        self, provider_id: str, model_ids: list[str], billing_statuses: dict[str, str] | None = None,
+        *, source: str = "catalog_merge",
     ) -> ProviderSpec:
+        if source not in {"catalog_merge", "client_discover_inventory", "legacy_discover_models"}:
+            raise ValueError("invalid_inventory_source")
         with self._lock:
             provider = self._providers[provider_id]
             existing = {model.id: model for model in provider.models}
@@ -214,7 +220,11 @@ class ProviderCatalog:
                 for model_id, old in existing.items():
                     if model_id not in discovered:
                         existing[model_id] = replace(old, billing_status="unknown", discovered_in_last_snapshot=False)
-            updated = replace(provider, models=tuple(existing.values()))
+            updated = replace(
+                provider, models=tuple(existing.values()),
+                last_inventory_merge_at=datetime.now(timezone.utc).isoformat(),
+                last_inventory_source=source,
+            )
             self._providers[provider_id] = updated
             self._persist_unlocked()
             return updated
@@ -264,6 +274,8 @@ class ProviderCatalog:
                 "priority": provider.priority,
                 "strategic_cost": provider.strategic_cost,
                 "discover_models": provider.discover_models,
+                "last_inventory_merge_at": provider.last_inventory_merge_at,
+                "last_inventory_source": provider.last_inventory_source,
                 "models": [
                     {
                         "id": model.id,
@@ -327,6 +339,8 @@ class ProviderCatalog:
                 priority=int(item.get("priority", 50)),
                 strategic_cost=int(item.get("strategic_cost", 50)),
                 discover_models=bool(item.get("discover_models", True)),
+                last_inventory_merge_at=(item.get("last_inventory_merge_at") if isinstance(item.get("last_inventory_merge_at"), str) else None),
+                last_inventory_source=(item.get("last_inventory_source") if item.get("last_inventory_source") in {"catalog_merge", "client_discover_inventory", "legacy_discover_models"} else None),
                 models=tuple(models),
             )
             providers[provider.id] = provider

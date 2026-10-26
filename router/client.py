@@ -157,7 +157,14 @@ class ProviderClient:
                             status = "free" if prompt == 0 and completion == 0 and all(c == 0 for c in charges) else "paid"
                 except (InvalidOperation, ValueError, TypeError):
                     pass
-                billing[model_id] = status
+                # A provider inventory can contain duplicate IDs with conflicting
+                # pricing records. Never let a later free row overwrite an
+                # earlier paid/unknown row (or vice versa). The most restrictive
+                # observation wins regardless of API ordering.
+                severity = {"free": 0, "unknown": 1, "paid": 2}
+                previous = billing.get(model_id)
+                if previous is None or severity[status] > severity[previous]:
+                    billing[model_id] = status
             result.append(model_id)
         return list(dict.fromkeys(result)), billing
 

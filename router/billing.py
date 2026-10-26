@@ -66,3 +66,15 @@ def billing_endpoint_ineligibility_reason(provider_id: str, base_url: str, proto
         ):
             return None
     return "billing_unverified_endpoint"
+
+
+def account_billing_ineligibility_reason(provider_id: str) -> str | None:
+    """Deny inference until a non-billable ACCOUNT state can be proven.
+
+    Zero catalog prices, a free-tier label, a previous allowlist, or a local
+    environment variable cannot prove that provider-side overages are off.
+    No provider currently exposes verified, immutable account-level evidence
+    to this router. There is deliberately no production opt-in switch.
+    Discovery remains permitted after endpoint validation (no inference).
+    """
+    return "billing_unverified_account"

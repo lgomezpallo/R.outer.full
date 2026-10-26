@@ -154,7 +154,13 @@ class ProviderClient:
                             # a zero token price alone does not mean a free request.
                             charges = []
                             for key in ("request", "image", "web_search", "internal_reasoning", "input_cache_read", "input_cache_write"):
-                                if pricing.get(key) is not None:
+                                # An explicitly present null is not a zero
+                                # price: it is an unverified potential charge.
+                                # Missing fields mean no advertised surcharge,
+                                # but present fields require numeric evidence.
+                                if key in pricing:
+                                    if pricing[key] is None:
+                                        raise InvalidOperation
                                     charge = Decimal(str(pricing[key]))
                                     if not charge.is_finite() or charge < 0:
                                         raise InvalidOperation

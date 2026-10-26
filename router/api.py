@@ -493,6 +493,29 @@ def diagnostics_task_requirements(payload: TaskRequirementsInput):
     )
 
 
+class RankingPreviewInput(TaskRequirementsInput):
+    max_strategic_cost: int | None = None
+    limit: int = Field(default=100, ge=1, le=500)
+
+
+@app.post("/diagnostics/model-ranking", dependencies=[Depends(require_admin)])
+def diagnostics_model_ranking(payload: RankingPreviewInput):
+    """Read-only ranking: no model inference, discovery, probes or billing access."""
+    from .ranking_diagnostics import ranking_report
+    try:
+        return ranking_report(
+            router.registry.all(),
+            payload.task,
+            requirements=tuple(payload.requirements),
+            required_capabilities=frozenset(payload.required_capabilities),
+            images_present=payload.images_present,
+            max_strategic_cost=payload.max_strategic_cost,
+            limit=payload.limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @app.get("/diagnostics/model-coverage", dependencies=[Depends(require_admin)])
 def diagnostics_model_coverage(capability: str = "chat", max_strategic_cost: int | None = None):
     """Read-only model counts; does not probe providers or spend API credits."""

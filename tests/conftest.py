@@ -18,3 +18,18 @@ def allow_offline_selector_fixture(monkeypatch):
         return original(provider_id, base_url, protocol)
 
     monkeypatch.setattr(selector, "billing_endpoint_ineligibility_reason", fixture_endpoint)
+
+
+@pytest.fixture(autouse=True)
+def simulate_no_charge_account_for_legacy_offline_tests(request, monkeypatch):
+    """Keep historical mock-based ranking tests independent of account billing.
+
+    Only in pytest: pretend account authorization exists so algorithm tests
+    remain meaningful. Strict billing regression tests opt out via marker and
+    exercise the actual production default-deny behavior. There is no runtime
+    configuration or production override for this fixture.
+    """
+    if request.node.get_closest_marker("strict_billing"):
+        return
+    from router import billing
+    monkeypatch.setattr(billing, "account_billing_ineligibility_reason", lambda provider_id: None)

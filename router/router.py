@@ -41,10 +41,14 @@ class Router:
             try:
                 if hasattr(self.client, "discover_inventory"):
                     model_ids, billing_statuses = self.client.discover_inventory(registered)
+                    # An empty but successfully returned inventory revokes stale
+                    # discovery provenance and pricing; an exception does not.
+                    snapshot_received = True
                 else:
                     model_ids = self.client.discover_models(registered)
                     billing_statuses = {}
-                if model_ids:
+                    snapshot_received = bool(model_ids)
+                if snapshot_received:
                     registered.spec = self.catalog.merge_discovered_models(
                         registered.spec.id, model_ids, billing_statuses
                     )

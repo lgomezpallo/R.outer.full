@@ -57,9 +57,10 @@ def billing_ineligibility_reason(provider: RegisteredProvider, model) -> str | N
         return endpoint_block
     if model.billing_status == "paid":
         return "billing_paid"
-    if provider.spec.id == "openrouter":
-        # Even the aggregate openrouter/free endpoint needs current zero-price
-        # evidence. A legacy built-in name is not billing authorization.
+    if provider.spec.id in {"groq", "nvidia", "openrouter"}:
+        # Historical Groq/NVIDIA routing lists and model names are not proof
+        # of zero price. All three providers require explicit per-model free
+        # evidence, independently of account-level no-overage verification.
         if model.billing_status != "free":
             return "billing_paid" if model.billing_status == "paid" else "billing_unverified"
     if provider.spec.id == "nvidia" and model.id not in NVIDIA_ROUTING_ALLOWLIST:

@@ -3,6 +3,7 @@ from . import billing
 from .billing import CLOUDFLARE_PAID_ONLY, NVIDIA_ROUTING_ALLOWLIST, billing_endpoint_ineligibility_reason
 from .catalog import infer_discovered_capabilities
 from .registry import RegisteredProvider
+from .ranking_evidence import verification_tier
 from .types import Decision, RouteRequest
 
 SPECIALIZED_CAPABILITIES = frozenset({
@@ -19,17 +20,7 @@ def _provider_health_rank(provider: RegisteredProvider) -> int:
     return 2
 
 def _verification_tier(model, required: frozenset[str]) -> int:
-    if required & model.unsupported_capabilities:
-        return 9
-    verified = model.verified_capabilities
-    if required.issubset(verified):
-        return 0
-    inconclusive = {
-        item.capability for item in model.evidence if item.status == "inconclusive"
-    }
-    if required & inconclusive:
-        return 2
-    return 1
+    return verification_tier(model, required)
 
 def _specialization_penalty(model, required: frozenset[str]) -> int:
     extras = (set(model.capabilities) | set(infer_discovered_capabilities(model.id))) - set(required) - set(GENERIC_EXTRAS)
@@ -89,6 +80,10 @@ def ineligibility_reason(provider: RegisteredProvider, model, req: RouteRequest)
         if not any("\u0600" <= char <= "\u06ff" for char in task_text):
             return "language_mismatch"
     if req.required_capabilities & model.unsupported_capabilities:
+        return "unsupported_capability"
+    # A recorded unsupported capability also blocks its alias (code/coding).
+    # Conflicting verified/unsupported records never grant eligibility.
+    if verification_tier(model, req.required_capabilities) == 9:
         return "unsupported_capability"
     effective_capabilities = model.capabilities | model.verified_capabilities
     if req.required_capabilities - effective_capabilities:

@@ -460,6 +460,13 @@ def health():
         })
     return {"status": "ok", "providers": providers}
 
+@app.get("/diagnostics/inventory", dependencies=[Depends(require_admin)])
+def diagnostics_inventory():
+    """Offline snapshot only: no model discovery, probes, or inference."""
+    from .inventory import inventory_report
+    return inventory_report(router.registry.all())
+
+
 @app.get("/diagnostics/model-coverage", dependencies=[Depends(require_admin)])
 def diagnostics_model_coverage(capability: str = "chat", max_strategic_cost: int | None = None):
     """Read-only model counts; does not probe providers or spend API credits."""

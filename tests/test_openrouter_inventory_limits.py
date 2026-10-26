@@ -64,7 +64,7 @@ def test_paid_duplicate_beyond_previous_2000_row_cutoff_is_never_free(monkeypatc
     assert ids.count("vendor/duplicate") == 1
     assert statuses["vendor/duplicate"] == "paid"
     assert calls == {"get": 1, "post": 0}
-    with pytest.raises(RuntimeError, match="inference_blocked:billing_unverified_account"):
+    with pytest.raises(RuntimeError, match="inference_blocked:billing_unverified_model"):
         ProviderClient().complete(provider, "vendor/duplicate", RouteRequest("hola"))
     assert calls["post"] == 0
 

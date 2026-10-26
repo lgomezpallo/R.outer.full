@@ -243,25 +243,44 @@ class RouterStore:
             trace["fallback"] = len({a["provider"] for a in trace["attempts"]}) > 1
         return [traces[row["request_id"]] for row in ids]
 
-    def recent_model_stats(self, limit: int = 2000) -> dict[tuple[str,str], dict[str,float]]:
+    def recent_model_stats(self, limit: int = 2000) -> dict[tuple[str, str], dict]:
+        """Rebuild per-model routing observations without treating probes as answers.
+
+        Keep the most recent N *routing attempts*, not N arbitrary diagnostics.
+        Latency is the chronological success-only EWMA used by RuntimeState.
+        A failed request has no successful completion latency.
+        """
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT provider_id,model_id,success,latency_ms
+                SELECT provider_id, model_id, success, latency_ms
                 FROM request_metrics
                 WHERE provider_id IS NOT NULL AND model_id IS NOT NULL
+                  AND (phase IN ('direct', 'execute', 'plan', 'verify', 'compose')
+                       OR phase LIKE 'subtask:%')
                 ORDER BY id DESC LIMIT ?
                 """,
-                (limit,),
+                (max(1, min(int(limit), 10000)),),
             ).fetchall()
-        buckets: dict[tuple[str,str], list[sqlite3.Row]] = {}
+        buckets: dict[tuple[str, str], list[sqlite3.Row]] = {}
         for row in rows:
             buckets.setdefault((row["provider_id"], row["model_id"]), []).append(row)
-        result: dict[tuple[str,str], dict[str,float]] = {}
+        result: dict[tuple[str, str], dict] = {}
         for key, items in buckets.items():
-            success_rate = sum(int(x["success"]) for x in items) / len(items)
-            latency = sum(int(x["latency_ms"]) for x in items) / len(items)
-            result[key] = {"success_rate": success_rate, "latency_ms": latency, "samples": float(len(items))}
+            successes = sum(int(item["success"]) for item in items)
+            latency = None
+            # Rows arrive newest first; EWMA must replay oldest to newest.
+            for item in reversed(items):
+                if int(item["success"]):
+                    measured = float(item["latency_ms"])
+                    latency = measured if latency is None else latency * 0.7 + measured * 0.3
+            result[key] = {
+                "success_count": successes,
+                "failure_count": len(items) - successes,
+                "success_rate": successes / len(items),
+                "latency_ms": latency,
+                "samples": float(len(items)),
+            }
         return result
 
     def reserve_audit_budget(self, provider_id: str, daily_limit: int) -> tuple[bool, int]:
@@ -299,6 +318,8 @@ class RouterStore:
                 """SELECT provider_id, model_id, success, latency_ms, error_type
                    FROM request_metrics
                    WHERE provider_id IS NOT NULL AND model_id IS NOT NULL
+                     AND (phase IN ('direct', 'execute', 'plan', 'verify', 'compose')
+                          OR phase LIKE 'subtask:%')
                    ORDER BY id DESC LIMIT ?""",
                 (max(1, min(int(limit), 10000)),),
             ).fetchall()

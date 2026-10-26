@@ -98,11 +98,11 @@ class Router:
             if not item:
                 continue
             state = provider.state.model(model.id)
-            samples = max(1, int(item["samples"]))
-            successes = max(0, min(samples, round(float(item["success_rate"]) * samples)))
-            state.success_count = successes
-            state.failure_count = samples - successes
-            state.ewma_latency_ms = float(item["latency_ms"])
+            state.success_count = int(item["success_count"])
+            state.failure_count = int(item["failure_count"])
+            # No successful completions means latency is unknown, not zero
+            # and not the duration of an HTTP error/timeout.
+            state.ewma_latency_ms = item["latency_ms"]
 
     def process(self, req: RouteRequest) -> RouteResponse:
         return self.orchestrator.process(req)
@@ -219,6 +219,14 @@ class Router:
                             error_code=error_code,
                         )
                     if retryable and attempt_index < self.max_retries and not provider_wide:
+                        # Each failed transport attempt is a reliability sample,
+                        # even when a later retry succeeds. Do not start cooldown
+                        # until retries are exhausted. Keep in-memory observations
+                        # consistent with request_metrics after a restart.
+                        provider.state.mark_failure(
+                            decision.model, error, 0.0,
+                            failure_kind=error_type, provider_wide=False,
+                        )
                         continue
                     provider.state.mark_failure(
                         decision.model,

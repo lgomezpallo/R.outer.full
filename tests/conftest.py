@@ -31,8 +31,33 @@ def simulate_no_charge_account_for_legacy_offline_tests(request, monkeypatch):
     """
     if request.node.get_closest_marker("strict_billing"):
         return
-    from router import billing
+    from dataclasses import replace
+    from router import billing, selector
+    from router import router as router_module
+    from router.catalog import BUILTINS
+
     monkeypatch.setattr(billing, "account_billing_ineligibility_reason", lambda provider_id: None)
+
+    # Legacy routing/fallback fixtures predate per-model pricing metadata.
+    # Supply TEST-ONLY simulated free evidence for their built-in Groq/NVIDIA
+    # models. Newly discovered models remain unknown and blocked. Strict
+    # billing regressions never receive either simulated authorization.
+    legacy_models = {
+        provider.id: {model.id for model in provider.models}
+        for provider in BUILTINS if provider.id in {"groq", "nvidia"}
+    }
+    original_gate = selector.billing_ineligibility_reason
+
+    def fixture_model_pricing_gate(provider, model):
+        if (
+            model.billing_status == "unknown"
+            and model.id in legacy_models.get(provider.spec.id, ())
+        ):
+            model = replace(model, billing_status="free")
+        return original_gate(provider, model)
+
+    monkeypatch.setattr(selector, "billing_ineligibility_reason", fixture_model_pricing_gate)
+    monkeypatch.setattr(router_module, "billing_ineligibility_reason", fixture_model_pricing_gate)
 
 
 @pytest.fixture(autouse=True)

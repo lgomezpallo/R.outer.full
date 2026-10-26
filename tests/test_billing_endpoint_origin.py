@@ -63,3 +63,16 @@ def test_forged_endpoints_fail_closed_before_any_network(monkeypatch, provider_i
         ProviderClient().complete(provider, model.id, RouteRequest("hola"))
     with pytest.raises(RuntimeError, match="inference_blocked:billing_unverified_endpoint"):
         ProviderClient().probe_capability(provider, model.id, "vision")
+
+
+def test_transport_rejects_forged_origin_even_if_selector_is_bypassed(monkeypatch):
+    from router import selector
+
+    spec = next(p for p in BUILTINS if p.id == "groq")
+    model = ModelSpec("openai/gpt-oss-20b", frozenset({"chat"}), "standard")
+    forged = replace(spec, base_url="https://paid-service.invalid/v1", models=(model,))
+    provider = RegisteredProvider(forged, "fake-key", RuntimeState())
+    monkeypatch.setattr(selector, "billing_ineligibility_reason", lambda *args: None)
+    monkeypatch.setattr(httpx, "Client", lambda *a, **kw: pytest.fail("network_request"))
+    with pytest.raises(RuntimeError, match="inference_blocked:billing_unverified_endpoint"):
+        ProviderClient().complete(provider, model.id, RouteRequest("hola"))

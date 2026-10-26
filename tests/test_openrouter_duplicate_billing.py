@@ -54,9 +54,11 @@ def test_duplicate_openrouter_ids_take_most_restrictive_price(monkeypatch, rever
     provider = RegisteredProvider(spec, "offline-fixture", RuntimeState())
     client = ProviderClient()
     ids, prices = client.discover_inventory(provider)
-    assert ids == ["vendor/zero", "vendor/uncertain", "vendor/conflicting"] if reverse else [
-        "vendor/conflicting", "vendor/uncertain", "vendor/zero"
-    ]
+    expected_ids = (
+        ["vendor/zero", "vendor/uncertain", "vendor/conflicting"]
+        if reverse else ["vendor/conflicting", "vendor/uncertain", "vendor/zero"]
+    )
+    assert ids == expected_ids
     assert prices == {
         "vendor/conflicting": "paid",
         "vendor/uncertain": "unknown",

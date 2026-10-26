@@ -18,7 +18,16 @@ class ProviderClient:
         Account-level billing guarantees must be checked separately; catalog
         pricing alone is not a guarantee that an account cannot incur charges.
         """
+        from .billing import billing_endpoint_ineligibility_reason
         from .selector import billing_ineligibility_reason
+
+        # Independent transport guard: even an alternate ranking implementation
+        # or a mocked selector cannot authorize a foreign billing destination.
+        endpoint_block = billing_endpoint_ineligibility_reason(
+            provider.spec.id, provider.spec.base_url, provider.spec.protocol
+        )
+        if endpoint_block is not None:
+            raise RuntimeError(f"inference_blocked:{endpoint_block}")
 
         model_spec = next((item for item in provider.spec.models if item.id == model), None)
         if model_spec is None:

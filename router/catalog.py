@@ -186,8 +186,8 @@ class ProviderCatalog:
                 if model_id in existing:
                     old = existing[model_id]
                     # Never retain previously free status when a newer inventory
-                    # marks a model paid or unverified (OpenRouter/Cloudflare).
-                    if provider_id in {"openrouter", "cloudflare"}:
+                    # marks a model paid or unverified (all four supported providers).
+                    if provider_id in {"openrouter", "cloudflare", "groq", "nvidia"}:
                         existing[model_id] = replace(old, billing_status=billing_status)
                         old = existing[model_id]
                     # Remove falsely inferred chat from specialist-only model IDs.
@@ -202,9 +202,9 @@ class ProviderCatalog:
                         model_class="unknown",
                         priority=45,
                         strategic_cost=provider.strategic_cost,
-                        billing_status=billing_status if provider_id in {"openrouter", "cloudflare"} else "unknown",
+                        billing_status=billing_status if provider_id in {"openrouter", "cloudflare", "groq", "nvidia"} else "unknown",
                     )
-            if provider_id in {"openrouter", "cloudflare"}:
+            if provider_id in {"openrouter", "cloudflare", "groq", "nvidia"}:
                 # Catalog entries absent from the latest successful inventory
                 # remain visible, but must not inherit obsolete free approval.
                 discovered = set(model_ids)

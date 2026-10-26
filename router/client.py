@@ -10,7 +10,25 @@ def _is_cloudflare_workers_ai(base_url: str) -> bool:
     return base_url.startswith("https://api.cloudflare.com/client/v4/accounts/") and base_url.rstrip("/").endswith("/ai")
 
 class ProviderClient:
+    @staticmethod
+    def _require_billing_eligible(provider: RegisteredProvider, model: str) -> None:
+        """Last-mile guard: never send inference for an unapproved model.
+
+        Covers direct client calls and probes, not just Router's ranking.
+        Account-level billing guarantees must be checked separately; catalog
+        pricing alone is not a guarantee that an account cannot incur charges.
+        """
+        from .selector import billing_ineligibility_reason
+
+        model_spec = next((item for item in provider.spec.models if item.id == model), None)
+        if model_spec is None:
+            raise RuntimeError("inference_blocked:billing_unverified_model")
+        reason = billing_ineligibility_reason(provider, model_spec)
+        if reason is not None:
+            raise RuntimeError(f"inference_blocked:{reason}")
+
     def complete(self, provider: RegisteredProvider, model: str, req: RouteRequest) -> tuple[str, dict]:
+        self._require_billing_eligible(provider, model)
         protocol = provider.spec.protocol
         if protocol == "openai-compatible":
             return self._openai_compatible(provider, model, req)
@@ -114,6 +132,8 @@ class ProviderClient:
         return list(dict.fromkeys(result)), billing
 
     def probe_capability(self, provider: RegisteredProvider, model: str, capability: str) -> dict:
+        # Non-chat probes issue HTTP requests directly; enforce before any POST.
+        self._require_billing_eligible(provider, model)
         base = provider.spec.base_url.rstrip("/")
         if capability in {"chat", "json"}:
             task = "Reply with exactly ROUTER_OK" if capability == "chat" else 'Return exactly {"router_ok":true}'
@@ -362,6 +382,7 @@ class ProviderClient:
         return messages
 
     def _openai_compatible(self, provider: RegisteredProvider, model: str, req: RouteRequest) -> tuple[str, dict]:
+        self._require_billing_eligible(provider, model)
         payload = {"model": model, "messages": self._messages(req), "temperature": 0.2}
         base = provider.spec.base_url.rstrip("/")
         chat_path = "/v1/chat/completions" if _is_cloudflare_workers_ai(base) else "/chat/completions"
@@ -379,6 +400,7 @@ class ProviderClient:
         return text, data
 
     def _anthropic(self, provider: RegisteredProvider, model: str, req: RouteRequest) -> tuple[str, dict]:
+        self._require_billing_eligible(provider, model)
         if req.images:
             content = [{"type": "text", "text": req.task}]
             content.extend({
@@ -406,6 +428,7 @@ class ProviderClient:
         return text, data
 
     def _gemini(self, provider: RegisteredProvider, model: str, req: RouteRequest) -> tuple[str, dict]:
+        self._require_billing_eligible(provider, model)
         url = provider.spec.base_url.rstrip("/") + f"/models/{model}:generateContent"
         parts = [{"text": req.task}]
         if req.images:

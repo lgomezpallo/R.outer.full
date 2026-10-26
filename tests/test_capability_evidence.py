@@ -121,19 +121,15 @@ def test_admin_endpoint_is_offline_and_never_exposes_credentials(monkeypatch):
     monkeypatch.setenv("ROUTER_SERVICE_TOKEN", "offline-admin")
     monkeypatch.setenv("ROUTER_IACHAT_TOKEN", "offline-app")
 
-    def forbidden(*args, **kwargs):
-        pytest.fail("capability report must not perform network calls")
+    class NoInferenceClient:
+        def complete(self, *args, **kwargs):
+            pytest.fail("capability report attempted inference")
+        def probe_capability(self, *args, **kwargs):
+            pytest.fail("capability report attempted a probe")
+        def discover_inventory(self, *args, **kwargs):
+            pytest.fail("capability report attempted discovery")
 
-    import httpx
-    monkeypatch.setattr(httpx, "Client", forbidden)
-    # TestClient needs httpx.Client internally; use ASGI app route directly
-    # rather than a network client for the forbidden-call assertion.
-    monkeypatch.undo()
-    monkeypatch.setattr(api, "router", SimpleNamespace(
-        registry=SimpleNamespace(all=lambda: [provider])
-    ))
-    monkeypatch.setenv("ROUTER_SERVICE_TOKEN", "offline-admin")
-    monkeypatch.setenv("ROUTER_IACHAT_TOKEN", "offline-app")
+    monkeypatch.setattr(api.router, "client", NoInferenceClient(), raising=False)
     client = TestClient(api.app)
     assert client.get("/diagnostics/capabilities").status_code == 401
     assert client.get("/diagnostics/capabilities", headers={

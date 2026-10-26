@@ -39,6 +39,13 @@ def billing_endpoint_ineligibility_reason(provider_id: str, base_url: str, proto
 
     if protocol != "openai-compatible":
         return "billing_unverified_endpoint"
+    # urlsplit silently removes leading C0 whitespace and strips CR/LF/TAB
+    # anywhere in a URL. Do not authorize a normalized URL different from the
+    # exact configuration later passed to the HTTP client with credentials.
+    if not isinstance(base_url, str) or any(
+        ch.isspace() or ord(ch) < 0x20 or ord(ch) == 0x7f for ch in base_url
+    ):
+        return "billing_unverified_endpoint"
     try:
         parsed = urlsplit(base_url)
     except ValueError:

@@ -126,7 +126,13 @@ class ProviderClient:
         is_openrouter = base == "https://openrouter.ai/api/v1"
         # NVIDIA /models is inventory, not proof of free billing.
         # Routing authorization is enforced independently in selector.py.
-        for item in source[:2000]:
+        # Never silently truncate a provider inventory: a duplicate paid row
+        # beyond the old 2,000-item slice could be ignored after a free row,
+        # incorrectly classifying that model as free. Process the whole bounded
+        # snapshot or reject it without returning partial billing evidence.
+        if len(source) > 10_000:
+            raise ValueError("provider_inventory_too_large")
+        for item in source:
             model_id = item if isinstance(item, str) else item.get("id") if isinstance(item, dict) else None
             if not isinstance(model_id, str) or not model_id.strip() or len(model_id) > 200:
                 continue

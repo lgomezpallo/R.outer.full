@@ -1,5 +1,7 @@
 import httpx
 import pytest
+
+pytestmark = pytest.mark.usefixtures("allow_offline_selector_fixture")
 from router import Router, RouteRequest
 from router.resolve import resolve_provider, ProviderResolutionError
 

@@ -30,6 +30,7 @@ class ModelSpec:
     strategic_cost: int = 50
     evidence: tuple[CapabilityEvidence, ...] = ()
     billing_status: str = "unknown"  # free, paid, unknown; provider-reported
+    discovered_in_last_snapshot: bool = False  # observed in most recent successful inventory merge, not live
 
     @property
     def verified_capabilities(self) -> frozenset[str]:
@@ -184,7 +185,8 @@ class ProviderCatalog:
                 if billing_status not in {"free", "paid", "unknown"}:
                     billing_status = "unknown"
                 if model_id in existing:
-                    old = existing[model_id]
+                    old = replace(existing[model_id], discovered_in_last_snapshot=True)
+                    existing[model_id] = old
                     # Never retain previously free status when a newer inventory
                     # marks a model paid or unverified (all four supported providers).
                     if provider_id in {"openrouter", "cloudflare", "groq", "nvidia"}:
@@ -203,6 +205,7 @@ class ProviderCatalog:
                         priority=45,
                         strategic_cost=provider.strategic_cost,
                         billing_status=billing_status if provider_id in {"openrouter", "cloudflare", "groq", "nvidia"} else "unknown",
+                        discovered_in_last_snapshot=True,
                     )
             if provider_id in {"openrouter", "cloudflare", "groq", "nvidia"}:
                 # Catalog entries absent from the latest successful inventory
@@ -210,7 +213,7 @@ class ProviderCatalog:
                 discovered = set(model_ids)
                 for model_id, old in existing.items():
                     if model_id not in discovered:
-                        existing[model_id] = replace(old, billing_status="unknown")
+                        existing[model_id] = replace(old, billing_status="unknown", discovered_in_last_snapshot=False)
             updated = replace(provider, models=tuple(existing.values()))
             self._providers[provider_id] = updated
             self._persist_unlocked()
@@ -268,6 +271,7 @@ class ProviderCatalog:
                         "priority": model.priority,
                         "strategic_cost": model.strategic_cost,
                         "billing_status": model.billing_status,
+                        "discovered_in_last_snapshot": model.discovered_in_last_snapshot,
                         "declared_capabilities": sorted(model.capabilities),
                         "verified_capabilities": sorted(model.verified_capabilities),
                         "unsupported_capabilities": sorted(model.unsupported_capabilities),
@@ -313,6 +317,7 @@ class ProviderCatalog:
                     strategic_cost=int(model.get("strategic_cost", item.get("strategic_cost", 50))),
                     evidence=evidence,
                     billing_status=model.get("billing_status", "unknown") if model.get("billing_status") in {"free", "paid", "unknown"} else "unknown",
+                    discovered_in_last_snapshot=model.get("discovered_in_last_snapshot") is True,
                 ))
             provider = ProviderSpec(
                 id=item["id"],

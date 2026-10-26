@@ -89,7 +89,7 @@ class OfflineClient:
         return outcome, {"fixture": True}
 
 
-def test_503_retry_after_cools_only_failing_model_and_falls_back_offline():
+def test_503_retry_after_cools_only_failing_model_and_falls_back_offline(monkeypatch):
     spec = next(item for item in BUILTINS if item.id == "groq")
     catalog = ProviderCatalog(providers=(replace(spec, models=(
         ModelSpec("openai/gpt-oss-20b", frozenset({"chat"}), "standard", priority=100, billing_status="free"),
@@ -98,6 +98,14 @@ def test_503_retry_after_cools_only_failing_model_and_falls_back_offline():
     fake = OfflineClient([_http_error(503, "1800"), "fallback response"])
     router = Router(fake, max_retries=3, catalog=catalog)
     router.add_provider("groq", "offline-key", discover=False)
+    # Fix candidate order in this policy test: ranking preferences are tested
+    # independently and may legitimately prefer the other catalog model.
+    from router import router as router_module
+    from router.types import Decision
+    monkeypatch.setattr(router_module, "rank", lambda *_: [
+        Decision("groq", "openai/gpt-oss-20b", 100),
+        Decision("groq", "llama-3.3-70b-versatile", 90),
+    ])
 
     result = router.route(RouteRequest("offline test", decompose=False))
     assert result.ok

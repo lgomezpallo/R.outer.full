@@ -42,6 +42,12 @@ def billing_ineligibility_reason(provider: RegisteredProvider, model) -> str | N
     or remaining free neurons. Until an account-level no-charge guarantee can
     be verified, Cloudflare models must not generate inference requests.
     """
+    # A manually edited or legacy persisted catalog may contain duplicate
+    # model IDs with contradictory prices. Discovery deduplicates its own
+    # responses, but do not trust the persisted catalog to be canonical.
+    # Even two identical rows are ambiguous and must not enter the ranking.
+    if sum(candidate.id == model.id for candidate in provider.spec.models) > 1:
+        return "billing_ambiguous_model"
     # Check destination and protocol before accepting a catalog model.
     # This also rejects unknown providers and forged provider ids.
     endpoint_block = billing_endpoint_ineligibility_reason(

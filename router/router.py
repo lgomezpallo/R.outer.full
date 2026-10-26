@@ -37,16 +37,24 @@ class Router:
         registered = self.registry.add(ProviderCredential(name, api_key))
         if persist and self.store is not None:
             self.store.save_credential(registered.spec.id, api_key)
-        if discover and registered.spec.discover_models and hasattr(self.client, "discover_models"):
+        if discover and registered.spec.discover_models and (
+            hasattr(self.client, "discover_inventory") or hasattr(self.client, "discover_models")
+        ):
             try:
                 if hasattr(self.client, "discover_inventory"):
                     model_ids, billing_statuses = self.client.discover_inventory(registered)
+                    # An empty but successfully returned inventory revokes stale
+                    # discovery provenance and pricing; an exception does not.
+                    snapshot_received = True
+                    snapshot_source = "client_discover_inventory"
                 else:
                     model_ids = self.client.discover_models(registered)
+                    snapshot_source = "legacy_discover_models"
                     billing_statuses = {}
-                if model_ids:
+                    snapshot_received = bool(model_ids)
+                if snapshot_received:
                     registered.spec = self.catalog.merge_discovered_models(
-                        registered.spec.id, model_ids, billing_statuses
+                        registered.spec.id, model_ids, billing_statuses, source=snapshot_source
                     )
             except Exception:
                 pass

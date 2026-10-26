@@ -1,5 +1,5 @@
 from __future__ import annotations
-from .billing import CLOUDFLARE_PAID_ONLY, NVIDIA_ROUTING_ALLOWLIST
+from .billing import CLOUDFLARE_PAID_ONLY, NVIDIA_ROUTING_ALLOWLIST, billing_endpoint_ineligibility_reason
 from .catalog import infer_discovered_capabilities
 from .registry import RegisteredProvider
 from .types import Decision, RouteRequest
@@ -41,13 +41,13 @@ def billing_ineligibility_reason(provider: RegisteredProvider, model) -> str | N
     or remaining free neurons. Until an account-level no-charge guarantee can
     be verified, Cloudflare models must not generate inference requests.
     """
-    # Unknown providers cannot inherit permissive routing defaults.
-    if provider.spec.id not in {"groq", "nvidia", "cloudflare", "openrouter"}:
-        # Existing offline selector fixtures use a reserved, non-routable URL.
-        # Never permit a custom provider pointing at an actual network host.
-        if provider.spec.base_url == "https://example.invalid/v1":
-            return None
-        return "billing_unverified"
+    # Check destination and protocol before accepting a catalog model.
+    # This also rejects unknown providers and forged provider ids.
+    endpoint_block = billing_endpoint_ineligibility_reason(
+        provider.spec.id, provider.spec.base_url, provider.spec.protocol
+    )
+    if endpoint_block is not None:
+        return endpoint_block
     if provider.spec.id == "openrouter":
         # Even the aggregate openrouter/free endpoint needs current zero-price
         # evidence. A legacy built-in name is not billing authorization.

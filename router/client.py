@@ -32,6 +32,12 @@ class ProviderClient:
         model_spec = next((item for item in provider.spec.models if item.id == model), None)
         if model_spec is None:
             raise RuntimeError("inference_blocked:billing_unverified_model")
+        # Independent account-level guard: a bypassed/mocked selector must not
+        # turn a free catalog price into permission to incur account overages.
+        from . import billing
+        account_block = billing.account_billing_ineligibility_reason(provider.spec.id)
+        if account_block is not None:
+            raise RuntimeError(f"inference_blocked:{account_block}")
         reason = billing_ineligibility_reason(provider, model_spec)
         if reason is not None:
             raise RuntimeError(f"inference_blocked:{reason}")

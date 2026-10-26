@@ -46,13 +46,15 @@ class Router:
                     # An empty but successfully returned inventory revokes stale
                     # discovery provenance and pricing; an exception does not.
                     snapshot_received = True
+                    snapshot_source = "client_discover_inventory"
                 else:
                     model_ids = self.client.discover_models(registered)
+                    snapshot_source = "legacy_discover_models"
                     billing_statuses = {}
                     snapshot_received = bool(model_ids)
                 if snapshot_received:
                     registered.spec = self.catalog.merge_discovered_models(
-                        registered.spec.id, model_ids, billing_statuses
+                        registered.spec.id, model_ids, billing_statuses, source=snapshot_source
                     )
             except Exception:
                 pass

@@ -5,6 +5,7 @@ from uuid import uuid4
 import httpx
 from .catalog import ProviderCatalog
 from .client import ProviderClient
+from .fallback_policy import retry_after_seconds
 from .orchestrator import Orchestrator
 from .registry import ProviderRegistry, RegisteredProvider
 from .selector import billing_ineligibility_reason, rank
@@ -136,6 +137,16 @@ class Router:
                 error_type, cooldown = "rejected", 10 * 60.0
             else:
                 error_type, cooldown = "invalid", 2 * 60.0
+
+            # A provider-supplied quota/service recovery window takes priority
+            # over the generic cooldown. Never immediately retry the same
+            # model when a 503 explicitly asks us to wait. The next ranked
+            # model can still be tried, subject to its independent billing gate.
+            if status in {429, 503}:
+                retry_after = retry_after_seconds(exc.response.headers.get("retry-after"))
+                if retry_after is not None and retry_after > 0:
+                    cooldown = max(cooldown, retry_after)
+                    retryable = False
 
         return retryable, provider_wide, error_type, error_code, cooldown
 

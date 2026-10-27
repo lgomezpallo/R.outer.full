@@ -349,6 +349,19 @@ class RouterStore:
             )
             return "reserved", used + 1
 
+    def audit_claimed_models(self, provider_id: str, capability: str) -> set[str]:
+        """Read durable audit claims without reserving slots or calling providers.
+
+        A claimed model remains unavailable for automatic re-audit even when
+        evidence is missing after a failed or interrupted attempt.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT model_id FROM audit_model_claims WHERE provider_id=? AND capability=?",
+                (provider_id, capability),
+            ).fetchall()
+        return {row["model_id"] for row in rows}
+
     def audit_budget_used(self) -> dict[str, int]:
         from datetime import datetime, timezone
         today = datetime.now(timezone.utc).date().isoformat()

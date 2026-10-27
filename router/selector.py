@@ -174,7 +174,13 @@ def _score(
     verification_tier = _verification_tier(model, req.required_capabilities)
     # Task hints affect preference, never eligibility or required capabilities.
     # In particular, an unverified hint cannot authorize a model or account.
-    scoring_needs = req.required_capabilities | advisory
+    supported_advisory = frozenset(
+        cap for cap in advisory
+        if (cap in model.capabilities or cap in model.verified_capabilities)
+        and cap not in model.unsupported_capabilities
+        and _verification_tier(model, frozenset({cap})) != 9
+    )
+    scoring_needs = req.required_capabilities | supported_advisory
     specialization_penalty = _specialization_penalty(model, scoring_needs)
     # Preserve specialized capabilities only when the current task does not need them.
     # Smaller pools incur larger penalties; declared availability is provisional.
@@ -207,11 +213,7 @@ def _score(
     # Prefer a suitable specialist for a clear task, without making a hint
     # mandatory. Recorded unsupported/conflicting evidence never earns a bonus.
     advisory_bonus = 0.0
-    for capability in sorted(advisory):
-        if capability in model.unsupported_capabilities:
-            continue
-        if capability not in model.capabilities and capability not in model.verified_capabilities:
-            continue
+    for capability in sorted(supported_advisory):
         tier = _verification_tier(model, frozenset({capability}))
         advisory_bonus += {0: 500.0, 1: 120.0}.get(tier, 0.0)
     score += advisory_bonus

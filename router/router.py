@@ -1,4 +1,5 @@
 from __future__ import annotations
+from dataclasses import replace
 import json
 from time import perf_counter
 from uuid import uuid4
@@ -8,7 +9,7 @@ from .client import ProviderClient
 from .fallback_policy import retry_after_seconds
 from .orchestrator import Orchestrator
 from .registry import ProviderRegistry, RegisteredProvider
-from .selector import billing_ineligibility_reason, ineligibility_reason, rank
+from .selector import billing_ineligibility_reason, effective_required_capabilities, ineligibility_reason, rank
 from .storage import RouterStore
 from .types import Attempt, ProviderCredential, RouteRequest, RouteResponse
 
@@ -151,6 +152,11 @@ class Router:
         return retryable, provider_wide, error_type, error_code, cooldown
 
     def route(self, req: RouteRequest, phase: str = "execute") -> RouteResponse:
+        # Keep direct Python callers as safe as /route: an image cannot be
+        # silently dispatched to a text-only model or lose its modality on fallback.
+        required = effective_required_capabilities(req)
+        if required != req.required_capabilities:
+            req = replace(req, required_capabilities=required)
         decisions = rank(self.registry.all(), req)
         if not decisions:
             return RouteResponse(False, None, None, None, [], [], "no_eligible_provider")

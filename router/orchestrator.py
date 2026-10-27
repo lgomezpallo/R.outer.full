@@ -270,6 +270,10 @@ class Orchestrator:
                     ):
                         from dataclasses import replace
                         retry_req = replace(subreq, max_strategic_cost=retry_ceiling)
+                        # Keep the first routing decision/attempt trace: replacing
+                        # the response must not erase the failed cheap-first pass.
+                        all_attempts.extend(result.attempts)
+                        all_decisions.extend(result.decisions)
                         result = self.router.route(retry_req, phase=f"subtask:{subtask.role}")
                 all_attempts.extend(result.attempts)
                 all_decisions.extend(result.decisions)

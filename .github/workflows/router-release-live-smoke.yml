@@ -1,12 +1,6 @@
 name: Live-provider smoke of frozen Router release (no deployment)
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "scripts/router_release_live_smoke.py"
-      - "tests/test_router_release_live_smoke.py"
-      - ".github/workflows/router-release-live-smoke.yml"
   workflow_dispatch:
 
 permissions:
@@ -29,6 +23,9 @@ jobs:
       - run: docker build -t router-release-live-smoke-ci .
 
   oracle-live-smoke:
+    # Stage 8 offline freeze: never connect to Oracle or run live inference.
+    # Re-enabling requires a separately reviewed, explicitly authorized change.
+    if: ${{ false }}
     needs: tests
     runs-on: ubuntu-latest
     timeout-minutes: 12

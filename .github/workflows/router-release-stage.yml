@@ -1,12 +1,6 @@
 name: Stage frozen Router release on Oracle (no production switch)
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "scripts/router_release_stage.py"
-      - "tests/test_router_release_stage.py"
-      - ".github/workflows/router-release-stage.yml"
   workflow_dispatch:
 
 permissions:
@@ -29,6 +23,9 @@ jobs:
       - run: docker build -t router-release-stage-ci .
 
   oracle-stage:
+    # Stage 8 offline freeze: never connect to Oracle or run live inference.
+    # Re-enabling requires a separately reviewed, explicitly authorized change.
+    if: ${{ false }}
     needs: tests
     runs-on: ubuntu-latest
     timeout-minutes: 12

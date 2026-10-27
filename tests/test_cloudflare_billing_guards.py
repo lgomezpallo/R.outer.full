@@ -182,6 +182,10 @@ def test_budgeted_audit_does_not_reserve_budget_for_unverified_models(monkeypatc
         def audit_budget_used(self):
             return {}
 
+        def audit_claimed_models(self, *args):
+            # Synthetic store: no persisted claims, and no provider calls.
+            return set()
+
         def reserve_audit_model(self, *args):
             raise AssertionError("blocked_model_consumed_audit_budget")
 

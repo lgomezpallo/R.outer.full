@@ -630,7 +630,12 @@ def audit_progress():
         if provider.spec.id not in AUDIT_DAILY_LIMITS:
             continue
         models = provider.spec.models
-        pending_candidates[provider.spec.id] = len(_chat_audit_candidates(provider))
+        # Claims survive failures and restarts; an unverified claimed model
+        # must not be advertised as available for another external probe.
+        claimed = store.audit_claimed_models(provider.spec.id, "chat")
+        pending_candidates[provider.spec.id] = sum(
+            model.id not in claimed for model in _chat_audit_candidates(provider)
+        )
         # These are CHAT audit counters, not evidence from unrelated
         # capabilities. Use the same evidence policy as model ranking:
         # legacy/incomplete records do not verify a capability, and a

@@ -63,6 +63,8 @@ def _install_offline_fixtures(monkeypatch, provider, billing):
     ))
     monkeypatch.setattr(api, "store", SimpleNamespace(
         audit_budget_used=lambda: {"groq": 0},
+
+        audit_claimed_models=lambda *_: set(),
         reserve_audit_model=fake_reserve,
     ))
     return api, calls, reservations

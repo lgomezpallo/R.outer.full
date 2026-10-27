@@ -45,6 +45,8 @@ def test_audit_progress_uses_chat_evidence_and_excludes_conflicts(monkeypatch):
     ))
     monkeypatch.setattr(api, "store", SimpleNamespace(
         audit_budget_used=lambda: {"groq": 0},
+
+        audit_claimed_models=lambda *_: set(),
     ))
 
     response = TestClient(api.app).get("/audit/progress")

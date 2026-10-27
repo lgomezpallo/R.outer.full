@@ -66,7 +66,7 @@ def test_remote_action_cannot_move_into_unfrozen_tests_job():
 
 def test_automatic_ci_cannot_add_arbitrary_http_probe():
     sources = _baseline()
-    sources["ci.yml"] += "      - run: curl -X POST https://api.groq.com/openai/v1/chat/completions\\n"
+    sources["ci.yml"] += "      - run: curl -X POST https://api.groq.com/openai/v1/chat/completions\n"
     assert any("unreviewed workflow content change" in p for p in audit_workflows(sources))
 
 
@@ -78,5 +78,9 @@ def test_approved_job_cannot_change_existing_command():
 
 def test_manual_tests_job_cannot_gain_hidden_provider_call():
     sources = _baseline()
-    sources["router-release-stage.yml"] += "\\n# unreviewed workflow edit\\n"
+    sources["router-release-stage.yml"] = sources["router-release-stage.yml"].replace(
+        "      - run: pytest -q",
+        "      - run: pytest -q\n      - run: curl -X POST https://api.nvidia.com/v1/chat/completions",
+        1,
+    )
     assert any("unreviewed workflow content change" in p for p in audit_workflows(sources))

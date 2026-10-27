@@ -456,17 +456,51 @@ class RouterStore:
         attempts = sum(len(items) for items in requests.values())
         successes = sum(sum(1 for item in items if item[2]) for items in requests.values())
         request_successes = sum(1 for items in requests.values() if items[-1][2])
+        # A retry/fallback is a *transition after a failed attempt*, not
+        # merely the presence of repeated or distinct models somewhere in
+        # the request. In particular A -> B -> A is not a same-model retry.
+        # Keep the existing model-fallback key inclusive of provider changes
+        # for backwards compatibility; expose narrower categories separately.
+        transitions = {
+            request_id: [
+                (previous, current)
+                for previous, current in zip(items, items[1:])
+                if not previous[2]
+            ]
+            for request_id, items in requests.items()
+        }
+        def same_model_retry(previous, current):
+            return previous[:2] == current[:2]
+
+        def model_fallback(previous, current):
+            return previous[:2] != current[:2]
+
+        def provider_fallback(previous, current):
+            return previous[0] != current[0]
+
         retry_requests = sum(
-            1 for items in requests.values()
-            if len({(provider, model) for provider, model, _ in items}) < len(items)
+            any(same_model_retry(before, after) for before, after in pairs)
+            for pairs in transitions.values()
         )
         model_fallbacks = sum(
-            1 for items in requests.values()
-            if len({(provider, model) for provider, model, _ in items}) > 1
+            any(model_fallback(before, after) for before, after in pairs)
+            for pairs in transitions.values()
         )
         provider_fallbacks = sum(
-            1 for items in requests.values()
-            if len({provider for provider, _, _ in items}) > 1
+            any(provider_fallback(before, after) for before, after in pairs)
+            for pairs in transitions.values()
+        )
+        same_provider_model_switches = sum(
+            any(before[0] == after[0] and before[1] != after[1] for before, after in pairs)
+            for pairs in transitions.values()
+        )
+        provider_only_switches = sum(
+            any(before[0] != after[0] and before[1] == after[1] for before, after in pairs)
+            for pairs in transitions.values()
+        )
+        retry_transitions = sum(
+            same_model_retry(before, after)
+            for pairs in transitions.values() for before, after in pairs
         )
         recovered = sum(
             1 for items in requests.values()
@@ -482,6 +516,9 @@ class RouterStore:
             "requests_with_same_model_retry": retry_requests,
             "requests_with_model_fallback": model_fallbacks,
             "requests_with_provider_fallback": provider_fallbacks,
+            "requests_with_same_provider_model_switch": same_provider_model_switches,
+            "requests_with_provider_only_fallback": provider_only_switches,
+            "same_model_retry_transitions": retry_transitions,
             "requests_recovered_after_failure": recovered,
             "attempt_success_rate": round(successes / attempts, 4) if attempts else None,
             "request_success_rate": round(request_successes / count, 4) if count else None,

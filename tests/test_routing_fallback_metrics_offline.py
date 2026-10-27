@@ -42,6 +42,9 @@ def test_fallback_report_distinguishes_retry_model_and_provider(tmp_path):
     assert report["requests_with_same_model_retry"] == 1
     assert report["requests_with_model_fallback"] == 2
     assert report["requests_with_provider_fallback"] == 1
+    assert report["requests_with_same_provider_model_switch"] == 1
+    assert report["requests_with_provider_only_fallback"] == 0
+    assert report["same_model_retry_transitions"] == 1
     assert report["requests_recovered_after_failure"] == 3
     assert report["attempt_success_rate"] == 0.5
     assert report["request_success_rate"] == 0.8
@@ -86,3 +89,53 @@ def test_fallback_endpoint_is_admin_only_and_contains_no_content(monkeypatch, tm
     assert "admin-only-token" not in response.text
     assert "iachat-only-token" not in response.text
     assert "offline-fixture" not in response.text
+
+
+def test_nonadjacent_return_to_model_is_not_a_same_model_retry(tmp_path):
+    store = RouterStore(tmp_path / "router.db")
+    _metric(store, "return-to-a", 1, "groq", "a", False)
+    _metric(store, "return-to-a", 2, "groq", "b", False)
+    _metric(store, "return-to-a", 3, "groq", "a", True)
+    report = store.routing_fallback_report()
+    assert report["requests_with_same_model_retry"] == 0
+    assert report["same_model_retry_transitions"] == 0
+    assert report["requests_with_model_fallback"] == 1
+    assert report["requests_with_same_provider_model_switch"] == 1
+    assert report["requests_recovered_after_failure"] == 1
+
+
+def test_provider_only_fallback_is_not_a_same_provider_model_switch(tmp_path):
+    store = RouterStore(tmp_path / "router.db")
+    _metric(store, "provider-only", 1, "groq", "shared-id", False)
+    _metric(store, "provider-only", 2, "nvidia", "shared-id", True)
+    report = store.routing_fallback_report()
+    assert report["requests_with_provider_fallback"] == 1
+    assert report["requests_with_provider_only_fallback"] == 1
+    assert report["requests_with_same_provider_model_switch"] == 0
+    # The legacy key means any changed provider/model pair.
+    assert report["requests_with_model_fallback"] == 1
+    assert report["requests_with_same_model_retry"] == 0
+
+
+def test_repeated_failed_model_attempts_count_transitions_once_per_request(tmp_path):
+    store = RouterStore(tmp_path / "router.db")
+    _metric(store, "triple", 1, "groq", "a", False)
+    _metric(store, "triple", 2, "groq", "a", False)
+    _metric(store, "triple", 3, "groq", "a", True)
+    report = store.routing_fallback_report()
+    assert report["requests_with_same_model_retry"] == 1
+    assert report["same_model_retry_transitions"] == 2
+    assert report["requests_with_model_fallback"] == 0
+    assert report["requests_recovered_after_failure"] == 1
+
+
+def test_successful_attempt_does_not_trigger_fallback_transition(tmp_path):
+    store = RouterStore(tmp_path / "router.db")
+    # Synthetic corrupted/overlapping records must not invent a fallback
+    # after an already successful attempt.
+    _metric(store, "success-first", 1, "groq", "a", True)
+    _metric(store, "success-first", 2, "nvidia", "b", True)
+    report = store.routing_fallback_report()
+    assert report["requests_with_model_fallback"] == 0
+    assert report["requests_with_provider_fallback"] == 0
+    assert report["requests_with_same_model_retry"] == 0

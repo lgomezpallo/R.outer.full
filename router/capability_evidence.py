@@ -75,26 +75,60 @@ def _dimension(model: ModelSpec, capabilities: tuple[str, ...]) -> dict:
     }
 
 
+# A summary of catalog model/dimension pairs is useful when a provider
+# advertises hundreds of models. These are *evidence labels*, not a benchmark.
+EVIDENCE_STATUSES = (
+    "recorded_verified", "recorded_unsupported", "conflicting_records",
+    "recorded_inconclusive", "legacy_or_incomplete_evidence",
+    "declared_only", "inferred_from_name_only", "unknown",
+)
+
+
+def _empty_matrix() -> dict[str, dict[str, int]]:
+    return {
+        dimension: {status: 0 for status in EVIDENCE_STATUSES}
+        for dimension in DIMENSIONS
+    }
+
+
+def _accumulate(matrix: dict, dimensions: dict) -> None:
+    for dimension, result in dimensions.items():
+        matrix[dimension][result["status"]] += 1
+
+
 def capability_report(providers: list[RegisteredProvider]) -> dict:
-    """Read existing catalog snapshots only; zero HTTP and zero inference."""
+    """Read local catalog only; count evidence, not measured model quality.
+
+    Matrix cells count catalog model/dimension pairs. The free-price subset is
+    provider-reported, NOT a claim of free account usage or routing approval.
+    """
     registered = {provider.spec.id: provider for provider in providers}
+    totals = _empty_matrix()
+    free_totals = _empty_matrix()
     rows = []
     for provider_id in SUPPORTED_PROVIDERS:
         provider = registered.get(provider_id)
         models = []
+        counts = _empty_matrix()
+        free_counts = _empty_matrix()
         if provider:
             for model in provider.spec.models:
-                models.append({
-                    "id": model.id,
-                    "dimensions": {
-                        dimension: _dimension(model, capabilities)
-                        for dimension, capabilities in DIMENSIONS.items()
-                    },
-                })
+                dimensions = {
+                    dimension: _dimension(model, capabilities)
+                    for dimension, capabilities in DIMENSIONS.items()
+                }
+                models.append({"id": model.id, "dimensions": dimensions})
+                _accumulate(counts, dimensions)
+                _accumulate(totals, dimensions)
+                if model.billing_status == "free":
+                    _accumulate(free_counts, dimensions)
+                    _accumulate(free_totals, dimensions)
         rows.append({
             "provider": provider_id,
             "configured": provider is not None,
             "models": models,
+            "dimension_status_counts": counts,
+            "reported_free_price_dimension_status_counts": free_counts,
         })
     return {
         "scope": "configured_providers_local_catalog_only",
@@ -102,6 +136,10 @@ def capability_report(providers: list[RegisteredProvider]) -> dict:
         "recorded_evidence_independently_verified": False,
         "declared_or_name_inferred_is_not_verified": True,
         "account_billing_verified": False,
+        "summary_unit": "catalog_model_dimension_pairs",
+        "reported_free_price_is_not_no_charge_guarantee": True,
         "dimensions": list(DIMENSIONS),
+        "dimension_status_counts": totals,
+        "reported_free_price_dimension_status_counts": free_totals,
         "providers": rows,
     }

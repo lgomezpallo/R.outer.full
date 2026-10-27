@@ -630,7 +630,12 @@ def audit_progress():
         if provider.spec.id not in AUDIT_DAILY_LIMITS:
             continue
         models = provider.spec.models
-        pending_candidates[provider.spec.id] = len(_chat_audit_candidates(provider))
+        # Claims survive failures and restarts; an unverified claimed model
+        # must not be advertised as available for another external probe.
+        claimed = store.audit_claimed_models(provider.spec.id, "chat")
+        pending_candidates[provider.spec.id] = sum(
+            model.id not in claimed for model in _chat_audit_candidates(provider)
+        )
         # These are CHAT audit counters, not evidence from unrelated
         # capabilities. Use the same evidence policy as model ranking:
         # legacy/incomplete records do not verify a capability, and a
@@ -662,7 +667,7 @@ def audit_progress():
         },
         "daily_budget": {p: {"limit": limit, "used": used.get(p, 0)}
                          for p, limit in AUDIT_DAILY_LIMITS.items()},
-        "note": "Verificación por capacidad, no garantía de calidad. Límites internos, no cuotas oficiales de proveedores. Esta instantánea no es atómica, puede cambiar por concurrencia y no habilita inferencia. El presupuesto diario se reinicia a las 00:00 UTC.",
+        "note": "Verificación por capacidad, no garantía de calidad. Límites internos, no cuotas oficiales de proveedores. Esta instantánea no es atómica, puede cambiar por concurrencia y no habilita inferencia. Las reservas por modelo persisten y no se vuelven a ofrecer como pendientes. El presupuesto diario se reinicia a las 00:00 UTC.",
     }
 
 @app.get("/audit/budget", dependencies=[Depends(require_admin)])
@@ -699,7 +704,7 @@ def audit_step(payload: AuditStepInput):
         results.append(router.verify_capability(provider_id, model.id, "chat"))
     return {
         "provider": provider_id, "results": results,
-        "pending_chat": len(candidates) - len(results),
+        "pending_chat": max(0, len(candidates) - len(results) - skipped_claimed),
         "skipped_claimed": skipped_claimed,
         "daily_limit": limit, "used_today": used,
         "note": "Reservas internas atomicas por modelo y dia. Las reclamaciones persisten ante fallos para evitar reintentos automaticos; no autorizan inferencia ni facturacion.",

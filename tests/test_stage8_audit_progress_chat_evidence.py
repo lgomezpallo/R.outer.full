@@ -45,6 +45,8 @@ def test_audit_progress_uses_chat_evidence_and_excludes_conflicts(monkeypatch):
     ))
     monkeypatch.setattr(api, "store", SimpleNamespace(
         audit_budget_used=lambda: {"groq": 0},
+
+        audit_claimed_models=lambda *_: set(),
     ))
 
     response = TestClient(api.app).get("/audit/progress")
@@ -78,7 +80,7 @@ def test_audit_progress_does_not_promote_incomplete_chat_evidence(monkeypatch):
     monkeypatch.setattr(api, "router", SimpleNamespace(
         registry=SimpleNamespace(all=lambda: [provider]),
     ))
-    monkeypatch.setattr(api, "store", SimpleNamespace(audit_budget_used=lambda: {}))
+    monkeypatch.setattr(api, "store", SimpleNamespace(audit_budget_used=lambda: {}, audit_claimed_models=lambda *_: set()))
     counts = TestClient(api.app).get("/audit/progress").json()["platforms"]["groq"]
     assert counts["verified_routes"] == 0
     assert counts["untested_routes"] == 1

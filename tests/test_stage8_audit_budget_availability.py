@@ -30,11 +30,13 @@ def test_audit_progress_caps_pending_candidates_by_budget(monkeypatch, used, exp
     monkeypatch.setattr(
         api, "store", SimpleNamespace(
             audit_budget_used=lambda: {"groq": used},
+
+            audit_claimed_models=lambda *_: set(),
             reserve_audit_budget=unexpected_external_operation,
         ),
     )
     monkeypatch.setattr(
-        api, "_chat_audit_candidates", lambda _provider: [object(), object(), object()],
+        api, "_chat_audit_candidates", lambda _provider: [SimpleNamespace(id=f"synthetic-{i}") for i in range(3)],
     )
 
     response = TestClient(api.app).get("/audit/progress")

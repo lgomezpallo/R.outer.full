@@ -25,9 +25,10 @@ def test_oracle_jobs_fail_closed_in_offline_freeze(filename, job):
     source = (WORKFLOWS / filename).read_text(encoding="utf-8")
     marker = f"  {job}:\n"
     assert source.count(marker) == 1, f"{filename}: missing or duplicate job"
-    job_body = source.split(marker, 1)[1].split("\n  ", 1)[0]
+    job_body = source.split(marker, 1)[1]
+    job_header = job_body.split("    needs:", 1)[0]
     # Literal GitHub Actions expression. Do not replace with a user-controlled input.
-    assert "    if: ${{ false }}" in job_body, f"{filename}: Oracle job is enabled"
+    assert "    if: ${{ false }}" in job_header, f"{filename}: Oracle job is enabled"
     assert "ssh -i " in job_body, f"{filename}: review changed remote execution path"
 
 

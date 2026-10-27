@@ -626,6 +626,7 @@ def audit_progress():
 
     counts = {}
     pending_candidates = {}
+    orphaned_claims = {}
     for provider in router.registry.all():
         if provider.spec.id not in AUDIT_DAILY_LIMITS:
             continue
@@ -633,6 +634,10 @@ def audit_progress():
         # Claims survive failures and restarts; an unverified claimed model
         # must not be advertised as available for another external probe.
         claimed = store.audit_claimed_models(provider.spec.id, "chat")
+        # A retired model may later reappear with the same ID. Its durable
+        # claim must survive catalog refreshes and remain visible in diagnostics.
+        catalog_ids = {model.id for model in models}
+        orphaned_claims[provider.spec.id] = len(claimed - catalog_ids)
         pending_candidates[provider.spec.id] = sum(
             model.id not in claimed for model in _chat_audit_candidates(provider)
         )
@@ -659,6 +664,9 @@ def audit_progress():
         # Unlike untested_routes, this is exactly the currently actionable
         # candidate set for /audit/step, subject to remaining daily budget.
         "eligible_pending_chat_audit_candidates": pending_candidates,
+        # Diagnostic only: claims absent from today's catalog are retained,
+        # not deleted or silently made eligible on model reintroduction.
+        "retired_or_missing_chat_audit_claims": orphaned_claims,
         # Snapshot only: a concurrent audit can consume the remaining slots.
         # An internal daily budget is NOT permission for external inference.
         "budget_limited_pending_chat_candidates": {
@@ -667,7 +675,7 @@ def audit_progress():
         },
         "daily_budget": {p: {"limit": limit, "used": used.get(p, 0)}
                          for p, limit in AUDIT_DAILY_LIMITS.items()},
-        "note": "Verificación por capacidad, no garantía de calidad. Límites internos, no cuotas oficiales de proveedores. Esta instantánea no es atómica, puede cambiar por concurrencia y no habilita inferencia. Las reservas por modelo persisten y no se vuelven a ofrecer como pendientes. El presupuesto diario se reinicia a las 00:00 UTC.",
+        "note": "Verificación por capacidad, no garantía de calidad. Límites internos, no cuotas oficiales de proveedores. Esta instantánea no es atómica, puede cambiar por concurrencia y no habilita inferencia. Las reservas por modelo persisten, incluso si el catálogo retira un modelo, y no se vuelven a ofrecer como pendientes. El presupuesto diario se reinicia a las 00:00 UTC.",
     }
 
 @app.get("/audit/budget", dependencies=[Depends(require_admin)])
@@ -689,6 +697,9 @@ def audit_step(payload: AuditStepInput):
     candidates.sort(key=lambda m: (len(m.capabilities - {"chat", "json", "fast"}), m.strategic_cost, m.id))
     results = []
     skipped_claimed = 0
+    # Include claims beyond max_calls: stopping early must not advertise
+    # already-reserved models as pending just because they were not visited.
+    claimed_or_attempted = store.audit_claimed_models(provider_id, "chat")
     used = store.audit_budget_used().get(provider_id, 0)
     # The candidate list is a snapshot: concurrent requests can see the same
     # model before either records evidence. Claim model + daily slot together.
@@ -698,13 +709,15 @@ def audit_step(payload: AuditStepInput):
         outcome, used = store.reserve_audit_model(provider_id, model.id, "chat", limit)
         if outcome == "already_claimed":
             skipped_claimed += 1
+            claimed_or_attempted.add(model.id)
             continue
         if outcome == "budget_exhausted":
             break
+        claimed_or_attempted.add(model.id)
         results.append(router.verify_capability(provider_id, model.id, "chat"))
     return {
         "provider": provider_id, "results": results,
-        "pending_chat": max(0, len(candidates) - len(results) - skipped_claimed),
+        "pending_chat": sum(model.id not in claimed_or_attempted for model in candidates),
         "skipped_claimed": skipped_claimed,
         "daily_limit": limit, "used_today": used,
         "note": "Reservas internas atomicas por modelo y dia. Las reclamaciones persisten ante fallos para evitar reintentos automaticos; no autorizan inferencia ni facturacion.",

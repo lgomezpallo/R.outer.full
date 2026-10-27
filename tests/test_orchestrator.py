@@ -139,7 +139,8 @@ class BudgetCeilingRouter(FakeRouter):
         if phase.startswith("subtask:"):
             if req.max_strategic_cost is not None:
                 return RouteResponse(False, None, None, None, [], [], "no_eligible_provider")
-            assert req.required_capabilities == frozenset({"long_context"})
+            # Subtasks must retain the caller's hard chat capability too.
+            assert req.required_capabilities == frozenset({"chat", "long_context"})
             return RouteResponse(True, "SPECIALIZED_OK", "p", "m", [], [])
         return RouteResponse(True, "DONE", "p", "m", [], [])
 

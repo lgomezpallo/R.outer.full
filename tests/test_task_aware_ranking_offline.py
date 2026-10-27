@@ -1,6 +1,10 @@
 """Offline task-aware model ranking: hints steer preference, never authorize calls."""
 from dataclasses import replace
 
+import pytest
+
+pytestmark = pytest.mark.strict_billing
+
 from router.catalog import BUILTINS, CapabilityEvidence, ModelSpec
 from router.registry import RegisteredProvider
 from router.selector import rank

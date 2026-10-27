@@ -662,7 +662,7 @@ def audit_progress():
         },
         "daily_budget": {p: {"limit": limit, "used": used.get(p, 0)}
                          for p, limit in AUDIT_DAILY_LIMITS.items()},
-        "note": "Verificación por capacidad, no garantía de calidad. El presupuesto diario se reinicia a las 00:00 UTC.",
+        "note": "Verificación por capacidad, no garantía de calidad. Límites internos, no cuotas oficiales de proveedores. Esta instantánea no es atómica, puede cambiar por concurrencia y no habilita inferencia. El presupuesto diario se reinicia a las 00:00 UTC.",
     }
 
 @app.get("/audit/budget", dependencies=[Depends(require_admin)])

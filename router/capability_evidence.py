@@ -96,6 +96,36 @@ def _accumulate(matrix: dict, dimensions: dict) -> None:
         matrix[dimension][result["status"]] += 1
 
 
+# Catalog inventory counters describe local entries, not live availability.
+# Duplicate IDs and stale free-price labels must remain visible to operators.
+INVENTORY_FIELDS = (
+    "catalog_entries",
+    "distinct_model_ids",
+    "duplicate_model_entries",
+    "reported_free_price_entries",
+    "reported_paid_price_entries",
+    "unverified_price_entries",
+    "observed_in_last_snapshot_entries",
+    "reported_free_price_not_in_last_snapshot_entries",
+)
+
+
+def _inventory_counts(models: tuple[ModelSpec, ...]) -> dict[str, int]:
+    ids = {model.id for model in models}
+    return {
+        "catalog_entries": len(models),
+        "distinct_model_ids": len(ids),
+        "duplicate_model_entries": len(models) - len(ids),
+        "reported_free_price_entries": sum(m.billing_status == "free" for m in models),
+        "reported_paid_price_entries": sum(m.billing_status == "paid" for m in models),
+        "unverified_price_entries": sum(m.billing_status not in {"free", "paid"} for m in models),
+        "observed_in_last_snapshot_entries": sum(m.discovered_in_last_snapshot for m in models),
+        "reported_free_price_not_in_last_snapshot_entries": sum(
+            m.billing_status == "free" and not m.discovered_in_last_snapshot for m in models
+        ),
+    }
+
+
 def capability_report(providers: list[RegisteredProvider]) -> dict:
     """Read local catalog only; count evidence, not measured model quality.
 
@@ -105,12 +135,16 @@ def capability_report(providers: list[RegisteredProvider]) -> dict:
     registered = {provider.spec.id: provider for provider in providers}
     totals = _empty_matrix()
     free_totals = _empty_matrix()
+    inventory_totals = {field: 0 for field in INVENTORY_FIELDS}
     rows = []
     for provider_id in SUPPORTED_PROVIDERS:
         provider = registered.get(provider_id)
         models = []
         counts = _empty_matrix()
         free_counts = _empty_matrix()
+        inventory = _inventory_counts(provider.spec.models if provider else ())
+        for field in INVENTORY_FIELDS:
+            inventory_totals[field] += inventory[field]
         if provider:
             for model in provider.spec.models:
                 dimensions = {
@@ -127,6 +161,9 @@ def capability_report(providers: list[RegisteredProvider]) -> dict:
             "provider": provider_id,
             "configured": provider is not None,
             "models": models,
+            "inventory_counts": inventory,
+            "last_inventory_merge_at": provider.spec.last_inventory_merge_at if provider else None,
+            "last_inventory_source": provider.spec.last_inventory_source if provider else None,
             "dimension_status_counts": counts,
             "reported_free_price_dimension_status_counts": free_counts,
         })
@@ -137,6 +174,9 @@ def capability_report(providers: list[RegisteredProvider]) -> dict:
         "declared_or_name_inferred_is_not_verified": True,
         "account_billing_verified": False,
         "summary_unit": "catalog_model_dimension_pairs",
+        "inventory_unit": "local_catalog_entries_not_live_models",
+        "last_snapshot_flag_is_not_live_freshness": True,
+        "inventory_counts": inventory_totals,
         "reported_free_price_is_not_no_charge_guarantee": True,
         "dimensions": list(DIMENSIONS),
         "dimension_status_counts": totals,

@@ -1,22 +1,10 @@
 name: Router Oracle Hourly Integration Monitor
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "router/**"
-      - "scripts/oracle_reconcile.sh"
-      - "scripts/oracle_*.py"
-      - "scripts/report_oracle_status.py"
-      - ".github/workflows/router-oracle-monitor.yml"
-      - ".github/workflows/oracle-deploy.yml"
-  schedule:
-    - cron: "13 * * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
-  statuses: write
 
 concurrency:
   group: router-oracle-monitor
@@ -34,6 +22,9 @@ jobs:
       - run: pytest -q
 
   oracle-check:
+    # Stage 8 offline freeze: never connect to Oracle or run live inference.
+    # Re-enabling requires a separately reviewed, explicitly authorized change.
+    if: ${{ false }}
     needs: tests
     runs-on: ubuntu-latest
     timeout-minutes: 10

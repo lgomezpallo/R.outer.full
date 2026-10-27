@@ -178,12 +178,19 @@ def _score(
     verification_tier = _verification_tier(model, req.required_capabilities)
     # Task hints affect preference, never eligibility or required capabilities.
     # In particular, an unverified hint cannot authorize a model or account.
-    supported_advisory = frozenset(
-        cap for cap in advisory
-        if (cap in model.capabilities or cap in model.verified_capabilities)
-        and cap not in model.unsupported_capabilities
-        and _verification_tier(model, frozenset({cap})) != 9
-    )
+    # Code and coding are aliases in the evidence policy. A model that
+    # declares or verifies only "coding" must still match a "code" task hint,
+    # while an unsupported record for either alias vetoes the bonus.
+    def supports_advisory(cap: str) -> bool:
+        aliases = frozenset({"code", "coding"}) if cap in {"code", "coding"} else frozenset({cap})
+        recorded = model.capabilities | model.verified_capabilities
+        return (
+            bool(aliases & recorded)
+            and not bool(aliases & model.unsupported_capabilities)
+            and _verification_tier(model, frozenset({cap})) != 9
+        )
+
+    supported_advisory = frozenset(cap for cap in advisory if supports_advisory(cap))
     scoring_needs = req.required_capabilities | supported_advisory
     # code/coding describe the same specialization; do not penalize the
     # second alias when the task already requests the first one.

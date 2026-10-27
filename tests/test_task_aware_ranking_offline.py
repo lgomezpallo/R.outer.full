@@ -61,3 +61,18 @@ def test_task_hint_does_not_bypass_unverified_account_or_require_code():
     analysis = analyze_task("Escribí código en Python")
     assert analysis["explicit_required_capabilities"] == ["chat"]
     assert analysis["routing_modified"] is False
+
+
+def test_unsupported_code_evidence_cannot_gain_indirect_task_bonus(monkeypatch):
+    import router.selector as selector
+    monkeypatch.setattr(selector, "billing_ineligibility_reason", lambda *_: None)
+    generic, specialist = _models()
+    rejected = replace(
+        specialist,
+        evidence=(CapabilityEvidence("code", "unsupported", "offline-test", "2026-10-27T12:00:00Z"),),
+    )
+    provider = _provider()
+    provider.spec = replace(provider.spec, models=(generic, rejected))
+    decisions = rank([provider], RouteRequest("Escribí código en Python"))
+    assert [item.model for item in decisions] == ["vendor/offline-general", "vendor/offline-coder"]
+    assert "advisory_task_bonus=0" in decisions[1].reasons

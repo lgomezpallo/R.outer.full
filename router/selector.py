@@ -212,7 +212,7 @@ def _score(
             continue
         if capability not in model.capabilities and capability not in model.verified_capabilities:
             continue
-        tier = verification_tier(model, frozenset({capability}))
+        tier = _verification_tier(model, frozenset({capability}))
         advisory_bonus += {0: 500.0, 1: 120.0}.get(tier, 0.0)
     score += advisory_bonus
     reasons.append(f"advisory_task_bonus={advisory_bonus:.0f}")

@@ -140,7 +140,9 @@ def model_coverage(providers: list[RegisteredProvider], req: RouteRequest) -> di
                 row["excluded_by_reason"][reason] = row["excluded_by_reason"].get(reason, 0) + 1
             else:
                 row["eligible_models"] += 1
-                if req.required_capabilities.issubset(model.verified_capabilities):
+                # Use the same evidence policy as the ranking: migrated legacy
+                # records, incomplete evidence and contradictions are NOT verified.
+                if verification_tier(model, req.required_capabilities) == 0:
                     row["verified_eligible_models"] += 1
         rows.append(row)
         for key in totals:

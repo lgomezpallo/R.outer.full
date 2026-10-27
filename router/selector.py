@@ -17,6 +17,16 @@ GENERIC_EXTRAS = frozenset({"chat", "json", "tools", "fast", "summarization"})
 # These are advisory only; billing and hard capability gates remain unchanged.
 ADVISORY_CAPABILITIES = SPECIALIZED_CAPABILITIES | frozenset({"json", "tools", "summarization"})
 
+
+def effective_required_capabilities(req: RouteRequest) -> frozenset[str]:
+    """Images are a hard modality constraint, even for direct Python callers.
+
+    The HTTP endpoint already enforces chat+vision. Keep selector, fallback,
+    diagnostics and direct Router.route/Router.process consistent with it.
+    Text hints remain advisory and never grant capabilities or billing access.
+    """
+    return req.required_capabilities | (frozenset({"chat", "vision"}) if req.images else frozenset())
+
 def _provider_health_rank(provider: RegisteredProvider) -> int:
     if not provider.state.available:
         return 0
@@ -76,22 +86,22 @@ def ineligibility_reason(provider: RegisteredProvider, model, req: RouteRequest)
     an unavailable or incompatible catalog entry is actually selectable.
     """
     model_name = model.id.casefold()
-    if "chat" in req.required_capabilities and not infer_discovered_capabilities(model.id) and "chat" not in model.verified_capabilities:
+    if "chat" in effective_required_capabilities(req) and not infer_discovered_capabilities(model.id) and "chat" not in model.verified_capabilities:
         return "not_chat_model"
-    if "diffusiongemma" in model_name and "chat" in req.required_capabilities:
+    if "diffusiongemma" in model_name and "chat" in effective_required_capabilities(req):
         return "not_chat_model"
-    if "allam-" in model_name and "chat" in req.required_capabilities:
+    if "allam-" in model_name and "chat" in effective_required_capabilities(req):
         task_text = req.task + " " + req.context
         if not any("\u0600" <= char <= "\u06ff" for char in task_text):
             return "language_mismatch"
-    if req.required_capabilities & model.unsupported_capabilities:
+    if effective_required_capabilities(req) & model.unsupported_capabilities:
         return "unsupported_capability"
     # A recorded unsupported capability also blocks its alias (code/coding).
     # Conflicting verified/unsupported records never grant eligibility.
-    if verification_tier(model, req.required_capabilities) == 9:
+    if verification_tier(model, effective_required_capabilities(req)) == 9:
         return "unsupported_capability"
     effective_capabilities = model.capabilities | model.verified_capabilities
-    if req.required_capabilities - effective_capabilities:
+    if effective_required_capabilities(req) - effective_capabilities:
         return "missing_capability"
     billing_reason = billing_ineligibility_reason(provider, model)
     if billing_reason is not None:
@@ -147,13 +157,13 @@ def model_coverage(providers: list[RegisteredProvider], req: RouteRequest) -> di
                 row["eligible_models"] += 1
                 # Use the same evidence policy as the ranking: migrated legacy
                 # records, incomplete evidence and contradictions are NOT verified.
-                if verification_tier(model, req.required_capabilities) == 0:
+                if verification_tier(model, effective_required_capabilities(req)) == 0:
                     row["verified_eligible_models"] += 1
         rows.append(row)
         for key in totals:
             totals[key] += row[key]
     return {
-        "required_capabilities": sorted(req.required_capabilities),
+        "required_capabilities": sorted(effective_required_capabilities(req)),
         "max_strategic_cost": req.max_strategic_cost,
         "catalog_scope": "configured_providers_only",
         "selection_scope": "current_request_and_runtime_cooldowns",
@@ -175,7 +185,7 @@ def _score(
 
     strategic_cost = provider.spec.strategic_cost + model.strategic_cost
     health_rank = _provider_health_rank(provider)
-    verification_tier = _verification_tier(model, req.required_capabilities)
+    verification_tier = _verification_tier(model, effective_required_capabilities(req))
     # Task hints affect preference, never eligibility or required capabilities.
     # In particular, an unverified hint cannot authorize a model or account.
     # Code and coding are aliases in the evidence policy. A model that
@@ -191,7 +201,7 @@ def _score(
         )
 
     supported_advisory = frozenset(cap for cap in advisory if supports_advisory(cap))
-    scoring_needs = req.required_capabilities | supported_advisory
+    scoring_needs = effective_required_capabilities(req) | supported_advisory
     # code/coding describe the same specialization; do not penalize the
     # second alias when the task already requests the first one.
     if scoring_needs & {"code", "coding"}:
@@ -245,7 +255,7 @@ def _score(
     score += (model.priority + provider.spec.priority) * 2.0
     reasons.append(f"priority={model.priority + provider.spec.priority}")
 
-    if "fast" in model.capabilities and req.required_capabilities == frozenset({"chat"}):
+    if "fast" in model.capabilities and effective_required_capabilities(req) == frozenset({"chat"}):
         score += 80.0
         reasons.append("fast_chat_bonus=80")
 
@@ -262,7 +272,7 @@ def rank(providers: list[RegisteredProvider], req: RouteRequest) -> list[Decisio
     advisory = frozenset(
         item["capability"] for item in analysis["suggested_capabilities"]
         if item["capability"] in ADVISORY_CAPABILITIES
-    ) - req.required_capabilities
+    ) - effective_required_capabilities(req)
     decisions: list[Decision] = []
     scarcity: dict[str, int] = {}
     for provider in providers:

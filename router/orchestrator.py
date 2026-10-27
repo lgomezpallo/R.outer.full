@@ -28,6 +28,10 @@ class Orchestrator:
         self.router = router
 
     def should_decompose(self, req: RouteRequest) -> bool:
+        # Planning/subtasks do not forward images; preserve multimodal input
+        # by routing the original request directly, even when decompose=True.
+        if req.images:
+            return False
         if req.decompose is not None:
             return req.decompose
         text = req.task.strip()

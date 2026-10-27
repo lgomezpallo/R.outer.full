@@ -8,7 +8,7 @@ from .client import ProviderClient
 from .fallback_policy import retry_after_seconds
 from .orchestrator import Orchestrator
 from .registry import ProviderRegistry, RegisteredProvider
-from .selector import billing_ineligibility_reason, rank
+from .selector import billing_ineligibility_reason, ineligibility_reason, rank
 from .storage import RouterStore
 from .types import Attempt, ProviderCredential, RouteRequest, RouteResponse
 
@@ -164,20 +164,20 @@ class Router:
         for decision in decisions:
             if decision.provider in blocked_providers:
                 continue
-            # Ranking is advisory, not authorization. A stale/forged decision
-            # must not reach even an injected client that skips ProviderClient's
-            # independent last-mile billing gate.
+            # Ranking is advisory, not authorization. Recheck capability,
+            # cooldown and billing eligibility immediately before dispatch,
+            # including for injected clients that bypass the last-mile gate.
             provider = by_id.get(decision.provider)
             if provider is None:
                 continue
             model_spec = next((m for m in provider.spec.models if m.id == decision.model), None)
-            if model_spec is None or billing_ineligibility_reason(provider, model_spec) is not None:
+            if model_spec is None or ineligibility_reason(provider, model_spec, req) is not None:
                 continue
             for attempt_index in range(self.max_retries + 1):
-                # Recheck on every retry/fallback: catalog prices or account
-                # authorization can change after ranking and after an attempt.
+                # Recheck on every retry/fallback: catalog, capability evidence,
+                # cooldowns and account authorization may change after ranking.
                 model_spec = next((m for m in provider.spec.models if m.id == decision.model), None)
-                if model_spec is None or billing_ineligibility_reason(provider, model_spec) is not None:
+                if model_spec is None or ineligibility_reason(provider, model_spec, req) is not None:
                     break
                 started = perf_counter()
                 try:

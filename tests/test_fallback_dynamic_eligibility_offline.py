@@ -11,7 +11,7 @@ import httpx
 import pytest
 
 from router import billing
-from router.catalog import BUILTINS, ModelSpec, ProviderCatalog
+from router.catalog import BUILTINS, CapabilityEvidence, ModelSpec, ProviderCatalog
 from router.router import Router
 from router.types import Decision, RouteRequest
 
@@ -42,7 +42,6 @@ def _rank(monkeypatch):
 def test_fallback_skips_model_whose_capability_was_revoked(monkeypatch):
     monkeypatch.setattr(billing, "account_billing_ineligibility_reason", lambda *_: None)
     calls = []
-    holder = {}
 
     class Client:
         def complete(self, provider, model, req):
@@ -88,8 +87,9 @@ def test_retry_stops_when_required_capability_becomes_unsupported(monkeypatch):
         def complete(self, provider, model, req):
             calls.append(model)
             provider.spec = replace(provider.spec, models=(
-                replace(provider.spec.models[0],
-                        unsupported_capabilities=frozenset({"chat"})),
+                replace(provider.spec.models[0], evidence=(
+                    CapabilityEvidence("chat", "unsupported", "offline-fixture", "2026-10-27T00:00:00Z"),
+                )),
                 provider.spec.models[1],
             ))
             raise httpx.ReadTimeout("synthetic_timeout")

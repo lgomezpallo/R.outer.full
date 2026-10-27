@@ -53,3 +53,22 @@ tanto, no ejecutar manualmente workflows Oracle ni promover código.
 estáticos de workflows; `docker build` debe construir la imagen sin ejecutar
 el contenedor ni contactar APIs de inferencia. Un CI aprobado no prueba
 el estado de facturación ni la configuración efectiva de Oracle.
+
+## Guard adicional: inventario completo de workflows (PR siguiente)
+
+El control anterior validaba cinco workflows remotos conocidos, pero no rechazaba
+la incorporación de un **nuevo workflow** o un **job adicional** capaz de eludir
+esos cinco nombres. Se añadió un guard estático, sin llamadas externas:
+`scripts/check_stage8_offline_workflows.py`.
+
+El guard fija explícitamente los siete archivos y sus jobs, permite disparadores
+automáticos únicamente para `ci.yml`, exige que los cinco jobs remotos tengan
+la condición literal `if: ${{ false }}`, y rechaza acciones SSH/secretos Oracle
+en jobs no congelados. `tests/test_stage8_workflow_inventory.py` agrega
+pruebas de mutación para nuevos archivos, jobs, cron, condiciones duplicadas,
+secretos y SSH en CI. La política puede verificarse localmente con
+`python scripts/check_stage8_offline_workflows.py` y corre dentro de pytest.
+
+**Alcance:** comprobación estática de los workflows versionados en esta rama.
+No inspecciona la configuración de Actions, otros repositorios, cuentas de
+proveedores ni la VM. Tampoco reemplaza la revisión humana antes de fusionar.

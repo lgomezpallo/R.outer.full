@@ -12,6 +12,10 @@ SPECIALIZED_CAPABILITIES = frozenset({
     "transcription", "speech", "image_generation", "image_editing", "long_context",
 })
 GENERIC_EXTRAS = frozenset({"chat", "json", "tools", "fast", "summarization"})
+# Generic task hints also matter: a JSON/tool/summary request should prefer
+# a model with matching evidence, not silently discard the detector's result.
+# These are advisory only; billing and hard capability gates remain unchanged.
+ADVISORY_CAPABILITIES = SPECIALIZED_CAPABILITIES | frozenset({"json", "tools", "summarization"})
 
 def _provider_health_rank(provider: RegisteredProvider) -> int:
     if not provider.state.available:
@@ -250,7 +254,7 @@ def rank(providers: list[RegisteredProvider], req: RouteRequest) -> list[Decisio
     analysis = analyze_task(req.task)
     advisory = frozenset(
         item["capability"] for item in analysis["suggested_capabilities"]
-        if item["capability"] in SPECIALIZED_CAPABILITIES
+        if item["capability"] in ADVISORY_CAPABILITIES
     ) - req.required_capabilities
     decisions: list[Decision] = []
     scarcity: dict[str, int] = {}

@@ -541,6 +541,12 @@ def performance():
     """Operational measurements only; API success does not prove answer quality."""
     return {"metrics": store.model_performance_report(), "quality_measured": False}
 
+
+@app.get("/diagnostics/routing-fallback", dependencies=[Depends(require_admin)])
+def diagnostics_routing_fallback(limit: int = 200):
+    """Local request-level retry and fallback outcomes, without provider calls."""
+    return store.routing_fallback_report(limit=limit)
+
 @app.get("/diagnostics/provider-performance", dependencies=[Depends(require_admin)])
 def diagnostics_provider_performance(limit: int = 2000):
     """Offline SQLite aggregation, excluding probes and audits.

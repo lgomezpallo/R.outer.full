@@ -604,19 +604,29 @@ def probe_capability(payload: CapabilityProbeInput):
 @app.get("/audit/progress")
 def audit_progress():
     """Read-only progress; inspecting it never invokes any model."""
+    from .capability_evidence import _dimension
+
     counts = {}
     for provider in router.registry.all():
         if provider.spec.id not in AUDIT_DAILY_LIMITS:
             continue
         models = provider.spec.models
-        verified = sum(1 for m in models if any(e.status == "verified" and e.evidence != "migrated_from_v1" for e in m.evidence))
-        inconclusive = sum(1 for m in models if any(e.status == "inconclusive" for e in m.evidence))
-        untouched = sum(1 for m in models if not any(e.evidence != "migrated_from_v1" for e in m.evidence))
+        # These are CHAT audit counters, not evidence from unrelated
+        # capabilities. Use the same evidence policy as model ranking:
+        # legacy/incomplete records do not verify a capability, and a
+        # verified+unsupported contradiction must never count as verified.
+        statuses = [_dimension(model, ("chat",))["status"] for model in models]
         counts[provider.spec.id] = {
             "total_routes": len(models),
-            "verified_routes": verified,
-            "inconclusive_routes": inconclusive,
-            "untested_routes": untouched,
+            "verified_routes": statuses.count("recorded_verified"),
+            "inconclusive_routes": statuses.count("recorded_inconclusive"),
+            "untested_routes": sum(status in {
+                "unknown", "declared_only", "inferred_from_name_only",
+                "legacy_or_incomplete_evidence",
+            } for status in statuses),
+            "unsupported_or_conflicting_routes": sum(status in {
+                "recorded_unsupported", "conflicting_records",
+            } for status in statuses),
         }
     used = store.audit_budget_used()
     return {

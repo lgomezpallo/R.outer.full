@@ -22,7 +22,7 @@ class TraceRouter:
                 "mock", "planner", [], [],
             )
         if phase.startswith("subtask:"):
-            cheap_first = req.max_strategic_cost == 20
+            cheap_first = req.max_strategic_cost is not None and req.max_strategic_cost < 35
             ok = not cheap_first and self.retry_succeeds
             model = "cheap-candidate" if cheap_first else "retry-candidate"
             return RouteResponse(

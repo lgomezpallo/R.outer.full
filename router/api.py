@@ -654,6 +654,12 @@ def audit_progress():
         # Unlike untested_routes, this is exactly the currently actionable
         # candidate set for /audit/step, subject to remaining daily budget.
         "eligible_pending_chat_audit_candidates": pending_candidates,
+        # Snapshot only: a concurrent audit can consume the remaining slots.
+        # An internal daily budget is NOT permission for external inference.
+        "budget_limited_pending_chat_candidates": {
+            p: min(count, max(0, AUDIT_DAILY_LIMITS[p] - used.get(p, 0)))
+            for p, count in pending_candidates.items()
+        },
         "daily_budget": {p: {"limit": limit, "used": used.get(p, 0)}
                          for p, limit in AUDIT_DAILY_LIMITS.items()},
         "note": "Verificación por capacidad, no garantía de calidad. El presupuesto diario se reinicia a las 00:00 UTC.",

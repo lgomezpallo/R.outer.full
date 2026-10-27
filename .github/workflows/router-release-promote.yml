@@ -1,12 +1,6 @@
 name: Promote frozen Router release with automatic rollback
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "scripts/router_release_promote.py"
-      - "tests/test_router_release_promote.py"
-      - ".github/workflows/router-release-promote.yml"
   workflow_dispatch:
 
 permissions:
@@ -29,6 +23,9 @@ jobs:
       - run: docker build -t router-release-promote-ci .
 
   oracle-promote:
+    # Stage 8 offline freeze: never connect to Oracle or run live inference.
+    # Re-enabling requires a separately reviewed, explicitly authorized change.
+    if: ${{ false }}
     needs: tests
     runs-on: ubuntu-latest
     timeout-minutes: 12

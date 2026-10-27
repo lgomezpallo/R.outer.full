@@ -181,6 +181,10 @@ def _score(
         and _verification_tier(model, frozenset({cap})) != 9
     )
     scoring_needs = req.required_capabilities | supported_advisory
+    # code/coding describe the same specialization; do not penalize the
+    # second alias when the task already requests the first one.
+    if scoring_needs & {"code", "coding"}:
+        scoring_needs = scoring_needs | frozenset({"code", "coding"})
     specialization_penalty = _specialization_penalty(model, scoring_needs)
     # Preserve specialized capabilities only when the current task does not need them.
     # Smaller pools incur larger penalties; declared availability is provisional.

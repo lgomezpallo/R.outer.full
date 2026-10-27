@@ -4,6 +4,7 @@ from .billing import CLOUDFLARE_PAID_ONLY, NVIDIA_ROUTING_ALLOWLIST, billing_end
 from .catalog import infer_discovered_capabilities
 from .registry import RegisteredProvider
 from .ranking_evidence import verification_tier
+from .task_requirements import analyze_task
 from .types import Decision, RouteRequest
 
 SPECIALIZED_CAPABILITIES = frozenset({
@@ -158,17 +159,36 @@ def model_coverage(providers: list[RegisteredProvider], req: RouteRequest) -> di
     }
 
 
-def _score(provider: RegisteredProvider, model, req: RouteRequest, scarcity: dict[str, int] | None = None) -> Decision | None:
+def _score(
+    provider: RegisteredProvider,
+    model,
+    req: RouteRequest,
+    scarcity: dict[str, int] | None = None,
+    advisory: frozenset[str] = frozenset(),
+) -> Decision | None:
     if ineligibility_reason(provider, model, req) is not None:
         return None
 
     strategic_cost = provider.spec.strategic_cost + model.strategic_cost
     health_rank = _provider_health_rank(provider)
     verification_tier = _verification_tier(model, req.required_capabilities)
-    specialization_penalty = _specialization_penalty(model, req.required_capabilities)
+    # Task hints affect preference, never eligibility or required capabilities.
+    # In particular, an unverified hint cannot authorize a model or account.
+    supported_advisory = frozenset(
+        cap for cap in advisory
+        if (cap in model.capabilities or cap in model.verified_capabilities)
+        and cap not in model.unsupported_capabilities
+        and _verification_tier(model, frozenset({cap})) != 9
+    )
+    scoring_needs = req.required_capabilities | supported_advisory
+    # code/coding describe the same specialization; do not penalize the
+    # second alias when the task already requests the first one.
+    if scoring_needs & {"code", "coding"}:
+        scoring_needs = scoring_needs | frozenset({"code", "coding"})
+    specialization_penalty = _specialization_penalty(model, scoring_needs)
     # Preserve specialized capabilities only when the current task does not need them.
     # Smaller pools incur larger penalties; declared availability is provisional.
-    scarce_extras = (set(model.capabilities) | set(model.verified_capabilities) | set(infer_discovered_capabilities(model.id))) - set(req.required_capabilities) - set(GENERIC_EXTRAS)
+    scarce_extras = (set(model.capabilities) | set(model.verified_capabilities) | set(infer_discovered_capabilities(model.id))) - set(scoring_needs) - set(GENERIC_EXTRAS)
     scarcity_penalty = sum(min(2000, 8000 // max(1, (scarcity or {}).get(cap, 1))) for cap in scarce_extras if cap in SPECIALIZED_CAPABILITIES)
     model_state = provider.state.models.get(model.id)
     samples = (model_state.success_count + model_state.failure_count) if model_state else 0
@@ -194,6 +214,14 @@ def _score(provider: RegisteredProvider, model, req: RouteRequest, scarcity: dic
 
     score -= specialization_penalty * 200.0
     score -= scarcity_penalty * 0.4
+    # Prefer a suitable specialist for a clear task, without making a hint
+    # mandatory. Recorded unsupported/conflicting evidence never earns a bonus.
+    advisory_bonus = 0.0
+    for capability in sorted(supported_advisory):
+        tier = _verification_tier(model, frozenset({capability}))
+        advisory_bonus += {0: 500.0, 1: 120.0}.get(tier, 0.0)
+    score += advisory_bonus
+    reasons.append(f"advisory_task_bonus={advisory_bonus:.0f}")
     reasons.append(f"scarcity_penalty={scarcity_penalty}")
     reasons.append(f"specialization_penalty={specialization_penalty}")
 
@@ -217,6 +245,13 @@ def _score(provider: RegisteredProvider, model, req: RouteRequest, scarcity: dic
     return Decision(provider.spec.id, model.id, score, reasons)
 
 def rank(providers: list[RegisteredProvider], req: RouteRequest) -> list[Decision]:
+    # Interpret the task once per request. Suggestions influence only ordering;
+    # ineligibility_reason remains the sole capability/billing gate.
+    analysis = analyze_task(req.task)
+    advisory = frozenset(
+        item["capability"] for item in analysis["suggested_capabilities"]
+        if item["capability"] in SPECIALIZED_CAPABILITIES
+    ) - req.required_capabilities
     decisions: list[Decision] = []
     scarcity: dict[str, int] = {}
     for provider in providers:
@@ -231,7 +266,7 @@ def rank(providers: list[RegisteredProvider], req: RouteRequest) -> list[Decisio
                 scarcity[capability] = scarcity.get(capability, 0) + 1
     for provider in providers:
         for model in provider.spec.models:
-            decision = _score(provider, model, req, scarcity)
+            decision = _score(provider, model, req, scarcity, advisory)
             if decision:
                 decisions.append(decision)
     return sorted(decisions, key=lambda d: d.score, reverse=True)

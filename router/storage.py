@@ -421,6 +421,76 @@ class RouterStore:
             })
         return sorted(output, key=lambda item: (-item["attempts"], item["provider"], item["model"]))
 
+
+    def routing_fallback_report(self, limit: int = 200) -> dict:
+        """Read-only request-level retry/fallback outcomes from local SQLite.
+
+        Select recent *request IDs*, then all their stored routing attempts,
+        so a multi-attempt request is not truncated at the sampling boundary.
+        Probe/audit phases are excluded. In-flight requests may be incomplete
+        at snapshot time; these are observations, not quality or billing proof.
+        """
+        bounded = max(1, min(int(limit), 500))
+        routing_phase = """(phase IN ('direct', 'execute', 'plan', 'verify', 'compose')
+                            OR phase LIKE 'subtask:%')"""
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""WITH recent AS (
+                        SELECT request_id FROM request_metrics
+                        WHERE {routing_phase}
+                        GROUP BY request_id ORDER BY MAX(id) DESC LIMIT ?
+                    )
+                    SELECT m.request_id, m.provider_id, m.model_id, m.success
+                    FROM request_metrics AS m
+                    JOIN recent AS r ON r.request_id = m.request_id
+                    WHERE (m.phase IN ('direct', 'execute', 'plan', 'verify', 'compose')
+                           OR m.phase LIKE 'subtask:%')
+                    ORDER BY m.id ASC""",
+                (bounded,),
+            ).fetchall()
+        requests: dict[str, list[tuple[str | None, str | None, bool]]] = {}
+        for row in rows:
+            requests.setdefault(row["request_id"], []).append(
+                (row["provider_id"], row["model_id"], bool(row["success"]))
+            )
+        attempts = sum(len(items) for items in requests.values())
+        successes = sum(sum(1 for item in items if item[2]) for items in requests.values())
+        request_successes = sum(1 for items in requests.values() if items[-1][2])
+        retry_requests = sum(
+            1 for items in requests.values()
+            if len({(provider, model) for provider, model, _ in items}) < len(items)
+        )
+        model_fallbacks = sum(
+            1 for items in requests.values()
+            if len({(provider, model) for provider, model, _ in items}) > 1
+        )
+        provider_fallbacks = sum(
+            1 for items in requests.values()
+            if len({provider for provider, _, _ in items}) > 1
+        )
+        recovered = sum(
+            1 for items in requests.values()
+            if items[-1][2] and any(not item[2] for item in items[:-1])
+        )
+        count = len(requests)
+        return {
+            "sampled_requests": count,
+            "attempts": attempts,
+            "successful_attempts": successes,
+            "successful_requests": request_successes,
+            "failed_requests": count - request_successes,
+            "requests_with_same_model_retry": retry_requests,
+            "requests_with_model_fallback": model_fallbacks,
+            "requests_with_provider_fallback": provider_fallbacks,
+            "requests_recovered_after_failure": recovered,
+            "attempt_success_rate": round(successes / attempts, 4) if attempts else None,
+            "request_success_rate": round(request_successes / count, 4) if count else None,
+            "observation_scope": "recent_routing_request_ids_only",
+            "snapshot_caveat": "in_flight_requests_may_be_incomplete",
+            "quality_measured": False,
+            "billing_verified": False,
+        }
+
     def provider_routing_report(self, limit: int = 2000) -> list[dict]:
         """Provider totals over exactly the same routing attempts as model reports.
 

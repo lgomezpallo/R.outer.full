@@ -704,7 +704,7 @@ def audit_step(payload: AuditStepInput):
         results.append(router.verify_capability(provider_id, model.id, "chat"))
     return {
         "provider": provider_id, "results": results,
-        "pending_chat": len(candidates) - len(results),
+        "pending_chat": max(0, len(candidates) - len(results) - skipped_claimed),
         "skipped_claimed": skipped_claimed,
         "daily_limit": limit, "used_today": used,
         "note": "Reservas internas atomicas por modelo y dia. Las reclamaciones persisten ante fallos para evitar reintentos automaticos; no autorizan inferencia ni facturacion.",

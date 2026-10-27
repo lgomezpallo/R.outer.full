@@ -32,6 +32,17 @@ class Orchestrator:
         # by routing the original request directly, even when decompose=True.
         if req.images:
             return False
+        # The planner builds new requests and currently cannot faithfully
+        # propagate non-chat hard capabilities, conversation history, or an
+        # explicit strategic-cost ceiling through every planning/subtask/
+        # composition phase. Do not silently weaken caller constraints.
+        # Keep those requests direct until full propagation is implemented.
+        if req.required_capabilities != frozenset({"chat"}):
+            return False
+        if req.conversation:
+            return False
+        if req.max_strategic_cost is not None:
+            return False
         if req.decompose is not None:
             return req.decompose
         text = req.task.strip()

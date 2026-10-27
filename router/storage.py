@@ -81,7 +81,14 @@ class RouterStore:
                     last_failure_kind TEXT,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
-                CREATE TABLE IF NOT EXISTS audit_budget (\n                    provider_id TEXT NOT NULL, day_utc TEXT NOT NULL, used INTEGER NOT NULL DEFAULT 0,\n                    PRIMARY KEY (provider_id,day_utc)\n                );\n                CREATE TABLE IF NOT EXISTS app_tokens (
+                CREATE TABLE IF NOT EXISTS audit_budget (\n                    provider_id TEXT NOT NULL, day_utc TEXT NOT NULL, used INTEGER NOT NULL DEFAULT 0,\n                    PRIMARY KEY (provider_id,day_utc)\n                );\n                CREATE TABLE IF NOT EXISTS audit_model_claims (
+                    provider_id TEXT NOT NULL,
+                    model_id TEXT NOT NULL,
+                    capability TEXT NOT NULL,
+                    claimed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (provider_id, model_id, capability)
+                );
+                CREATE TABLE IF NOT EXISTS app_tokens (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL UNIQUE,
                     token_hash TEXT NOT NULL UNIQUE,
@@ -303,6 +310,44 @@ class RouterStore:
                 (provider_id, today),
             ).fetchone()[0]
         return updated, used
+
+    def reserve_audit_model(
+        self, provider_id: str, model_id: str, capability: str, daily_limit: int
+    ) -> tuple[str, int]:
+        """Atomically claim one model/capability and one internal daily slot.
+
+        A claim is durable across days and processes: after a crash or an
+        ambiguous probe result, retrying automatically could spend again.
+        This method grants no external inference or billing authorization.
+        """
+        from datetime import datetime, timezone
+        today = datetime.now(timezone.utc).date().isoformat()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "INSERT OR IGNORE INTO audit_budget(provider_id, day_utc, used) VALUES (?, ?, 0)",
+                (provider_id, today),
+            )
+            used = int(conn.execute(
+                "SELECT used FROM audit_budget WHERE provider_id=? AND day_utc=?",
+                (provider_id, today),
+            ).fetchone()[0])
+            if conn.execute(
+                "SELECT 1 FROM audit_model_claims WHERE provider_id=? AND model_id=? AND capability=?",
+                (provider_id, model_id, capability),
+            ).fetchone() is not None:
+                return "already_claimed", used
+            if used >= max(0, int(daily_limit)):
+                return "budget_exhausted", used
+            conn.execute(
+                "INSERT INTO audit_model_claims(provider_id, model_id, capability) VALUES (?, ?, ?)",
+                (provider_id, model_id, capability),
+            )
+            conn.execute(
+                "UPDATE audit_budget SET used=used+1 WHERE provider_id=? AND day_utc=?",
+                (provider_id, today),
+            )
+            return "reserved", used + 1
 
     def audit_budget_used(self) -> dict[str, int]:
         from datetime import datetime, timezone

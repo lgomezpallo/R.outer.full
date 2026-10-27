@@ -182,7 +182,7 @@ def test_budgeted_audit_does_not_reserve_budget_for_unverified_models(monkeypatc
         def audit_budget_used(self):
             return {}
 
-        def reserve_audit_budget(self, *args):
+        def reserve_audit_model(self, *args):
             raise AssertionError("blocked_model_consumed_audit_budget")
 
     monkeypatch.setattr(api, "router", router)

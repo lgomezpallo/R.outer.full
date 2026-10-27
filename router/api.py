@@ -683,16 +683,26 @@ def audit_step(payload: AuditStepInput):
     candidates = _chat_audit_candidates(provider)
     candidates.sort(key=lambda m: (len(m.capabilities - {"chat", "json", "fast"}), m.strategic_cost, m.id))
     results = []
+    skipped_claimed = 0
     used = store.audit_budget_used().get(provider_id, 0)
-    for model in candidates[:payload.max_calls]:
-        permitted, used = store.reserve_audit_budget(provider_id, limit)
-        if not permitted:
+    # The candidate list is a snapshot: concurrent requests can see the same
+    # model before either records evidence. Claim model + daily slot together.
+    for model in candidates:
+        if len(results) >= payload.max_calls:
+            break
+        outcome, used = store.reserve_audit_model(provider_id, model.id, "chat", limit)
+        if outcome == "already_claimed":
+            skipped_claimed += 1
+            continue
+        if outcome == "budget_exhausted":
             break
         results.append(router.verify_capability(provider_id, model.id, "chat"))
     return {
-        "provider": provider_id, "results": results, "pending_chat": len(candidates)-len(results),
+        "provider": provider_id, "results": results,
+        "pending_chat": len(candidates) - len(results),
+        "skipped_claimed": skipped_claimed,
         "daily_limit": limit, "used_today": used,
-        "note": "Una reserva corresponde a una prueba de texto; otros tipos de prueba se agregarán por separado.",
+        "note": "Reservas internas atomicas por modelo y dia. Las reclamaciones persisten ante fallos para evitar reintentos automaticos; no autorizan inferencia ni facturacion.",
     }
 
 @app.post("/capabilities/audit", dependencies=[Depends(require_admin)])

@@ -81,3 +81,62 @@ def test_audit_step_skips_prior_claims_and_progress_reaches_zero(monkeypatch, tm
     body = TestClient(api.app).get("/audit/progress").json()
     assert body["eligible_pending_chat_audit_candidates"]["groq"] == 0
     assert body["budget_limited_pending_chat_candidates"]["groq"] == 0
+
+
+def test_retired_catalog_model_claim_survives_removal_and_return(monkeypatch, tmp_path):
+    """Catalog churn must not reset a durable claim or trigger another probe."""
+    api, calls = _offline_api(monkeypatch, tmp_path / "catalog-churn.db")
+    provider = api.router.registry.all()[0]
+    original = provider.spec.models
+    assert api.store.reserve_audit_model("groq", "synthetic-a", "chat", 12) == ("reserved", 1)
+
+    # Simulate a successful inventory refresh dropping an already-claimed ID.
+    provider.spec.models = tuple(m for m in original if m.id != "synthetic-a")
+    retired = TestClient(api.app).get("/audit/progress").json()
+    assert retired["retired_or_missing_chat_audit_claims"]["groq"] == 1
+    assert retired["eligible_pending_chat_audit_candidates"]["groq"] == 2
+    assert calls == []
+
+    result = api.audit_step(api.AuditStepInput(provider="groq", max_calls=2))
+    assert {item["model"] for item in result["results"]} == {"synthetic-b", "synthetic-c"}
+    assert result["pending_chat"] == 0
+    assert len(calls) == 2
+
+    # Reintroducing the identical ID must not silently permit re-auditing.
+    provider.spec.models = original
+    restored = TestClient(api.app).get("/audit/progress").json()
+    assert restored["retired_or_missing_chat_audit_claims"]["groq"] == 0
+    assert restored["eligible_pending_chat_audit_candidates"]["groq"] == 0
+    retry = api.audit_step(api.AuditStepInput(provider="groq", max_calls=3))
+    assert retry["results"] == []
+    assert retry["skipped_claimed"] == 3
+    assert retry["pending_chat"] == 0
+    assert len(calls) == 2
+    assert api.store.audit_budget_used()["groq"] == 3
+
+
+def test_pending_chat_excludes_claims_beyond_max_calls(monkeypatch, tmp_path):
+    """A claimed candidate after the first result is not pending work."""
+    api, calls = _offline_api(monkeypatch, tmp_path / "unvisited-claims.db")
+    assert api.store.reserve_audit_model("groq", "synthetic-c", "chat", 12) == ("reserved", 1)
+    result = api.audit_step(api.AuditStepInput(provider="groq", max_calls=1))
+    assert [item["model"] for item in result["results"]] == ["synthetic-a"]
+    assert result["skipped_claimed"] == 0  # c was not visited
+    assert result["pending_chat"] == 1  # only b, never claimed c
+    assert calls == [("groq", "synthetic-a", "chat")]
+    progress = TestClient(api.app).get("/audit/progress").json()
+    assert progress["eligible_pending_chat_audit_candidates"]["groq"] == 1
+
+
+def test_claims_are_scoped_by_capability_and_provider(monkeypatch, tmp_path):
+    api, calls = _offline_api(monkeypatch, tmp_path / "claim-scope.db")
+    store = api.store
+    store.reserve_audit_model("groq", "synthetic-a", "vision", 12)
+    store.reserve_audit_model("nvidia", "synthetic-a", "chat", 12)
+    assert store.audit_claimed_models("groq", "chat") == set()
+    assert store.audit_claimed_models("groq", "vision") == {"synthetic-a"}
+    assert store.audit_claimed_models("nvidia", "chat") == {"synthetic-a"}
+    progress = TestClient(api.app).get("/audit/progress").json()
+    assert progress["retired_or_missing_chat_audit_claims"]["groq"] == 0
+    assert progress["eligible_pending_chat_audit_candidates"]["groq"] == 3
+    assert calls == []

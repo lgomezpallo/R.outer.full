@@ -601,16 +601,36 @@ def probe_capability(payload: CapabilityProbeInput):
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
+def _chat_audit_candidates(provider):
+    """Exact eligible pending set for /audit/step (no calls or reservations).
+
+    Untested evidence in /audit/progress is intentionally broader: legacy
+    records, non-chat models and billing-blocked routes are not candidates.
+    """
+    from .catalog import infer_discovered_capabilities
+    from .selector import billing_ineligibility_reason
+
+    return [
+        model for model in provider.spec.models
+        if "chat" in model.capabilities
+        and "chat" in infer_discovered_capabilities(model.id)
+        and not any(record.capability == "chat" for record in model.evidence)
+        and billing_ineligibility_reason(provider, model) is None
+    ]
+
+
 @app.get("/audit/progress")
 def audit_progress():
     """Read-only progress; inspecting it never invokes any model."""
     from .capability_evidence import _dimension
 
     counts = {}
+    pending_candidates = {}
     for provider in router.registry.all():
         if provider.spec.id not in AUDIT_DAILY_LIMITS:
             continue
         models = provider.spec.models
+        pending_candidates[provider.spec.id] = len(_chat_audit_candidates(provider))
         # These are CHAT audit counters, not evidence from unrelated
         # capabilities. Use the same evidence policy as model ranking:
         # legacy/incomplete records do not verify a capability, and a
@@ -631,6 +651,9 @@ def audit_progress():
     used = store.audit_budget_used()
     return {
         "platforms": counts,
+        # Unlike untested_routes, this is exactly the currently actionable
+        # candidate set for /audit/step, subject to remaining daily budget.
+        "eligible_pending_chat_audit_candidates": pending_candidates,
         "daily_budget": {p: {"limit": limit, "used": used.get(p, 0)}
                          for p, limit in AUDIT_DAILY_LIMITS.items()},
         "note": "Verificación por capacidad, no garantía de calidad. El presupuesto diario se reinicia a las 00:00 UTC.",
@@ -644,8 +667,6 @@ def audit_budget():
 @app.post("/audit/step", dependencies=[Depends(require_admin)])
 def audit_step(payload: AuditStepInput):
     """Bounded, opt-in probes. Never retry a model already tested for chat."""
-    from .catalog import infer_discovered_capabilities
-    from .selector import billing_ineligibility_reason
     provider_id = payload.provider.strip().lower()
     limit = AUDIT_DAILY_LIMITS.get(provider_id)
     if limit is None:
@@ -653,13 +674,7 @@ def audit_step(payload: AuditStepInput):
     provider = next((p for p in router.registry.all() if p.spec.id == provider_id), None)
     if provider is None:
         raise HTTPException(400, "provider_not_registered")
-    candidates = [
-        m for m in provider.spec.models
-        if "chat" in m.capabilities
-        and "chat" in infer_discovered_capabilities(m.id)
-        and not any(e.capability == "chat" for e in m.evidence)
-        and billing_ineligibility_reason(provider, m) is None
-    ]
+    candidates = _chat_audit_candidates(provider)
     candidates.sort(key=lambda m: (len(m.capabilities - {"chat", "json", "fast"}), m.strategic_cost, m.id))
     results = []
     used = store.audit_budget_used().get(provider_id, 0)

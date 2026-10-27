@@ -6,6 +6,7 @@ until a separately authorized merge.
 """
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 from typing import Mapping
@@ -29,6 +30,24 @@ REMOTE_JOBS = {
     "router-release-promote.yml": "oracle-promote",
     "router-release-live-smoke.yml": "oracle-live-smoke",
 }
+# Pin the complete reviewed workflow contents, not only their names/jobs.
+# Any workflow edit must update this map in an explicitly reviewed PR.
+EXPECTED_WORKFLOW_BLOBS: dict[str, str] = {
+    "ci.yml": "52b615964fc223f505a83c26025f0991319b08b3",
+    "check-provider-secrets.yml": "30fb296f7d0d87d180d5a1a87b69822382113eb5",
+    "oracle-deploy.yml": "5dc10c0fbba1198a14e2ee65321c10d79ecb3545",
+    "router-oracle-monitor.yml": "c7fc8ddb2501c33c772488d97bf6dbe216dbbb68",
+    "router-release-stage.yml": "36a898fbf82110862a53580901f9e2b8730dafa2",
+    "router-release-promote.yml": "163ea9b4aa7508d817e170e54cea187ba23274af",
+    "router-release-live-smoke.yml": "e95e4775c95b397d69a00d0290dc56f838178648",
+}
+
+
+def _git_blob_sha(source: str) -> str:
+    raw = source.encode("utf-8")
+    return hashlib.sha1(b"blob " + str(len(raw)).encode("ascii") + bytes([0]) + raw).hexdigest()
+
+
 TOP_LEVEL = re.compile(r"^[A-Za-z][\w-]*:\s*(?:#.*)?$", re.M)
 INDENTED_KEY = re.compile(r"^  ([A-Za-z][\w-]*):\s*(?:#.*)?$", re.M)
 REMOTE_ACTION = re.compile(r"\bssh\s+-|\bscp\s+|\brsync\s+|ORACLE_SSH_|router_release_live_smoke", re.I)
@@ -66,6 +85,8 @@ def audit_workflows(sources: Mapping[str, str]) -> list[str]:
 
     for filename in sorted(actual & expected):
         source = sources[filename]
+        if _git_blob_sha(source) != EXPECTED_WORKFLOW_BLOBS[filename]:
+            problems.append(f"{filename}: unreviewed workflow content change")
         triggers = _section(source, "on")
         jobs = _section(source, "jobs")
         if triggers is None or jobs is None:

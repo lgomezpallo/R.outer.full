@@ -1,7 +1,7 @@
 from __future__ import annotations
 import json
 import httpx
-from .billing import CLOUDFLARE_PAID_ONLY
+from .billing import CLOUDFLARE_PAID_ONLY, offline_only
 from .modality_contract import completion_transport_error
 from .registry import RegisteredProvider
 from .types import RouteRequest
@@ -19,6 +19,8 @@ class ProviderClient:
         Account-level billing guarantees must be checked separately; catalog
         pricing alone is not a guarantee that an account cannot incur charges.
         """
+        if offline_only():
+            raise RuntimeError("inference_blocked:offline_only")
         from .billing import billing_endpoint_ineligibility_reason
         from .selector import billing_ineligibility_reason
 
@@ -72,6 +74,8 @@ class ProviderClient:
         self, provider: RegisteredProvider, timeout_s: float = 12.0
     ) -> tuple[list[str], dict[str, str]]:
         """Inventory plus explicit OpenRouter billing classification (no inference of free)."""
+        if offline_only():
+            raise RuntimeError("inventory_blocked:offline_only")
         if provider.spec.protocol != "openai-compatible":
             return [], {}
         # Discovery sends the configured API key too. Check its destination

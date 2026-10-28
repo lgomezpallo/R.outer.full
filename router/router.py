@@ -242,6 +242,16 @@ class Router:
                             decision.model, error, 0.0,
                             failure_kind=error_type, provider_wide=False,
                         )
+                        # Persist each failed retry immediately. If the process
+                        # stops before its next attempt, request_metrics already
+                        # contains the failure; provider_runtime must not lag
+                        # behind the durable model observations after restart.
+                        if self.store is not None:
+                            self.store.save_provider_runtime(provider.spec.id, provider.state)
+                            self.store.save_model_runtime(
+                                provider.spec.id, decision.model,
+                                provider.state.model(decision.model),
+                            )
                         continue
                     provider.state.mark_failure(
                         decision.model,

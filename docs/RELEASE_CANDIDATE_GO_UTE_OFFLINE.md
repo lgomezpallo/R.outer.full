@@ -90,3 +90,25 @@ pytest -q tests/test_go_ute_offline_release_contract.py tests/test_account_billi
 - **Oracle en producción:** sin inspección ni cambios.
 - **Prueba extremo a extremo con IA real:** no ejecutada y no autorizada.
 - **Riesgo económico cero de cuentas externas:** no demostrado; tráfico real prohibido.
+
+
+## Actualización 28/10 — aceptación aislada y desbloqueo gradual (sin autorización de tráfico)
+
+**Criterio vigente:** no exigir verificar universalmente las cuatro cuentas para cerrar el código, el contrato de G.O. o la integración offline. El primer tráfico real sólo podrá autorizarse por **proveedor + cuenta + modelo concretos**, con evidencia actual del plan sin cobro, límites de cuota/sobregiro y autorización específica. Los demás seguirán bloqueados. Una aprobación de un modelo no autoriza sus hermanos ni el fallback hacia otro proveedor.
+
+**Inventario de candidatos en código, NO inventario vivo ni certificación de gratuidad:**
+
+| Proveedor | Modelos iniciales en `router/catalog.py` | Precio acreditado en el catálogo base | Habilitación real |
+| --- | --- | --- | --- |
+| Groq | `openai/gpt-oss-20b`, `openai/gpt-oss-120b`, `qwen/qwen3.8-27b`, `whisper-large-v3`, `whisper-large-v3-turbo` | Desconocido (5/5) | Bloqueada |
+| NVIDIA | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning`, `google/gemma-4-31b-it`, `moonshotai/kimi-k3` | Desconocido (3/3) | Bloqueada |
+| OpenRouter | `openrouter/free` | Desconocido (1/1); el nombre no acredita gratuidad | Bloqueada |
+| Cloudflare | Sin modelos predefinidos; se agregan desde inventario local/configuración | Desconocido | Bloqueada |
+
+Los modelos de este cuadro son **candidatos históricos de bootstrap**, no se afirma que sigan existiendo ni que tengan precio cero. El reporte `GET /diagnostics/inventory` puede mostrar más modelos si hay un catálogo local guardado; su marca `reported_free_price` no prueba una cuenta sin sobregiros. `router/capability_evidence.py` distingue declaraciones, inferencias por nombre y registros de evidencia, sin convertirlos en autorización económica.
+
+**Regla de selección:** preservar catálogo multimodelo, ranking por tarea y fallback, pero aplicar el filtro de costo y disponibilidad a **cada intento**. Si el modelo desaparece, su precio es ambiguo, la cuota gratuita se agota o la cuenta no está verificada, debe quedar fuera del ranking; jamás sustituirlo por uno pago o con costo incierto. El bloqueo actual de `account_billing_ineligibility_reason` sigue siendo global y explícito: **no hay todavía un mecanismo productivo de aprobación granular**, y no se lo habilitará basándose sólo en nombres, créditos de prueba o etiquetas free.
+
+**Aceptación CI añadida:** `.github/workflows/ci.yml` ejecuta, después del build, una prueba HTTP de la **imagen real** en `docker run --network none --read-only --cap-drop ALL`, sin claves de proveedores y con `ROUTER_OFFLINE_ONLY=1`. Comprueba autenticación, `/health`, `/route` fail-closed y `/v1/chat/completions` HTTP 502. Esto **no equivale a CI completamente desconectado**: checkout, instalación de dependencias y `docker build` aún pueden requerir Internet. Ninguna de estas pruebas realiza inferencia.
+
+**Secuencia de cierre:** (1) validar la nueva aceptación Docker en CI; (2) comparar configuración y SHA efectivos de Oracle mediante una futura inspección de solo lectura autorizada, sin copiar claves; (3) ensayar backup/restauración y rollback sobre copias aisladas; (4) integrar G.O. en modo seguro sin tráfico externo; (5) para una primera conversación real, verificar únicamente la cuenta y el modelo seleccionados, establecer controles de cuotas fail-closed y pedir autorización explícita de despliegue y prueba. Luego ampliar progresivamente el catálogo gratuito por evidencia, nunca por presunción.

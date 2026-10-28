@@ -32,6 +32,14 @@ ALIASES = {
 HINT_RULES = (
     ("code", "code_request", r"\b(?:escrib[eií]|program[aá]|implement[aá]|depur[aá]|corrig[eií]|write|implement|debug|fix)\b[^.!?\n]{0,90}\b(?:c[oó]digo|python|javascript|typescript|funci[oó]n|function|script|bug)\b"),
     ("code", "code_request_reversed", r"\b(?:c[oó]digo|python|javascript|typescript|funci[oó]n|function|script)\b[^.!?\n]{0,60}\b(?:escrib[eií]|implement[aá]|write|debug|fix)\b"),
+# Common imperative requests omitted by the original code detector.
+    ("code", "code_creation_request", r"\b(?:gener[aá]|cre[aá]|arm[aá]|desarroll[aá]|haceme|create|generate|build)\b[^.!?\n]{0,90}\b(?:c[oó]digo|python|javascript|typescript|funci[oó]n|function|script)\b"),
+    ("code", "code_repair_request", r"\b(?:correg[íi]|arregl[aá]|revis[aá]|repair|review)\b[^.!?\n]{0,90}\b(?:c[oó]digo|funci[oó]n|function|script|bug)\b"),
+    # Creating/editing an image differs from asking a vision model to read it.
+    # These remain advisory hints; they cannot authorize a specialist-only
+    # model when the caller explicitly requires chat, nor bypass billing.
+    ("image_generation", "image_creation_request", r"\b(?:gener[aá]|cre[aá]|dibuj[aá]|renderiz[aá]|generate|create|draw|render)\b[^.!?\n]{0,70}\b(?:una? imagen|una? ilustraci[oó]n|un dibujo|an image|a picture|an illustration)\b"),
+    ("image_editing", "image_edit_request", r"\b(?:edit[aá]|modific[aá]|retoc[aá]|edit|modify|retouch)\b[^.!?\n]{0,70}\b(?:esta imagen|la foto|this image|the photo|the picture)\b"),
     ("vision", "visual_request", r"\b(?:analiz[aá]|describ[eií]|interpret[aá]|analy[sz]e|describe|read)\b[^.!?\n]{0,60}\b(?:esta imagen|la foto|this image|the photo|the picture)\b"),
     ("document", "document_request", r"\b(?:resum[eií]|analiz[aá]|extra[eié]|summari[sz]e|analy[sz]e|extract)\b[^.!?\n]{0,70}\b(?:este pdf|el documento|archivo adjunto|this pdf|the document|attached file)\b"),
     ("json", "structured_output", r"\b(?:respond[ée]|devolv[ée]|entreg[aá]|return|output|reply)\b[^.!?\n]{0,60}\bjson\b"),

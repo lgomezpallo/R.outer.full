@@ -11,6 +11,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from .billing import offline_only
 from .catalog import ModelSpec, ProviderCatalog, ProviderSpec
 from .router import Router
 from .security import validate_provider_base_url
@@ -196,7 +197,7 @@ def load_environment_providers() -> None:
         os.getenv(flag, "").strip() == "1" for flag in active_startup_flags
     )
     startup_inference_allowed = (
-        _startup_has_eligible_inference() if requested_active_checks else False
+        _startup_has_eligible_inference() if requested_active_checks and not offline_only() else False
     )
     if requested_active_checks and not startup_inference_allowed:
         print("ROUTER_STARTUP_ACTIVE_CHECKS_SKIPPED reason=no_billing_eligible_model", flush=True)
@@ -741,7 +742,7 @@ def audit_capabilities(payload: CapabilityAuditInput):
 
 def _enriched_context(task: str, context: str) -> str:
     base = with_temporal_context(context)
-    if needs_current_search(task):
+    if not offline_only() and needs_current_search(task):
         base += "\n" + search_context(task)
     return base
 

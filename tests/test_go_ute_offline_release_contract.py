@@ -106,3 +106,24 @@ def test_offline_go_ute_denies_anonymous_when_service_token_is_unset(monkeypatch
     assert authorized.status_code == 200
     assert authorized.json()["error"] == "no_eligible_provider"
     assert authorized.json()["attempts"] == []
+
+def test_offline_go_ute_denies_anonymous_with_no_credentials_at_all(monkeypatch, tmp_path):
+    """Release mode must not inherit legacy anonymous development access."""
+    router = _offline_router(monkeypatch)
+    monkeypatch.setattr(api, "router", router)
+    monkeypatch.setattr(api, "store", RouterStore(tmp_path / "go-ute-no-tokens.db"))
+    monkeypatch.delenv("ROUTER_SERVICE_TOKEN", raising=False)
+    monkeypatch.delenv("ROUTER_IACHAT_TOKEN", raising=False)
+    client = TestClient(api.app)
+
+    assert api.store.list_app_tokens() == []
+    assert client.post("/route", json={"task": "hola", "decompose": False}).status_code == 401
+    assert client.post(
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "hola"}]},
+    ).status_code == 401
+    assert client.post(
+        "/route",
+        headers={"Authorization": "Bearer unrecognized"},
+        json={"task": "hola", "decompose": False},
+    ).status_code == 401

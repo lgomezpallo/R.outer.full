@@ -32,7 +32,7 @@ ALIASES = {
 HINT_RULES = (
     ("code", "code_request", r"\b(?:escrib[eií]|program[aá]|implement[aá]|depur[aá]|corrig[eií]|write|implement|debug|fix)\b[^.!?\n]{0,90}\b(?:c[oó]digo|python|javascript|typescript|funci[oó]n|function|script|bug)\b"),
     ("code", "code_request_reversed", r"\b(?:c[oó]digo|python|javascript|typescript|funci[oó]n|function|script)\b[^.!?\n]{0,60}\b(?:escrib[eií]|implement[aá]|write|debug|fix)\b"),
-# Common imperative requests omitted by the original code detector.
+    # Common imperative requests omitted by the original code detector.
     ("code", "code_creation_request", r"\b(?:gener[aá]|cre[aá]|arm[aá]|desarroll[aá]|haceme|create|generate|build)\b[^.!?\n]{0,90}\b(?:c[oó]digo|python|javascript|typescript|funci[oó]n|function|script)\b"),
     ("code", "code_repair_request", r"\b(?:correg[íi]|arregl[aá]|revis[aá]|repair|review)\b[^.!?\n]{0,90}\b(?:c[oó]digo|funci[oó]n|function|script|bug)\b"),
     # Creating/editing an image differs from asking a vision model to read it.

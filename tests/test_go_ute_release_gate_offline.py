@@ -6,6 +6,7 @@ proof that a production deployment or database rollback is safe.
 """
 from __future__ import annotations
 
+import importlib.util
 import os
 import shutil
 from pathlib import Path
@@ -18,7 +19,11 @@ from router import api
 from router.client import ProviderClient
 from router.router import Router
 from router.storage import RouterStore
-from scripts import router_release_promote as promote
+MODULE = Path(__file__).resolve().parents[1] / "scripts" / "router_release_promote.py"
+spec = importlib.util.spec_from_file_location("router_release_promote_release_gate", MODULE)
+assert spec is not None and spec.loader is not None
+promote = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(promote)
 
 
 pytestmark = pytest.mark.strict_billing

@@ -23,7 +23,7 @@ Fecha de consolidación: 2026-10-28. **Sin autorización de despliegue, fusión 
 
 La aplicación Gestión de Obras UTE es independiente; la integración aquí es **contractual**, no está conectada ni validada extremo a extremo.
 
-- Autenticación: `Authorization: Bearer <token>`. Configurar `ROUTER_SERVICE_TOKEN` con secreto propio y restringir acceso. Sin token configurado y sin tokens de aplicación, el API tiene un modo de desarrollo sin autenticación: **no exponerlo a red**.
+- Autenticación: `Authorization: Bearer <token>`. Configurar `ROUTER_SERVICE_TOKEN` con secreto propio y restringir acceso. **Con `ROUTER_OFFLINE_ONLY=1`, la ausencia de credenciales válidas siempre devuelve HTTP 401**, incluso si no existen tokens de aplicación ni token de servicio; el antiguo acceso anónimo de desarrollo sólo subsiste fuera de ese modo. `GET /health` no requiere token y no debe exponerse públicamente sin control de red.
 - `GET /health` → JSON `{ "status": "ok", "providers": [...] }`. No garantiza que haya modelos elegibles.
 - `POST /route` → JSON de entrada, por ejemplo `{"task":"Resumir el parte diario","application_name":"gestion-obras-ute","required_capabilities":["chat"],"decompose":false}`. Respuesta HTTP 200: `ok`, `text`, `provider`, `model`, `error`, `attempts`, `decisions`, `orchestration`. En modo seguro sin cuentas autorizadas se espera `ok:false`, `error:"no_eligible_provider"`, sin intentos ni texto.
 - `POST /v1/chat/completions` acepta `model`, `messages`, `stream:false` y `task_type` opcional. No admite streaming. Sin proveedor elegible responde **HTTP 502**, no una respuesta ficticia.
@@ -37,8 +37,9 @@ La aplicación Gestión de Obras UTE es independiente; la integración aquí es 
 - [x] Confirmar CI original #87: run `40660699273`, pytest y Docker build correctos (577 tests antes de esta consolidación).
 - [x] Documentar contrato HTTP y error fail-closed para G.O.
 - [x] Añadir modo offline explícito y prueba de integración HTTP sin inferencia.
-- [x] Primera validación de la candidata: [CI #40668581062](https://github.com/lgomezpallo/R.outer.full/actions/runs/40668581062), **580 pytest aprobados, 4 advertencias y Docker build aprobado**. Volver a verificar el CI del head definitivo tras cualquier edición.
-- [ ] Revisar diff final respecto de `main` y del SHA de referencia Oracle, incluyendo archivos de datos y migraciones.
+- [x] Validación anterior de la candidata: [CI #40676605797](https://github.com/lgomezpallo/R.outer.full/actions/runs/40676605797), SHA `68c2d7cf40257a49388728d5e3d7ee56fed0b64c`, **581 pytest aprobados, 4 advertencias y Docker build aprobado**. La revisión de aceptación agrega una prueba específica de ausencia total de tokens: **CI del nuevo head pendiente** hasta comprobar la ejecución correspondiente.
+- [x] Comparación GitHub del head `68c2d7c` frente a la referencia Oracle `339898a`: **222 commits por delante, 0 detrás**, según `compare_commits` el 28/10; no equivale a inspección de la VM. Se listaron cambios de código, scripts, tests y workflows. No se inspeccionaron datos reales ni se verificó migración sobre una copia de producción.
+- [ ] Revisar diff final del **head definitivo** respecto de `main` y Oracle, incluyendo datos y compatibilidad de esquema.
 - [ ] Verificar en una futura ventana autorizada el SHA y el estado real de Oracle, los procesos, rutas y volúmenes. No realizado.
 - [ ] Preparar y **verificar** backup íntegro de SQLite, catálogo, configuración y secretos en destino privado; no copiar claves a GitHub ni a logs.
 - [ ] Aprobar y ensayar rollback de código **y** datos en un entorno aislado. Restaurar un commit anterior no revierte migraciones SQLite.
@@ -54,8 +55,11 @@ En un entorno local aislado y sin claves de proveedores, instalar dependencias p
 ```bash
 export ROUTER_OFFLINE_ONLY=1
 export ROUTER_SERVICE_TOKEN='TOKEN_LOCAL_DE_PRUEBA'
-export ROUTER_DB_FILE="$(mktemp -u /tmp/router-release-XXXXXX.db)"
-export ROUTER_CATALOG_FILE="$(mktemp -u /tmp/router-release-XXXXXX.json)"
+RELEASE_TMP_DIR="$(mktemp -d /tmp/router-release-XXXXXX)"
+chmod 700 "$RELEASE_TMP_DIR"
+export ROUTER_DB_FILE="$RELEASE_TMP_DIR/router.db"
+export ROUTER_CATALOG_FILE="$RELEASE_TMP_DIR/router-catalog.json"
+# Borrar la carpeta de pruebas únicamente después de detener el servidor local.
 unset GROQ_API_KEY NVIDIA_API_KEY OPENROUTER_API_KEY CLOUDFLARE_API_TOKEN
 unset ROUTER_STARTUP_PROVIDER_TESTS ROUTER_STARTUP_CAPABILITY_PROFILE
 unset ROUTER_STARTUP_ROUTING_SMOKE ROUTER_STARTUP_ORCHESTRATION_SMOKE ROUTER_STARTUP_HETEROGENEOUS_SMOKE
@@ -81,7 +85,7 @@ pytest -q tests/test_go_ute_offline_release_contract.py tests/test_account_billi
 ## Estados que no deben confundirse
 
 - **Código consolidado en rama:** sí, sujeto al nuevo CI.
-- **Pruebas offline originales y nuevas:** sí, 580 pytest y Docker en CI #40668581062; cualquier commit posterior requiere CI propio.
+- **Pruebas offline originales y nuevas:** 581 pytest y Docker aprobados en CI #40676605797 para `68c2d7c`; la revisión posterior de aceptación requiere su propio CI antes de declararse validada.
 - **Integración con G.O.:** contrato documentado y test HTTP sintético; no integración operativa.
 - **Oracle en producción:** sin inspección ni cambios.
 - **Prueba extremo a extremo con IA real:** no ejecutada y no autorizada.

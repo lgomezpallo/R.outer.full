@@ -6,6 +6,7 @@ the entire discovered inventory visible to diagnostics. This is an allowlist
 of prior routing policy, NOT a guarantee of current provider pricing.
 """
 from __future__ import annotations
+import os
 
 NVIDIA_ROUTING_ALLOWLIST = frozenset({
     "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
@@ -85,3 +86,8 @@ def account_billing_ineligibility_reason(provider_id: str) -> str | None:
     Discovery remains permitted after endpoint validation (no inference).
     """
     return "billing_unverified_account"
+
+
+def offline_only() -> bool:
+    """Opt-in hard stop for outbound provider and search traffic during offline release validation."""
+    return os.getenv("ROUTER_OFFLINE_ONLY", "").strip() == "1"

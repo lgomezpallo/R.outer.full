@@ -4,6 +4,7 @@ import json
 from time import perf_counter
 from uuid import uuid4
 import httpx
+from .billing import offline_only
 from .catalog import ProviderCatalog
 from .client import ProviderClient
 from .fallback_policy import retry_after_seconds
@@ -40,7 +41,7 @@ class Router:
         registered = self.registry.add(ProviderCredential(name, api_key))
         if persist and self.store is not None:
             self.store.save_credential(registered.spec.id, api_key)
-        if discover and registered.spec.discover_models and (
+        if discover and not offline_only() and registered.spec.discover_models and (
             hasattr(self.client, "discover_inventory") or hasattr(self.client, "discover_models")
         ):
             try:

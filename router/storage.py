@@ -238,6 +238,7 @@ class RouterStore:
                 "request_id": rid, "application_name": row["application_name"],
                 "created_at": row["created_at"], "attempts": [],
                 "total_provider_latency_ms": 0, "fallback": False,
+                "provider_fallback": False, "model_fallback": False,
             })
             trace["attempts"].append({
                 "provider": row["provider_id"], "model": row["model_id"],
@@ -247,7 +248,17 @@ class RouterStore:
             })
             trace["total_provider_latency_ms"] += int(row["latency_ms"])
         for trace in traces.values():
-            trace["fallback"] = len({a["provider"] for a in trace["attempts"]}) > 1
+            # A fallback may stay on the same provider while changing models.
+            # Preserve the broad flag for consumers and expose both dimensions
+            # independently; repeated attempts of the *same* model are retries.
+            attempts = trace["attempts"]
+            providers = {a["provider"] for a in attempts}
+            models_by_provider: dict[str | None, set[str | None]] = {}
+            for attempt in attempts:
+                models_by_provider.setdefault(attempt["provider"], set()).add(attempt["model"])
+            trace["provider_fallback"] = len(providers) > 1
+            trace["model_fallback"] = any(len(models) > 1 for models in models_by_provider.values())
+            trace["fallback"] = trace["provider_fallback"] or trace["model_fallback"]
         return [traces[row["request_id"]] for row in ids]
 
     def recent_model_stats(self, limit: int = 2000) -> dict[tuple[str, str], dict]:

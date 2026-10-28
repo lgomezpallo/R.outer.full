@@ -7,6 +7,7 @@ No credentials, prompts, or binary payloads are included in the preview.
 """
 from __future__ import annotations
 
+from .capability_evidence import _dimension
 from .registry import RegisteredProvider
 from .selector import ineligibility_reason, model_coverage, rank
 from .specialist_contract import (
@@ -16,6 +17,49 @@ from .specialist_contract import (
 )
 from .specialist_offline import OfflineFixtureTransport
 from .types import RouteRequest
+
+
+def _evidence_diagnostics(
+    providers: list[RegisteredProvider], request: SpecialistRequest, route_request: RouteRequest
+) -> dict:
+    """Read-only per-model provenance labels, independent of account approval.
+
+    Deliberately excludes raw evidence sources, task prompts, credentials and
+    binary artifacts. 'Recorded verified' means a local record, NOT an
+    independent validation or a guarantee of free usage.
+    """
+    rows: list[dict] = []
+    status_counts: dict[str, int] = {}
+    gate_counts: dict[str, int] = {}
+    for provider in providers:
+        for model in provider.spec.models:
+            status = _dimension(model, (request.kind,))["status"]
+            gate = ineligibility_reason(provider, model, route_request)
+            status_counts[status] = status_counts.get(status, 0) + 1
+            if gate is not None:
+                gate_counts[gate] = gate_counts.get(gate, 0) + 1
+            rows.append({
+                "provider": provider.spec.id,
+                "model": model.id,
+                "capability_evidence_status": status,
+                "reported_price": model.billing_status if model.billing_status in {"free", "paid"} else "unknown",
+                "observed_in_last_snapshot": model.discovered_in_last_snapshot,
+                "selection_gate": gate,
+                "rankable_offline": gate is None,
+            })
+    return {
+        "scope": "local_catalog_only",
+        "required_capability": request.kind,
+        "recorded_evidence_independently_verified": False,
+        "reported_free_price_is_not_account_approval": True,
+        "last_snapshot_flag_is_not_live_freshness": True,
+        "account_billing_verified": False,
+        "quality_measured": False,
+        "model_entries": len(rows),
+        "evidence_status_counts": dict(sorted(status_counts.items())),
+        "selection_gate_counts": dict(sorted(gate_counts.items())),
+        "models": rows,
+    }
 
 
 def preview_specialist_ranking(
@@ -68,6 +112,7 @@ def preview_specialist_ranking(
         ],
         "excluded_models": exclusions,
         "coverage": coverage,
+        "evidence_diagnostics": _evidence_diagnostics(providers, request, route_request),
         "fixture_simulation_available": True,
         # Never override the contract's execution_allowed=False.
     }

@@ -8,6 +8,7 @@ from .catalog import ProviderCatalog
 from .client import ProviderClient
 from .fallback_policy import retry_after_seconds
 from .orchestrator import Orchestrator
+from .modality_contract import completion_transport_error
 from .registry import ProviderRegistry, RegisteredProvider
 from .selector import billing_ineligibility_reason, effective_required_capabilities, ineligibility_reason, rank
 from .storage import RouterStore
@@ -106,6 +107,10 @@ class Router:
             state.ewma_latency_ms = item["latency_ms"]
 
     def process(self, req: RouteRequest) -> RouteResponse:
+        # A specialist artifact must not trigger a chat-based planner first.
+        unsupported = completion_transport_error(req)
+        if unsupported is not None:
+            return RouteResponse(False, None, None, None, [], [], unsupported)
         return self.orchestrator.process(req)
 
     def _classify_failure(self, exc: Exception) -> tuple[bool, bool, str, int | None, float]:
@@ -152,6 +157,10 @@ class Router:
         return retryable, provider_wide, error_type, error_code, cooldown
 
     def route(self, req: RouteRequest, phase: str = "execute") -> RouteResponse:
+        # This executor only returns chat text, not image/audio artifacts.
+        unsupported = completion_transport_error(req)
+        if unsupported is not None:
+            return RouteResponse(False, None, None, None, [], [], unsupported)
         # Keep direct Python callers as safe as /route: an image cannot be
         # silently dispatched to a text-only model or lose its modality on fallback.
         required = effective_required_capabilities(req)

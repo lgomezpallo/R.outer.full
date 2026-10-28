@@ -2,6 +2,7 @@ from __future__ import annotations
 import json
 import httpx
 from .billing import CLOUDFLARE_PAID_ONLY
+from .modality_contract import completion_transport_error
 from .registry import RegisteredProvider
 from .types import RouteRequest
 
@@ -48,6 +49,10 @@ class ProviderClient:
             raise RuntimeError(f"inference_blocked:{reason}")
 
     def complete(self, provider: RegisteredProvider, model: str, req: RouteRequest) -> tuple[str, dict]:
+        # Independent last-mile check: do not post specialist jobs to /chat/completions.
+        unsupported = completion_transport_error(req)
+        if unsupported is not None:
+            raise RuntimeError(unsupported)
         self._require_billing_eligible(provider, model)
         protocol = provider.spec.protocol
         if protocol == "openai-compatible":

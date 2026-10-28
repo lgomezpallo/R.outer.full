@@ -6,6 +6,7 @@ blocked model is counted as blocked, never assigned a fictitious usable score.
 from __future__ import annotations
 
 from .capability_evidence import _dimension
+from .modality_contract import completion_transport_error
 from .selector import ineligibility_reason, rank
 from .task_requirements import analyze_task
 from .types import RouteRequest
@@ -78,8 +79,11 @@ def ranking_report(
             "observed_latency_ms": state.ewma_latency_ms if samples else None,
             "quality_score": None,
         })
+    transport_blocker = completion_transport_error(req)
     return {
         "scope": "configured_providers_local_snapshot_only",
+        "execution_transport_supported": transport_blocker is None,
+        "execution_transport_blocker": transport_blocker,
         "live_probes_performed": False,
         "inference_performed": False,
         "account_billing_verified": False,

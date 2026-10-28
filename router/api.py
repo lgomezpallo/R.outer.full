@@ -48,7 +48,9 @@ def require_auth(authorization: str | None = Header(default=None)) -> str:
         app_name = store.verify_app_token(supplied)
         if app_name:
             return app_name
-    if not expected and not store.list_app_tokens():
+    # Safe-mode release must never silently accept unauthenticated G.O. traffic.
+    # Keep the legacy development fallback only outside offline-only mode.
+    if not offline_only() and not expected and not store.list_app_tokens():
         return "development"
     raise HTTPException(401, "unauthorized")
 

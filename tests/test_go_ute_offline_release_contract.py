@@ -82,3 +82,27 @@ def test_go_ute_http_contract_fails_closed_without_billing_authorization(monkeyp
     )
     assert completion.status_code == 502
     assert "no_eligible_provider" in completion.text
+
+
+def test_offline_go_ute_denies_anonymous_when_service_token_is_unset(monkeypatch, tmp_path):
+    """Missing release credentials must not silently enable development auth."""
+    router = _offline_router(monkeypatch)
+    monkeypatch.setattr(api, "router", router)
+    monkeypatch.setattr(api, "store", RouterStore(tmp_path / "go-ute-auth-offline.db"))
+    monkeypatch.delenv("ROUTER_SERVICE_TOKEN", raising=False)
+    monkeypatch.setenv("ROUTER_IACHAT_TOKEN", "fixture-iachat-token")
+    client = TestClient(api.app)
+
+    route_request = {"task": "estado de obras hoy", "decompose": False}
+    chat_request = {"messages": [{"role": "user", "content": "hola"}]}
+    assert client.post("/route", json=route_request).status_code == 401
+    assert client.post("/v1/chat/completions", json=chat_request).status_code == 401
+    assert client.post("/route", headers={"Authorization": "Bearer invalid"}, json=route_request).status_code == 401
+    authorized = client.post(
+        "/route",
+        headers={"Authorization": "Bearer fixture-iachat-token"},
+        json=route_request,
+    )
+    assert authorized.status_code == 200
+    assert authorized.json()["error"] == "no_eligible_provider"
+    assert authorized.json()["attempts"] == []

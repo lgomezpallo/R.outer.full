@@ -290,4 +290,8 @@ def rank(providers: list[RegisteredProvider], req: RouteRequest) -> list[Decisio
             decision = _score(provider, model, req, scarcity, advisory)
             if decision:
                 decisions.append(decision)
-    return sorted(decisions, key=lambda d: d.score, reverse=True)
+    # Stable tie-breaks are essential for reproducible offline comparisons and
+    # predictable fallback order when providers are registered in a different
+    # order. Scores still determine preference; provider/model IDs only break
+    # exact ties, without granting eligibility or overriding billing gates.
+    return sorted(decisions, key=lambda d: (-d.score, d.provider, d.model))

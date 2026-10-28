@@ -123,3 +123,64 @@ La prueba `tests/test_candidate_code_data_rollback_offline.py` ensaya **código 
 **Evidencia CI:** la prueba se añadió en el commit `9cbec1ffb8ce5b311f19d538fc8db4c559a92c13`. Confirmar la ejecución GitHub Actions de este SHA antes de marcar el ensayo como aprobado. El CI usa red para dependencias y Docker build; sólo la aceptación del contenedor está aislada con `--network none`.
 
 **Checklist de entrega restante:** inspección de solo lectura de Oracle con autorización; backup/restauración de una copia representativa (sin exponer secretos); conexión G.O.↔Router en modo seguro; política de egress denegada y aceptación local; aprobación explícita para despliegue. La habilitación posterior de inferencia requiere verificar **solamente la cuenta y el modelo específicos** que se pretendan autorizar, con control de cuota y sin sobregiro. Los demás modelos y proveedores siguen fail-closed. No se exige comprobar las cuatro cuentas para cerrar código o pruebas offline.
+
+
+## Checkpoint de entrega 28/10/2026, 12:55 ART — revisión sin ampliar alcance
+
+**Fuente verificada:** PR #87 sigue `open/draft`, base `main`, head
+`2913a07ea0393d0f4f0c9cc53e19ac177efa8949`, sin fusionar.
+CI de ese commit: [run 40710951159](https://github.com/lgomezpallo/R.outer.full/actions/runs/40710951159)
+`success`: 593 pruebas pytest y build Docker; aceptación HTTP de contenedor con
+`--network none` aprobada. **No es CI completamente sin Internet**: instalación
+de dependencias y build Docker pueden descargar paquetes.
+
+**Trazabilidad de commits:** GitHub compara `a237544069a2d5590b93dec29bb30a958f0bb80f`
+(PR #45) con el head actual: 165 commits por delante, cero detrás. Comparación
+`339898a6081061b41ad2557b600e06efbc1f00ef...2913a07`: 233 por delante,
+cero detrás, 105 archivos reportados en la comparación. Son referencias de
+GitHub, **no un diagnóstico de la VM**. No cerrar ni borrar ramas de PR
+apilados sin comprobar su preservación y trazabilidad.
+
+**Compatibilidad contractual, no operativa:** se revisó `go_ute/router.py`
+de Gestión de Obras UTE en `main` commit
+`a13382fa8574d10bea1809a7a94ac1b9d1f6b4df`. Su cliente exige
+`GO_ROUTER_ENABLED=1`, token, URL loopback `127.0.0.1:8010`, y
+envía `/route` con `task`, `conversation`,
+`required_capabilities=["chat"]` y `application_name="go-ute"`.
+Su `probe_contract()` envía exclusivamente cuerpos inválidos y espera
+401 sin token / 422 con token. Las pruebas de Router cubren ese contrato
+con dobles y HTTP local; **no existe prueba G.O.↔Router real ni servicio
+nuevo desplegado**.
+
+### Puertas de salida (mantener bloqueadas)
+
+- [x] Candidata única #87 con #45 como ancestro y CI de head aprobado.
+- [x] Aceptación Docker aislada de red; simulación de backup SQLite/WAL,
+  esquema, catálogo y rollback con datos ficticios.
+- [x] Contrato actual de G.O. cotejado con código de su repositorio.
+- [ ] Inventario de solo lectura de Oracle: SHA efectivo, unit systemd,
+  rutas de BD/catálogo, presencia de configuración de proveedor previamente
+  funcional **sin imprimir ni copiar valores secretos**.
+- [ ] Restauración representativa en un entorno autorizado, sin escrituras
+  sobre producción; no extrapolar ensayos sintéticos a la VM.
+- [ ] Procedimiento específico de promoción de la candidata: los scripts
+  `router_release_stage.py` y `router_release_promote.py` siguen fijados
+  a `339898a`, y `promote.py` exige chat real. **No ejecutarlos ni
+  habilitar sus workflows para esta candidata.**
+- [ ] Aceptación de integración real G.O.↔Router con salida de red denegada,
+  autenticación y errores fail-closed, previa autorización de despliegue.
+- [ ] Decisión explícita sobre el requisito de CI *completamente offline*:
+  actualmente sólo pytest y aceptación Docker están protegidos frente a
+  inferencias externas; checkout, pip y build no están aislados.
+- [ ] Aprobación explícita de cualquier despliegue o fusión.
+- [ ] Para una conversación real posterior: evidencia **por cuenta y modelo
+  concretos** de gratuidad sin cargos ni sobregiros, cuota y límite seguro,
+  y autorización específica. Los demás proveedores/modelos siguen bloqueados.
+  No es necesario verificar universalmente cuatro cuentas para aprobar el
+  código o la integración offline.
+
+**Decisión de este checkpoint:** código candidato probado offline y listo
+para revisión; **no apto todavía para despliegue ni inferencia real**.
+No se ejecutaron comandos en Oracle, no se tocó G.O./IAchat/Prisma, no hubo
+tráfico a proveedores ni cambios de facturación. El próximo paso útil es
+diagnóstico Oracle de solo lectura y contraste de configuración, no otro PR.

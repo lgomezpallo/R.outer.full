@@ -6,6 +6,7 @@ The existing production release scripts remain pinned to the historical SHA.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import shutil
@@ -16,7 +17,12 @@ from pathlib import Path
 import pytest
 
 from router.storage import RouterStore
-from scripts.router_release_stage import sqlite_snapshot
+MODULE = Path(__file__).resolve().parents[1] / "scripts" / "router_release_stage.py"
+spec = importlib.util.spec_from_file_location("router_release_stage_rollback_test", MODULE)
+assert spec is not None and spec.loader is not None
+stage = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(stage)
+sqlite_snapshot = stage.sqlite_snapshot
 
 pytestmark = pytest.mark.strict_billing
 

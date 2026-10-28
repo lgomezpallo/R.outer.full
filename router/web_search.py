@@ -6,6 +6,7 @@ from datetime import datetime
 from urllib.parse import urlparse
 
 import httpx
+from .billing import offline_only
 
 # Search uses public RSS endpoints without requiring paid APIs. Results may be
 # incomplete; never interpret a successful HTTP response as factual verification.
@@ -34,6 +35,8 @@ def _safe_url(value: str) -> bool:
 
 def search_current(task: str, *, now: datetime | None = None, limit: int = 5) -> list[dict[str, str]]:
     """Search via public RSS with a bounded request and untrusted snippets."""
+    if offline_only():
+        return []
     current = now or datetime.now().astimezone()
     base_query = task.strip()[:230]
     # Explicitly request the missing fields for upcoming fixture queries.

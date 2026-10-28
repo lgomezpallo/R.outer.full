@@ -37,7 +37,7 @@ La aplicación Gestión de Obras UTE es independiente; la integración aquí es 
 - [x] Confirmar CI original #87: run `40660699273`, pytest y Docker build correctos (577 tests antes de esta consolidación).
 - [x] Documentar contrato HTTP y error fail-closed para G.O.
 - [x] Añadir modo offline explícito y prueba de integración HTTP sin inferencia.
-- [ ] Ejecutar CI del **nuevo head** de la candidata; confirmar pytest, Docker y política estática de workflows. Un CI anterior no valida estos commits.
+- [x] Primera validación de la candidata: [CI #40668581062](https://github.com/lgomezpallo/R.outer.full/actions/runs/40668581062), **580 pytest aprobados, 4 advertencias y Docker build aprobado**. Volver a verificar el CI del head definitivo tras cualquier edición.
 - [ ] Revisar diff final respecto de `main` y del SHA de referencia Oracle, incluyendo archivos de datos y migraciones.
 - [ ] Verificar en una futura ventana autorizada el SHA y el estado real de Oracle, los procesos, rutas y volúmenes. No realizado.
 - [ ] Preparar y **verificar** backup íntegro de SQLite, catálogo, configuración y secretos en destino privado; no copiar claves a GitHub ni a logs.
@@ -81,7 +81,7 @@ pytest -q tests/test_go_ute_offline_release_contract.py tests/test_account_billi
 ## Estados que no deben confundirse
 
 - **Código consolidado en rama:** sí, sujeto al nuevo CI.
-- **Pruebas offline originales:** sí; pruebas nuevas pendientes de CI.
+- **Pruebas offline originales y nuevas:** sí, 580 pytest y Docker en CI #40668581062; cualquier commit posterior requiere CI propio.
 - **Integración con G.O.:** contrato documentado y test HTTP sintético; no integración operativa.
 - **Oracle en producción:** sin inspección ni cambios.
 - **Prueba extremo a extremo con IA real:** no ejecutada y no autorizada.

@@ -94,7 +94,7 @@ def test_strategic_cost_limit_applies_even_in_preview(monkeypatch):
     assert preview["execution_allowed"] is False
 
 
-@pytest.mark.parametrize("kind,request,result", [
+@pytest.mark.parametrize("kind,job,result", [
     ("image_generation", SpecialistRequest("image_generation", "A tree"),
      SpecialistResult("image_generation", b"fixture-image", "image/png")),
     ("image_editing", SpecialistRequest("image_editing", "Crop", b"source-image", "image/png"),
@@ -104,14 +104,14 @@ def test_strategic_cost_limit_applies_even_in_preview(monkeypatch):
     ("transcription", SpecialistRequest("transcription", input_bytes=b"source-audio", input_media_type="audio/wav"),
      SpecialistResult("transcription", text="fixture transcript")),
 ])
-def test_all_modalities_fixture_simulate_without_network(monkeypatch, kind, request, result):
+def test_all_modalities_fixture_simulate_without_network(monkeypatch, kind, job, result):
     def blocked(*args, **kwargs):
         raise AssertionError("network access is forbidden in offline tests")
 
     monkeypatch.setattr(socket, "socket", blocked)
     monkeypatch.setattr(socket, "create_connection", blocked)
     preview, actual = simulate_ranked_specialist_fixture(
-        [_provider(_model("flux-model"))], request, OfflineFixtureTransport({kind: result})
+        [_provider(_model("flux-model"))], job, OfflineFixtureTransport({kind: result})
     )
     assert actual is result
     assert preview["kind"] == kind

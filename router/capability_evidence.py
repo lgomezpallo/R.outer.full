@@ -18,6 +18,8 @@ DIMENSIONS: dict[str, tuple[str, ...]] = {
     "reasoning": ("reasoning",),
     "spanish": ("spanish",),
     "vision": ("vision",),
+    "image_generation": ("image_generation",),
+    "image_editing": ("image_editing",),
     "documents": ("document",),
     "context": ("long_context",),
     "json": ("json",),

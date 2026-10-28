@@ -16,6 +16,13 @@ def _suggested(text):
 @pytest.mark.parametrize(("task", "expected"), [
     ("Escribí código en Python para ordenar una lista.", "code"),
     ("Write a Python function to sort a list.", "code"),
+    ("Generá un script en Python para ordenar una lista.", "code"),
+    ("Creá una función en Python para ordenar una lista.", "code"),
+    ("Corregí este código que tiene un bug.", "code"),
+    ("Generá una imagen de una ciudad.", "image_generation"),
+    ("Create an illustration of a city.", "image_generation"),
+    ("Edit this image to remove the background.", "image_editing"),
+    ("Retocá esta imagen para mejorar el contraste.", "image_editing"),
     ("Analizá esta imagen y describí lo que se ve.", "vision"),
     ("Resume este PDF, por favor.", "document"),
     ("Respondé en JSON con dos claves.", "json"),
@@ -39,6 +46,9 @@ def test_nouns_and_generic_questions_do_not_force_specialization():
     assert _suggested("¿Qué es Python y para qué sirve?") == set()
     assert _suggested("¿Qué significa JSON?") == set()
     assert _suggested("La palabra imagen aparece en el texto.") == set()
+    assert "image_generation" not in _suggested("Analizá esta imagen y describila.")
+    assert "image_editing" not in _suggested("¿Qué significa editar una foto?")
+    assert "code" not in _suggested("¿Qué es un script de Python?")
 
 
 def test_quoted_and_fenced_text_not_treated_as_task_instructions():

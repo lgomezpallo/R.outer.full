@@ -42,6 +42,7 @@ def test_all_required_dimensions_and_audio_modalities_are_distinct():
     assert set(DIMENSIONS) >= {
         "code", "reasoning", "spanish", "vision", "documents", "context",
         "json", "audio_transcription", "audio_speech", "tools",
+        "image_generation", "image_editing",
     }
     dimensions = _entry(_model(
         "vendor/transcriber", declared=("transcription",),
@@ -49,6 +50,20 @@ def test_all_required_dimensions_and_audio_modalities_are_distinct():
     ))
     assert dimensions["audio_transcription"]["status"] == "recorded_verified"
     assert dimensions["audio_speech"]["status"] == "unknown"
+
+
+def test_image_generation_and_editing_evidence_are_independent():
+    dimensions = _entry(_model(
+        "vendor/image-specialist",
+        declared=("image_generation", "image_editing"),
+        evidence=(
+            _record("image_generation", "verified"),
+            _record("image_editing", "unsupported"),
+        ),
+    ))
+    assert dimensions["image_generation"]["status"] == "recorded_verified"
+    assert dimensions["image_editing"]["status"] == "recorded_unsupported"
+    assert dimensions["vision"]["status"] == "unknown"
 
 
 def test_declared_or_inferred_from_name_is_not_verified():

@@ -5,6 +5,7 @@ Only run on disposable copies. Does not print private source or conflict hunks.
 """
 from __future__ import annotations
 import ast
+import difflib
 from pathlib import Path
 import re
 import subprocess
@@ -53,6 +54,56 @@ def scaffold(source: str) -> str:
         lines[start-1:end] = [marker]
     return ''.join(lines)
 
+def merge_nonoverlapping(base: str, upstream: str, local: str) -> str:
+    """Merge disjoint base edits, including compatible import insertions.
+
+    No overlapping replacements are silently selected. This supplements git
+    merge-file when nearby additions are reported as one conflicting hunk.
+    """
+    b = base.splitlines(keepends=True)
+    u = upstream.splitlines(keepends=True)
+    l = local.splitlines(keepends=True)
+
+    def changes(other):
+        return [(i, j, other[k:m]) for tag, i, j, k, m in
+                difflib.SequenceMatcher(None, b, other, autojunk=False).get_opcodes()
+                if tag != 'equal']
+
+    uc, lc = changes(u), changes(l)
+    edits = list(uc)
+    for a, z, value in lc:
+        duplicate = False
+        for i, j, existing in uc:
+            if a == i and z == j and value == existing:
+                duplicate = True
+                break
+            collision = (a < j and i < z) or (a == z and i <= a < j) or (i == j and a <= i < z) or (a == z == i == j)
+            if not collision:
+                continue
+            if a == z == i == j and _only_imports(value) and _only_imports(existing):
+                combined = existing + [line for line in value if line not in existing]
+                edits = [(x, y, combined if (x, y) == (i, j) else v) for x, y, v in edits]
+                duplicate = True
+                break
+            raise Blocked('overlapping_base_edits')
+        if not duplicate:
+            edits.append((a, z, value))
+    output = list(b)
+    for a, z, value in sorted(edits, key=lambda item: (item[0], item[1]), reverse=True):
+        output[a:z] = value
+    return ''.join(output)
+
+
+def _only_imports(lines: list[str]) -> bool:
+    content = ''.join(lines)
+    try:
+        parsed = ast.parse(content)
+    except SyntaxError:
+        return False
+    return bool(parsed.body) and all(isinstance(node, (ast.Import, ast.ImportFrom))
+                                     for node in parsed.body)
+
+
 def merge_lines(base: str, upstream: str, local: str) -> str:
     with tempfile.TemporaryDirectory(prefix='safe-symbol-') as folder:
         paths = [Path(folder) / x for x in ('local','base','upstream')]
@@ -60,13 +111,18 @@ def merge_lines(base: str, upstream: str, local: str) -> str:
             path.write_text(content, encoding='utf-8')
         result = subprocess.run(['git','merge-file','-p',*map(str,paths)],
                                 capture_output=True, text=True, check=False)
-        if result.returncode:
-            raise Blocked('overlap')
-        return result.stdout
+        if result.returncode == 0:
+            return result.stdout
+        if result.returncode > 1:
+            raise Blocked('merge_tool_failed')
+        return merge_nonoverlapping(base, upstream, local)
 
 def combine(base: str, upstream: str, local: str) -> tuple[str,int]:
     b,u,l = symbols(base),symbols(upstream),symbols(local)
-    merged_scaffold = merge_lines(scaffold(base),scaffold(upstream),scaffold(local))
+    try:
+        merged_scaffold = merge_lines(scaffold(base),scaffold(upstream),scaffold(local))
+    except Blocked as exc:
+        raise Blocked('scaffold_' + str(exc)) from exc
     overlap = 0
     def replacement(match):
         nonlocal overlap
@@ -81,7 +137,10 @@ def combine(base: str, upstream: str, local: str) -> tuple[str,int]:
         elif current is None or new is None:
             raise Blocked('changed_deleted_symbol')
         else:
-            selected = merge_lines(old or '',current,new)
+            try:
+                selected = merge_lines(old or '',current,new)
+            except Blocked as exc:
+                raise Blocked('symbol_' + str(exc)) from exc
             overlap += 1
         if selected is None:
             raise Blocked('missing_symbol')

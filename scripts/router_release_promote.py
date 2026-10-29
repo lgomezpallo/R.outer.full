@@ -23,7 +23,7 @@ import urllib.request
 import uuid
 from pathlib import Path
 
-PINNED_SHA = "339898a6081061b41ad2557b600e06efbc1f00ef"
+PINNED_SHA = os.environ.get("ROUTER_RELEASE_SHA", "")
 APP = Path("/home/ubuntu/Proyecto/Herramientas/Router")
 RELEASE = Path.home() / "router-releases" / PINNED_SHA
 BACKUPS = Path.home() / "router-private-backups"
@@ -34,6 +34,12 @@ SAFE_USER = re.compile(r"[a-z_][a-z0-9_-]*")
 
 class PromoteBlocked(Exception):
     pass
+
+
+def candidate_pin() -> str:
+    if not re.fullmatch(r"[0-9a-f]{40}", PINNED_SHA):
+        raise PromoteBlocked("candidate_sha_required")
+    return PINNED_SHA
 
 
 def command(*args: str) -> str:
@@ -127,26 +133,29 @@ def inner_backup(work: Path) -> None:
 
 
 def inner_verify() -> None:
+    """Assert a fail-closed G.O. request; never send a real chat completion."""
     token = os.getenv("ROUTER_SERVICE_TOKEN") or os.getenv("ROUTER_IACHAT_TOKEN")
     headers = {"Content-Type": "application/json"}
     if token:
         headers["Authorization"] = "Bearer " + token
     payload = json.dumps({
-        "model": "router-ia-auto",
-        "messages": [{"role": "user", "content": "Reply with a short greeting in Spanish."}],
-        "stream": False,
+        "task": "Offline release gate for G.O.",
+        "conversation": [{"role": "user", "content": "health check only"}],
+        "required_capabilities": ["chat"],
+        "application_name": "go-ute",
     }).encode()
-    req = urllib.request.Request("http://127.0.0.1:8010/v1/chat/completions",
+    req = urllib.request.Request("http://127.0.0.1:8010/route",
                                  data=payload, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=75) as response:
+        with urllib.request.urlopen(req, timeout=12) as response:
             body = json.load(response)
-            answer = body.get("choices", [{}])[0].get("message", {}).get("content")
-            if response.status != 200 or not isinstance(answer, str) or not answer.strip():
-                raise PromoteBlocked("postdeploy_chat_failed")
+            if (response.status != 200 or body.get("ok") is not False
+                    or body.get("error") != "no_eligible_provider"
+                    or body.get("text") is not None or body.get("attempts") != []):
+                raise PromoteBlocked("postdeploy_offline_route_failed")
     except (OSError, ValueError, KeyError):
-        raise PromoteBlocked("postdeploy_chat_failed") from None
-    print("postdeploy_chat=passed", flush=True)
+        raise PromoteBlocked("postdeploy_offline_route_failed") from None
+    print("postdeploy_offline_route=passed", flush=True)
 
 
 def private_unit(script: Path, work: Path, user: str, envfiles: list[str], mode: str) -> None:
@@ -164,7 +173,7 @@ def private_unit(script: Path, work: Path, user: str, envfiles: list[str], mode:
                 result = subprocess.run(args, stdout=log, stderr=subprocess.STDOUT, timeout=130)
             except subprocess.TimeoutExpired:
                 raise PromoteBlocked("private_unit_timeout") from None
-        expected = "production_data_snapshot=passed" if mode == "backup" else "postdeploy_chat=passed"
+        expected = "production_data_snapshot=passed" if mode == "backup" else "postdeploy_offline_route=passed"
         if result.returncode != 0 or expected not in (work / ("private-" + mode + ".log")).read_text(errors="replace"):
             raise PromoteBlocked("private_" + mode + "_failed")
         print(expected, flush=True)
@@ -196,6 +205,7 @@ def rollback() -> bool:
 
 
 def promote(script: Path) -> None:
+    candidate_pin()
     if command("git", "-C", str(RELEASE), "rev-parse", "HEAD") != PINNED_SHA:
         raise PromoteBlocked("release_pin_mismatch")
     if not wait_health():
@@ -224,7 +234,9 @@ def promote(script: Path) -> None:
     private_unit(script, work, user, envfiles, "backup")
     # Retain WorkingDirectory, EnvironmentFiles and the exact existing CLI flags.
     new_argv = argv + ["--app-dir", str(RELEASE)]
-    content = "[Service]\nExecStart=\nExecStart=" + " ".join(new_argv) + "\n"
+    content = ("[Service]\nIPAddressDeny=any\nIPAddressAllow=localhost\n"
+               "ExecStart=\nExecStart=/usr/bin/env ROUTER_OFFLINE_ONLY=1 "
+               + " ".join(new_argv) + "\n")
     staged = work / "release-override.conf"
     staged.write_text(content)
     staged.chmod(0o600)

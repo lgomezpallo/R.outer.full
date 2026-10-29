@@ -211,7 +211,7 @@ def strict_retryable_line_subsumed(base: str, upstream: str, local: str) -> bool
     if tag != 'replace' or j - i != 1 or m - k != 1:
         return False
     def eligible(line):
-        return re.fullmatch(r'\\s*retryable\\s*=\\s*status\\s+in\\s+\\{[0-9, ]+\\}\\s*', line.strip()) is not None
+        return re.fullmatch(r'\s*retryable\s*=\s*status\s+in\s+\{[0-9, ]+\}\s*', line.strip()) is not None
     return (eligible(old[i]) and eligible(new[k]) and
             new[k].strip() in {line.strip() for line in upstream.splitlines()})
 

@@ -26,10 +26,12 @@ class RouterStore:
         self.master_key = master_key or os.getenv("ROUTER_MASTER_KEY", "")
         self._init_db()
 
+
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
         return conn
+
 
     def _init_db(self) -> None:
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
@@ -105,6 +107,7 @@ class RouterStore:
             if "last_failure_kind" not in columns:
                 conn.execute("ALTER TABLE provider_runtime ADD COLUMN last_failure_kind TEXT")
 
+
     def _key_bytes(self) -> bytes:
         if not self.master_key:
             raise RuntimeError("router_master_key_required")
@@ -120,6 +123,7 @@ class RouterStore:
             raise RuntimeError("invalid_router_master_key")
         return key
 
+
     @property
     def can_persist_secrets(self) -> bool:
         try:
@@ -127,6 +131,7 @@ class RouterStore:
             return AESGCM is not None
         except RuntimeError:
             return False
+
 
     def save_credential(self, provider_id: str, api_key: str) -> None:
         if AESGCM is None:
@@ -155,6 +160,7 @@ class RouterStore:
                 ),
             )
 
+
     def load_credentials(self) -> list[PersistedCredential]:
         if not self.can_persist_secrets:
             return []
@@ -175,6 +181,7 @@ class RouterStore:
                 continue
             credentials.append(PersistedCredential(row["provider_id"], plaintext.decode("utf-8")))
         return credentials
+
 
     def record_metric(
         self,
@@ -203,6 +210,7 @@ class RouterStore:
                     attempt_number, latency_ms, 1 if success else 0, error_type, error_code,
                 ),
             )
+
 
     def recent_request_traces(self, limit: int = 30, application_name: str | None = None) -> list[dict]:
         """Recent per-request attempt traces without prompts, responses or credentials."""
@@ -261,6 +269,7 @@ class RouterStore:
             trace["fallback"] = trace["provider_fallback"] or trace["model_fallback"]
         return [traces[row["request_id"]] for row in ids]
 
+
     def recent_model_stats(self, limit: int = 2000) -> dict[tuple[str, str], dict]:
         """Rebuild per-model routing observations without treating probes as answers.
 
@@ -301,6 +310,7 @@ class RouterStore:
             }
         return result
 
+
     def reserve_audit_budget(self, provider_id: str, daily_limit: int) -> tuple[bool, int]:
         """Atomically reserve one external probe for the current UTC day."""
         from datetime import datetime, timezone
@@ -321,6 +331,7 @@ class RouterStore:
                 (provider_id, today),
             ).fetchone()[0]
         return updated, used
+
 
     def reserve_audit_model(
         self, provider_id: str, model_id: str, capability: str, daily_limit: int
@@ -360,6 +371,7 @@ class RouterStore:
             )
             return "reserved", used + 1
 
+
     def audit_claimed_models(self, provider_id: str, capability: str) -> set[str]:
         """Read durable audit claims without reserving slots or calling providers.
 
@@ -373,12 +385,14 @@ class RouterStore:
             ).fetchall()
         return {row["model_id"] for row in rows}
 
+
     def audit_budget_used(self) -> dict[str, int]:
         from datetime import datetime, timezone
         today = datetime.now(timezone.utc).date().isoformat()
         with self._connect() as conn:
             rows = conn.execute("SELECT provider_id,used FROM audit_budget WHERE day_utc=?", (today,)).fetchall()
         return {row["provider_id"]: row["used"] for row in rows}
+
 
     def model_performance_report(self, limit: int = 2000) -> list[dict]:
         """Routing-attempt reliability and successful-completion latency.
@@ -431,6 +445,7 @@ class RouterStore:
                 "errors": entry["errors"],
             })
         return sorted(output, key=lambda item: (-item["attempts"], item["provider"], item["model"]))
+
 
 
     def routing_fallback_report(self, limit: int = 200) -> dict:
@@ -539,6 +554,7 @@ class RouterStore:
             "billing_verified": False,
         }
 
+
     def provider_routing_report(self, limit: int = 2000) -> list[dict]:
         """Provider totals over exactly the same routing attempts as model reports.
 
@@ -571,6 +587,7 @@ class RouterStore:
             row["observation_scope"] = "routing_attempts_only"
         return sorted(groups.values(), key=lambda row: row["provider"])
 
+
     def create_app_token(self, name: str) -> str:
         token = "rtr_" + secrets.token_urlsafe(32)
         digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
@@ -581,6 +598,7 @@ class RouterStore:
                 (name, digest, preview),
             )
         return token
+
 
     def verify_app_token(self, token: str) -> str | None:
         digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
@@ -597,12 +615,14 @@ class RouterStore:
                 return str(row["name"])
         return None
 
+
     def list_app_tokens(self) -> list[dict]:
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT name,preview,active,last_used_at,created_at FROM app_tokens ORDER BY id"
             ).fetchall()
         return [dict(row) for row in rows]
+
 
 
     def save_model_runtime(self, provider_id: str, model_id: str, state) -> None:
@@ -617,6 +637,7 @@ class RouterStore:
                 (provider_id, model_id, state.cooldown_until, state.cooldown_strikes, state.last_error),
             )
 
+
     def load_model_runtime(self, provider_id: str) -> dict[str, dict]:
         with self._connect() as conn:
             rows = conn.execute(
@@ -624,6 +645,7 @@ class RouterStore:
                 (provider_id,),
             ).fetchall()
         return {row["model_id"]: dict(row) for row in rows}
+
 
     def save_provider_runtime(self, provider_id: str, state) -> None:
         health_value = None if state.health_ok is None else (1 if state.health_ok else 0)
@@ -658,6 +680,7 @@ class RouterStore:
                 ),
             )
 
+
     def load_provider_runtime(self, provider_id: str) -> dict | None:
         with self._connect() as conn:
             row = conn.execute(
@@ -673,3 +696,4 @@ class RouterStore:
         if result["health_ok"] is not None:
             result["health_ok"] = bool(result["health_ok"])
         return result
+

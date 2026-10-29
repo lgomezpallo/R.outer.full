@@ -31,6 +31,7 @@ def router_ui():
     if index.exists():
         return FileResponse(index)
     return {"name": "Router IA", "status": "ok"}
+
 catalog = ProviderCatalog(storage_path=os.getenv("ROUTER_CATALOG_FILE") or "router-catalog.json")
 store = RouterStore(path=os.getenv("ROUTER_DB_FILE", "router.db"), master_key=os.getenv("ROUTER_MASTER_KEY"))
 router = Router(max_retries=int(os.getenv("ROUTER_MAX_RETRIES", "1")), catalog=catalog, store=store)
@@ -54,12 +55,14 @@ def require_auth(authorization: str | None = Header(default=None)) -> str:
         return "development"
     raise HTTPException(401, "unauthorized")
 
+
 def require_admin(authorization: str | None = Header(default=None)) -> None:
     expected = os.getenv("ROUTER_SERVICE_TOKEN", "").strip()
     prefix = "Bearer "
     supplied = authorization[len(prefix):] if authorization and authorization.startswith(prefix) else ""
     if not expected or not supplied or not secrets.compare_digest(supplied, expected):
         raise HTTPException(401, "admin_token_required")
+
 
 class TokenInput(BaseModel):
     name: str = Field(min_length=1, max_length=80)
@@ -148,6 +151,7 @@ def _startup_has_eligible_inference() -> bool:
     return False
 
 
+
 @app.on_event("startup")
 def load_environment_providers() -> None:
     router.load_persisted_providers()
@@ -234,6 +238,7 @@ def load_environment_providers() -> None:
     if startup_inference_allowed and os.getenv("ROUTER_STARTUP_HETEROGENEOUS_SMOKE", "").strip() == "1":
         threading.Thread(target=_startup_heterogeneous_smoke, daemon=True).start()
 
+
 def _startup_heterogeneous_smoke() -> None:
     if os.getenv("ROUTER_STARTUP_HETEROGENEOUS_SMOKE", "").strip() != "1":
         return
@@ -280,6 +285,7 @@ def _startup_heterogeneous_smoke() -> None:
             flush=True,
         )
 
+
 def _startup_orchestration_smoke() -> None:
     if os.getenv("ROUTER_STARTUP_ORCHESTRATION_SMOKE", "").strip() != "1":
         return
@@ -320,6 +326,7 @@ def _startup_orchestration_smoke() -> None:
             f"ok=False error={type(exc).__name__}",
             flush=True,
         )
+
 
 def _startup_routing_smoke() -> None:
     if os.getenv("ROUTER_STARTUP_ROUTING_SMOKE", "").strip() != "1":
@@ -379,6 +386,7 @@ def _startup_routing_smoke() -> None:
                 flush=True,
             )
 
+
 def _startup_capability_profile() -> None:
     if os.getenv("ROUTER_STARTUP_CAPABILITY_PROFILE", "").strip() != "1":
         return
@@ -412,9 +420,11 @@ def _startup_capability_profile() -> None:
             print(f"ROUTER_CAPABILITY_PROFILE provider={item.spec.id} capability={capability} candidates={len(candidates)} checked={checked} verified={verified or '-'}", flush=True)
 
 
+
 @app.get("/catalog")
 def catalog():
     return {"providers": router.catalog.snapshot()}
+
 
 @app.post("/catalog/providers", dependencies=[Depends(require_admin)])
 def catalog_provider(payload: CatalogProviderInput):
@@ -440,6 +450,7 @@ def catalog_provider(payload: CatalogProviderInput):
     router.catalog.put(provider)
     return {"provider": provider.id, "cataloged": True}
 
+
 @app.get("/health")
 def health():
     providers = []
@@ -463,6 +474,7 @@ def health():
         })
     return {"status": "ok", "providers": providers}
 
+
 @app.get("/diagnostics/inventory", dependencies=[Depends(require_admin)])
 def diagnostics_inventory():
     """Offline snapshot only: no model discovery, probes, or inference."""
@@ -470,11 +482,13 @@ def diagnostics_inventory():
     return inventory_report(router.registry.all())
 
 
+
 @app.get("/diagnostics/capabilities", dependencies=[Depends(require_admin)])
 def diagnostics_capabilities():
     """Read-only evidence matrix; never triggers a probe or inference."""
     from .capability_evidence import capability_report
     return capability_report(router.registry.all())
+
 
 
 class TaskRequirementsInput(BaseModel):
@@ -494,6 +508,7 @@ def diagnostics_task_requirements(payload: TaskRequirementsInput):
         required_capabilities=frozenset(payload.required_capabilities),
         images_present=payload.images_present,
     )
+
 
 
 class RankingPreviewInput(TaskRequirementsInput):
@@ -519,6 +534,7 @@ def diagnostics_model_ranking(payload: RankingPreviewInput):
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+
 @app.get("/diagnostics/model-coverage", dependencies=[Depends(require_admin)])
 def diagnostics_model_coverage(capability: str = "chat", max_strategic_cost: int | None = None):
     """Read-only model counts; does not probe providers or spend API credits."""
@@ -539,16 +555,19 @@ def diagnostics_model_coverage(capability: str = "chat", max_strategic_cost: int
     )
 
 
+
 @app.get("/performance")
 def performance():
     """Operational measurements only; API success does not prove answer quality."""
     return {"metrics": store.model_performance_report(), "quality_measured": False}
 
 
+
 @app.get("/diagnostics/routing-fallback", dependencies=[Depends(require_admin)])
 def diagnostics_routing_fallback(limit: int = 200):
     """Local request-level retry and fallback outcomes, without provider calls."""
     return store.routing_fallback_report(limit=limit)
+
 
 @app.get("/diagnostics/provider-performance", dependencies=[Depends(require_admin)])
 def diagnostics_provider_performance(limit: int = 2000):
@@ -563,6 +582,7 @@ def diagnostics_provider_performance(limit: int = 2000):
         "quality_measured": False,
     }
 
+
 @app.get("/diagnostics/requests", dependencies=[Depends(require_admin)])
 def recent_request_traces(limit: int = 30, application_name: str | None = None):
     """Admin-only attempt timing and fallback diagnostics; no message content."""
@@ -571,13 +591,25 @@ def recent_request_traces(limit: int = 30, application_name: str | None = None):
         "timing_scope": "provider_attempts_only",
     }
 
+
+@app.get("/diagnostics/requests", dependencies=[Depends(require_admin)])
+def recent_request_traces(limit: int = 30, application_name: str | None = None):
+    """Admin-only attempt timing and fallback diagnostics; no message content."""
+    return {
+        "requests": store.recent_request_traces(limit=limit, application_name=application_name),
+        "timing_scope": "provider_attempts_only",
+    }
+
+
 @app.post("/tokens", dependencies=[Depends(require_admin)])
 def create_token(payload: TokenInput):
     return {"name": payload.name, "token": store.create_app_token(payload.name)}
 
+
 @app.get("/tokens", dependencies=[Depends(require_admin)])
 def list_tokens():
     return {"tokens": store.list_app_tokens()}
+
 
 @app.post("/providers", dependencies=[Depends(require_admin)])
 def add_provider(payload: ProviderInput):
@@ -596,6 +628,7 @@ def add_provider(payload: ProviderInput):
         "credential_persisted": store.can_persist_secrets,
     }
 
+
 @app.post("/providers/test", dependencies=[Depends(require_admin)])
 def test_provider(payload: ProviderTestInput):
     try:
@@ -603,12 +636,14 @@ def test_provider(payload: ProviderTestInput):
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
+
 @app.post("/capabilities/probe", dependencies=[Depends(require_admin)])
 def probe_capability(payload: CapabilityProbeInput):
     try:
         return router.verify_capability(payload.provider, payload.model, payload.capability)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+
 
 def _chat_audit_candidates(provider):
     """Exact eligible pending set for /audit/step (no calls or reservations).
@@ -626,6 +661,7 @@ def _chat_audit_candidates(provider):
         and not any(record.capability == "chat" for record in model.evidence)
         and billing_ineligibility_reason(provider, model) is None
     ]
+
 
 
 @app.get("/audit/progress")
@@ -687,10 +723,12 @@ def audit_progress():
         "note": "Verificación por capacidad, no garantía de calidad. Límites internos, no cuotas oficiales de proveedores. Esta instantánea no es atómica, puede cambiar por concurrencia y no habilita inferencia. Las reservas por modelo persisten, incluso si el catálogo retira un modelo, y no se vuelven a ofrecer como pendientes. El presupuesto diario se reinicia a las 00:00 UTC.",
     }
 
+
 @app.get("/audit/budget", dependencies=[Depends(require_admin)])
 def audit_budget():
     used = store.audit_budget_used()
     return {"limits": AUDIT_DAILY_LIMITS, "used": used, "note": "Límites internos conservadores, no cuotas oficiales del proveedor."}
+
 
 @app.post("/audit/step", dependencies=[Depends(require_admin)])
 def audit_step(payload: AuditStepInput):
@@ -732,6 +770,7 @@ def audit_step(payload: AuditStepInput):
         "note": "Reservas internas atomicas por modelo y dia. Las reclamaciones persisten ante fallos para evitar reintentos automaticos; no autorizan inferencia ni facturacion.",
     }
 
+
 @app.post("/capabilities/audit", dependencies=[Depends(require_admin)])
 def audit_capabilities(payload: CapabilityAuditInput):
     try:
@@ -742,11 +781,13 @@ def audit_capabilities(payload: CapabilityAuditInput):
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
+
 def _enriched_context(task: str, context: str) -> str:
     base = with_temporal_context(context)
     if not offline_only() and needs_current_search(task):
         base += "\n" + search_context(task)
     return base
+
 
 
 _IMAGE_URL = re.compile(r"^data:image/(png|jpeg|webp);base64,([A-Za-z0-9+/]+={0,2})$")
@@ -774,6 +815,7 @@ def _validated_images(images: list[str]) -> tuple[str, ...]:
             raise HTTPException(422, "image_signature_invalid")
         result.append(source)
     return tuple(result)
+
 
 
 @app.post("/route")
@@ -807,6 +849,7 @@ def route(payload: RouteInput, app_identity: str = Depends(require_auth)):
         "decisions": [d.__dict__ for d in result.decisions],
         "orchestration": (result.raw or {}).get("orchestration"),
     }
+
 
 
 @app.post("/v1/chat/completions")
@@ -850,3 +893,4 @@ def openai_chat(payload: OpenAIChatInput, app_identity: str = Depends(require_au
         "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
         "router": {"provider": result.provider, "model": result.model},
     }
+

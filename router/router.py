@@ -30,6 +30,7 @@ class Router:
         self.store = store
         self.orchestrator = Orchestrator(self)
 
+
     def add_provider(
         self,
         name: str,
@@ -65,6 +66,7 @@ class Router:
         self._hydrate_provider_metrics(registered)
         return registered
 
+
     def load_persisted_providers(self) -> int:
         if self.store is None:
             return 0
@@ -76,6 +78,7 @@ class Router:
             except ValueError:
                 continue
         return loaded
+
 
     def _hydrate_provider_metrics(self, provider: RegisteredProvider) -> None:
         if self.store is None:
@@ -107,12 +110,14 @@ class Router:
             # and not the duration of an HTTP error/timeout.
             state.ewma_latency_ms = item["latency_ms"]
 
+
     def process(self, req: RouteRequest) -> RouteResponse:
         # A specialist artifact must not trigger a chat-based planner first.
         unsupported = completion_transport_error(req)
         if unsupported is not None:
             return RouteResponse(False, None, None, None, [], [], unsupported)
         return self.orchestrator.process(req)
+
 
     def _classify_failure(self, exc: Exception) -> tuple[bool, bool, str, int | None, float]:
         retryable = isinstance(exc, (httpx.TimeoutException, httpx.TransportError))
@@ -156,6 +161,7 @@ class Router:
                     retryable = False
 
         return retryable, provider_wide, error_type, error_code, cooldown
+
 
     def route(self, req: RouteRequest, phase: str = "execute") -> RouteResponse:
         # This executor only returns chat text, not image/audio artifacts.
@@ -273,6 +279,7 @@ class Router:
             "all_attempts_failed" if attempts else "no_eligible_provider",
         )
 
+
     def verify_capability(self, provider_id: str, model_id: str, capability: str) -> dict:
         provider = next((item for item in self.registry.all() if item.spec.id == provider_id), None)
         if provider is None:
@@ -369,6 +376,7 @@ class Router:
             result["http_status"] = http_status
         return result
 
+
     def audit_provider_capabilities(self, provider_id: str, *, inconclusive_only: bool = False) -> dict:
         provider = next((item for item in self.registry.all() if item.spec.id == provider_id), None)
         if provider is None:
@@ -387,6 +395,7 @@ class Router:
             "unsupported": sum(1 for item in checks if item["status"] == "unsupported"),
             "inconclusive": sum(1 for item in checks if item["status"] == "inconclusive"),
         }
+
 
 
     def test_provider(self, provider_id: str) -> dict:
@@ -449,3 +458,4 @@ class Router:
             "success_rate": provider.state.success_rate,
             "checked": checked,
         }
+

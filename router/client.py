@@ -10,6 +10,7 @@ from .types import RouteRequest
 def _is_cloudflare_workers_ai(base_url: str) -> bool:
     return base_url.startswith("https://api.cloudflare.com/client/v4/accounts/") and base_url.rstrip("/").endswith("/ai")
 
+
 class ProviderClient:
     @staticmethod
     def _require_billing_eligible(provider: RegisteredProvider, model: str) -> None:
@@ -50,6 +51,7 @@ class ProviderClient:
         if reason is not None:
             raise RuntimeError(f"inference_blocked:{reason}")
 
+
     def complete(self, provider: RegisteredProvider, model: str, req: RouteRequest) -> tuple[str, dict]:
         # Independent last-mile check: do not post specialist jobs to /chat/completions.
         unsupported = completion_transport_error(req)
@@ -65,10 +67,12 @@ class ProviderClient:
             return self._gemini(provider, model, req)
         raise RuntimeError(f"unsupported_protocol:{protocol}")
 
+
     def discover_models(self, provider: RegisteredProvider, timeout_s: float = 12.0) -> list[str]:
         """Compatibility interface: list every discovered model, including paid ones."""
         ids, _ = self.discover_inventory(provider, timeout_s)
         return ids
+
 
     def discover_inventory(
         self, provider: RegisteredProvider, timeout_s: float = 12.0
@@ -193,6 +197,7 @@ class ProviderClient:
                     billing[model_id] = status
             result.append(model_id)
         return list(dict.fromkeys(result)), billing
+
 
     def probe_capability(self, provider: RegisteredProvider, model: str, capability: str) -> dict:
         # Non-chat probes issue HTTP requests directly; enforce before any POST.
@@ -407,6 +412,7 @@ class ProviderClient:
                 return self._probe_http_result(exc.response, "active_probe_http_error")
             return {"status": "inconclusive", "evidence": f"probe_network_error:{type(exc).__name__}"}
 
+
     def _probe_http_result(self, response: httpx.Response, evidence: str) -> dict:
         if 200 <= response.status_code < 300:
             status = "verified"
@@ -415,6 +421,7 @@ class ProviderClient:
         else:
             status = "inconclusive"
         return {"status": status, "evidence": evidence, "http_status": response.status_code}
+
 
     def _silence_wav(self) -> bytes:
         import struct
@@ -427,6 +434,7 @@ class ProviderClient:
             + b"data" + struct.pack("<I", len(data))
         )
         return header + data
+
 
     def _messages(self, req: RouteRequest) -> list[dict]:
         messages: list[dict] = []
@@ -443,6 +451,7 @@ class ProviderClient:
         else:
             messages.append({"role": "user", "content": user})
         return messages
+
 
     def _openai_compatible(self, provider: RegisteredProvider, model: str, req: RouteRequest) -> tuple[str, dict]:
         self._require_billing_eligible(provider, model)
@@ -461,6 +470,7 @@ class ProviderClient:
         if not isinstance(text, str) or not text.strip():
             raise RuntimeError("empty_provider_response")
         return text, data
+
 
     def _anthropic(self, provider: RegisteredProvider, model: str, req: RouteRequest) -> tuple[str, dict]:
         self._require_billing_eligible(provider, model)
@@ -490,6 +500,7 @@ class ProviderClient:
             raise RuntimeError("empty_provider_response")
         return text, data
 
+
     def _gemini(self, provider: RegisteredProvider, model: str, req: RouteRequest) -> tuple[str, dict]:
         self._require_billing_eligible(provider, model)
         url = provider.spec.base_url.rstrip("/") + f"/models/{model}:generateContent"
@@ -510,6 +521,7 @@ class ProviderClient:
         if not text.strip():
             raise RuntimeError("empty_provider_response")
         return text, data
+
 
 # Backward compatible name used by existing tests.
 OpenAICompatibleClient = ProviderClient

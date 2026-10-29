@@ -335,6 +335,8 @@ def stage() -> None:
             raise StageBlocked("promotion_rehearsal_snapshot_exists")
         shutil.copyfile(source, target)
         target.chmod(0o600)
+    promotion_sources = (snapshot / "predeploy-router.db", snapshot / "predeploy-catalog.json")
+    promotion_source_digests = tuple(digest(path) for path in promotion_sources)
     promote_path = release / "scripts/router_release_promote.py"
     spec = importlib.util.spec_from_file_location("router_candidate_promote_rehearsal", promote_path)
     if spec is None or spec.loader is None:
@@ -347,7 +349,8 @@ def stage() -> None:
         # Never emit candidate tracebacks or private snapshot paths to CI logs.
         raise StageBlocked("promotion_data_rehearsal_failed") from None
     if (not candidate_db.is_file() or not candidate_catalog.is_file()
-            or tuple(digest(path) for path in originals) != original_digests):
+            or tuple(digest(path) for path in originals) != original_digests
+            or tuple(digest(path) for path in promotion_sources) != promotion_source_digests):
         raise StageBlocked("promotion_rehearsal_data_not_isolated")
     print("isolated_promotion_data_rehearsal=passed", flush=True)
     for source, label in ((APP, "baseline-before"), (release, "candidate"),

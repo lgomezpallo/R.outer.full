@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 import sqlite3
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -111,6 +112,41 @@ def test_external_app_dir_remaps_only_when_it_cannot_shadow_live_router(monkeypa
         promote.original_argv(raw)
     with pytest.raises(promote.PromoteBlocked, match="service_app_dir_unsupported"):
         promote.candidate_argv(argv)
+
+
+
+
+def test_external_clean_ancestral_checkout_is_preserved_and_remapped(monkeypatch, tmp_path):
+    app = tmp_path / "checkout"
+    (app / "router").mkdir(parents=True)
+    (app / "router" / "api.py").write_text("app = 'tracked baseline'\n")
+    def git(*args):
+        return subprocess.check_output(["git", *args], cwd=app, text=True).strip()
+    git("init", "-q")
+    git("config", "user.name", "Test")
+    git("config", "user.email", "test@example.invalid")
+    git("add", "router/api.py")
+    git("commit", "-qm", "baseline")
+    sha = git("rev-parse", "HEAD")
+    external = tmp_path / "live-other-checkout"
+    subprocess.run(["git", "clone", "-q", str(app), str(external)], check=True)
+    release = tmp_path / "candidate"
+    release.mkdir()
+    monkeypatch.setattr(promote, "APP", app)
+    monkeypatch.setattr(promote, "RELEASE", release)
+    monkeypatch.setattr(promote, "PINNED_SHA", sha)
+    raw = (
+        f"{{ path={app}/.venv/bin/python ; argv[]={app}/.venv/bin/python "
+        f"-m uvicorn router.api:app --host 127.0.0.1 --port 8010 "
+        f"--app-dir {external} ; ignore_errors=no ; start_time=[n/a] }}"
+    )
+    original = promote.original_argv(raw)
+    result = promote.candidate_argv(original)
+    assert result[result.index("--app-dir") + 1] == str(release)
+    assert original[original.index("--app-dir") + 1] == str(external)
+    (external / "router" / "api.py").write_text("app = 'uncommitted override'\n")
+    with pytest.raises(promote.PromoteBlocked, match="service_app_dir_unsupported"):
+        promote.original_argv(raw)
 
 
 

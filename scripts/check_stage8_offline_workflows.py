@@ -16,6 +16,7 @@ WORKFLOWS = Path(__file__).resolve().parents[1] / ".github" / "workflows"
 # Explicit allowlist: new workflows and new jobs require a reviewed policy change.
 EXPECTED_JOBS: dict[str, frozenset[str]] = {
     "ci.yml": frozenset({"test"}),
+    "oracle-candidate-reconcile.yml": frozenset({"preserve-and-reconcile"}),
     "check-provider-secrets.yml": frozenset({"check"}),
     "oracle-deploy.yml": frozenset({"tests", "deploy"}),
     "router-oracle-monitor.yml": frozenset({"tests", "oracle-check"}),
@@ -34,6 +35,7 @@ REMOTE_JOBS = {
 # Any workflow edit must update this map in an explicitly reviewed PR.
 EXPECTED_WORKFLOW_BLOBS: dict[str, str] = {
     "ci.yml": "96688b4fa9ed2626fd4a8e00572d5bd5bed23470",
+    "oracle-candidate-reconcile.yml": "724a194835762fead502ba7ffd45543c8c8b52cf",
     "check-provider-secrets.yml": "30fb296f7d0d87d180d5a1a87b69822382113eb5",
     "oracle-deploy.yml": "5dc10c0fbba1198a14e2ee65321c10d79ecb3545",
     "router-oracle-monitor.yml": "c7fc8ddb2501c33c772488d97bf6dbe216dbbb68",
@@ -41,6 +43,9 @@ EXPECTED_WORKFLOW_BLOBS: dict[str, str] = {
     "router-release-promote.yml": "163ea9b4aa7508d817e170e54cea187ba23274af",
     "router-release-live-smoke.yml": "e95e4775c95b397d69a00d0290dc56f838178648",
 }
+
+
+EXPECTED_BRIDGE_BLOB = "72f306163e35cb6ba7415d1aecf6a30c00dc66ad"
 
 
 def _git_blob_sha(source: str) -> str:
@@ -83,6 +88,11 @@ def audit_workflows(sources: Mapping[str, str]) -> list[str]:
     for filename in sorted(actual - expected):
         problems.append(f"{filename}: unreviewed workflow file")
 
+    if "oracle-candidate-reconcile.yml" in actual:
+        bridge = Path(__file__).resolve().parents[1] / "scripts" / "oracle_snapshot_bridge.py"
+        if not bridge.is_file() or _git_blob_sha(bridge.read_text(encoding="utf-8")) != EXPECTED_BRIDGE_BLOB:
+            problems.append("oracle_snapshot_bridge.py: unreviewed remote script content change")
+
     for filename in sorted(actual & expected):
         source = sources[filename]
         if _git_blob_sha(source) != EXPECTED_WORKFLOW_BLOBS[filename]:
@@ -98,7 +108,12 @@ def audit_workflows(sources: Mapping[str, str]) -> list[str]:
             problems.append(f"{filename}: duplicate trigger or job key")
             continue
 
-        expected_triggers = {"push", "pull_request"} if filename == "ci.yml" else {"workflow_dispatch"}
+        if filename == "ci.yml":
+            expected_triggers = {"push", "pull_request"}
+        elif filename == "oracle-candidate-reconcile.yml":
+            expected_triggers = {"push", "workflow_dispatch"}
+        else:
+            expected_triggers = {"workflow_dispatch"}
         if set(trigger_map) != expected_triggers:
             problems.append(f"{filename}: unauthorized triggers {sorted(trigger_map)}")
         if set(job_map) != EXPECTED_JOBS[filename]:
@@ -112,6 +127,10 @@ def audit_workflows(sources: Mapping[str, str]) -> list[str]:
                 conditions = re.findall(r"^    if:\s*(.*?)\s*$", body, re.M)
                 if conditions != ["${{ false }}"]:
                     problems.append(f"{filename}/{job}: remote job is not unconditionally disabled")
+            elif filename == "oracle-candidate-reconcile.yml" and job == "preserve-and-reconcile":
+                # Exception: exact reviewed workflow and bridge SHA only. SSH reads
+                # Oracle; encrypted snapshot and reconciliation run on a CI runner.
+                pass
             elif REMOTE_ACTION.search(body) or re.search(r"\$\{\{\s*secrets\.ORACLE_", body, re.I):
                 problems.append(f"{filename}/{job}: remote action outside frozen job")
     return problems
@@ -130,7 +149,7 @@ def main() -> int:
         for error in errors:
             print(f"STAGE8_POLICY_FAIL {error}")
         return 1
-    print("STAGE8_POLICY_OK: 7 reviewed workflows; only CI automatic; 5 remote jobs disabled")
+    print("STAGE8_POLICY_OK: 8 reviewed workflows; one pinned read-only Oracle snapshot; 5 production remote jobs disabled")
     return 0
 
 

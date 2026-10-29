@@ -7,6 +7,7 @@ on:
       - .github/workflows/oracle-candidate-reconcile.yml
       - scripts/oracle_snapshot_bridge.py
       - scripts/oracle_method_three_way.py
+      - scripts/oracle_symbol_merge.py
   workflow_dispatch:
 
 permissions:

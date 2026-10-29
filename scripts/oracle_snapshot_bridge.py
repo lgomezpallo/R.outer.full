@@ -149,6 +149,7 @@ def reconcile(archive: Path, candidate_sha: str) -> int:
                 # Paths are repo-relative names only: never print the patch,
                 # untracked file inventory, conflict hunks, or private source.
                 print('tracked_conflict_files=' + ','.join(sorted(paths)))
+                method_merged = False
                 if 'router/router.py' in paths:
                     merger = root / 'scripts' / 'oracle_method_three_way.py'
                     result = subprocess.run([sys.executable, str(merger), str(oracle), base,
@@ -157,9 +158,28 @@ def reconcile(archive: Path, candidate_sha: str) -> int:
                                             text=True, check=False)
                     if result.returncode == 0:
                         required(git(candidate, 'add', '--', 'router/router.py'))
+                        method_merged = True
                         print('router_method_merge=applied')
                     else:
                         print('router_method_merge=blocked')
+                # Try a conservative symbol-aware merge for remaining Python
+                # conflicts. Never print the Oracle source or commit it publicly.
+                for relative in sorted(paths):
+                    if relative == 'router/router.py' and method_merged:
+                        continue
+                    if not relative.startswith('router/') or not relative.endswith('.py'):
+                        continue
+                    helper = root / 'scripts' / 'oracle_symbol_merge.py'
+                    attempt = subprocess.run(
+                        [sys.executable, str(helper), str(oracle), base, candidate_sha,
+                         relative, str(candidate / relative)],
+                        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                        text=True, check=False,
+                    )
+                    print('symbol_merge_file=' + relative)
+                    print(attempt.stdout.strip() if attempt.stdout.strip() else 'symbol_merge=blocked')
+                    if attempt.returncode == 0:
+                        required(git(candidate, 'add', '--', relative))
                 unmerged = required(git(candidate, 'ls-files', '-u', '-z'))
                 remaining = set()
                 for record in unmerged.split(b'\0'):

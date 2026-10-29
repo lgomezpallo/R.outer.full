@@ -16,36 +16,16 @@ jobs:
       - run: python -m pip install -e ".[dev]"
       - run: pytest
       - run: docker build -t router-ci .
-      - name: Isolated Docker HTTP acceptance (no network or provider keys)
+      - name: Real G.O. client + Router loopback acceptance (network disabled)
         run: |
           docker run --rm --network none --read-only --cap-drop ALL \
             --security-opt no-new-privileges \
             --tmpfs /tmp:rw,nosuid,size=32m \
+            --mount type=bind,src="$PWD/tests/fixtures/go_ute_router_5823272.py",dst=/tmp/go_ute_router.py,readonly \
+            --mount type=bind,src="$PWD/scripts/go_ute_http_acceptance_offline.py",dst=/tmp/acceptance.py,readonly \
             -e PYTHONDONTWRITEBYTECODE=1 \
             -e ROUTER_OFFLINE_ONLY=1 \
             -e ROUTER_SERVICE_TOKEN=ci-offline-only-token \
             -e ROUTER_DB_FILE=/tmp/router-ci.db \
             -e ROUTER_CATALOG_FILE=/tmp/router-ci-catalog.json \
-            --entrypoint python router-ci -c '
-          from fastapi.testclient import TestClient
-          from router.api import app
-
-          with TestClient(app) as client:
-              assert client.get("/health").status_code == 200
-              request = {"task": "estado de obras", "application_name": "gestion-obras-ute", "decompose": False}
-              assert client.post("/route", json=request).status_code == 401
-              auth = {"Authorization": "Bearer ci-offline-only-token"}
-              response = client.post("/route", headers=auth, json=request)
-              assert response.status_code == 200, response.text
-              result = response.json()
-              assert result["ok"] is False, result
-              assert result["error"] == "no_eligible_provider", result
-              assert result["attempts"] == [], result
-              assert result["text"] is None, result
-              completion = client.post("/v1/chat/completions", headers=auth, json={
-                  "messages": [{"role": "user", "content": "hola"}],
-                  "stream": False,
-              })
-              assert completion.status_code == 502, completion.text
-          print("offline_container_http_acceptance=passed")
-          '
+            --entrypoint python router-ci /tmp/acceptance.py

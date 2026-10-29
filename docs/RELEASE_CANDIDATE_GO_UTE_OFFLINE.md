@@ -184,3 +184,16 @@ para revisión; **no apto todavía para despliegue ni inferencia real**.
 No se ejecutaron comandos en Oracle, no se tocó G.O./IAchat/Prisma, no hubo
 tráfico a proveedores ni cambios de facturación. El próximo paso útil es
 diagnóstico Oracle de solo lectura y contraste de configuración, no otro PR.
+
+
+## Checkpoint 29/10/2026 — reconciliación Oracle integrada en PR #87
+
+El HEAD de Oracle observado es fa54b3781e52. El snapshot cifrado previo ([run 40853340673](https://github.com/lgomezpallo/R.outer.full/actions/runs/40853340673)) preservó 6 cambios tracked y 27 untracked. No se repitió el respaldo ni se modificó Oracle.
+
+Los cuatro conflictos tracked de router/api.py, router/client.py, router/router.py y router/storage.py quedaron resueltos en una copia aislada y se incorporaron a la **única candidata** mediante [commit 365f62d](https://github.com/lgomezpallo/R.outer.full/commit/365f62d67bc75e06a59276b9b51005e1b87154c2), con lista blanca de fuentes Python, control de patrones de secretos y compilación sintáctica. Los 27 archivos untracked permanecen cifrados y fuera del repositorio. La integración añadió principalmente separadores en blanco; una ruta duplicada de diagnósticos se eliminó en [474200e](https://github.com/lgomezpallo/R.outer.full/commit/474200e1ad4ece5874a7918b3b51afdfab789a7e).
+
+**Validación posterior al merge:** [CI 40862618569](https://github.com/lgomezpallo/R.outer.full/actions/runs/40862618569) terminó con 594 pruebas pytest aprobadas, build Docker y aceptación HTTP aislada con red deshabilitada. No equivale a build totalmente offline porque pip y Docker build pueden descargar dependencias. El [workflow de reconciliación 40862610152](https://github.com/lgomezpallo/R.outer.full/actions/runs/40862610152) detectó la integración previa y no volvió a recuperar el snapshot; el workflow quedó limitado a lectura.
+
+**Puertas aún cerradas:** no se fusionó a main ni se desplegó; no se tocaron Oracle, G.O., IAchat o Prisma; no hubo inferencias ni cambios de facturación. Pendientes: integración real G.O.-Router en entorno aislado, prueba de rollback específica, CI totalmente desconectado y autorización explícita de despliegue. Para tráfico de inferencia real se requiere evidencia de gratuidad sin sobregiro de la cuenta/modelo seleccionado y autorización separada. No ejecutar scripts de promoción fijados al SHA histórico 339898a.
+
+**Siguiente hito P0:** validación integrada G.O.-Router y plan de promoción/rollback de la candidata ya reconciliada, sin tocar producción.

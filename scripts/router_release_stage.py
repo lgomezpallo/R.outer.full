@@ -12,6 +12,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import shutil
 import socket
 import sqlite3
@@ -259,11 +260,37 @@ def preflight_promotion_layout(promote_module: object) -> None:
     inline = command("systemctl", "show", "router.service", "-p", "Environment", "--value")
     if re.search(r"(?:KEY|TOKEN|PASSWORD|SECRET|CREDENTIAL)", inline, re.I):
         raise StageBlocked("promotion_inline_secrets_unsupported")
+    raw_exec = command("systemctl", "show", "router.service", "-p", "ExecStart", "--value")
     try:
-        promote_module.original_argv(command(
-            "systemctl", "show", "router.service", "-p", "ExecStart", "--value"))
+        promote_module.original_argv(raw_exec)
     except promote_module.PromoteBlocked:
-        raise StageBlocked("promotion_service_exec_unsupported") from None
+        # Emit a *category only*: never echo executable paths, flags, tokens,
+        # environment values or the raw systemd record to Actions logs.
+        match = re.search(r"argv\\[\\]=(.*?)\\s+;\\s+ignore_errors=", raw_exec)
+        if match is None:
+            reason = "promotion_exec_record_format"
+        else:
+            try:
+                args = shlex.split(match.group(1))
+            except ValueError:
+                args = []
+            if not args:
+                reason = "promotion_exec_unparseable"
+            elif not str(Path(args[0])).startswith(str(APP / ".venv/bin/")):
+                reason = "promotion_exec_interpreter"
+            elif "router.api:app" not in args:
+                reason = "promotion_exec_application"
+            elif "--app-dir" in args or "--reload" in args:
+                reason = "promotion_exec_conflicting_flags"
+            elif "--host" not in args or args.index("--host") + 1 >= len(args) or args[args.index("--host") + 1] != "127.0.0.1":
+                reason = "promotion_exec_host"
+            elif "--port" not in args or args.index("--port") + 1 >= len(args) or args[args.index("--port") + 1] != "8010":
+                reason = "promotion_exec_port"
+            elif any(not re.fullmatch(r"[-a-zA-Z0-9_./:=]+", x) for x in args):
+                reason = "promotion_exec_argument_syntax"
+            else:
+                reason = "promotion_exec_other"
+        raise StageBlocked(reason) from None
     override = subprocess.run(
         ["sudo", "-n", "test", "-e", str(promote_module.OVERRIDE)],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,

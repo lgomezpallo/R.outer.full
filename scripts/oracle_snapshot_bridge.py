@@ -97,6 +97,29 @@ def stream() -> None:
                     tar.addfile(entry, f)
 
 
+def export_private_reconciliation(candidate: Path) -> None:
+    """Export only tracked, resolved changes to a runner-private patch."""
+    output = os.environ.get('ROUTER_RECONCILE_PATCH_PATH')
+    if not output:
+        return
+    runner_temp = os.environ.get('RUNNER_TEMP')
+    if not runner_temp:
+        raise RuntimeError('runner temp missing')
+    destination = Path(output).resolve()
+    if not destination.is_relative_to(Path(runner_temp).resolve()):
+        raise RuntimeError('unsafe private patch destination')
+    if git(candidate, 'diff', '--check', 'HEAD', '--').returncode:
+        raise RuntimeError('reconciled patch failed whitespace check')
+    patch = required(git(candidate, 'diff', '--binary', 'HEAD', '--'))
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, 'wb') as handle:
+        handle.write(patch)
+    changed = [p for p in required(git(candidate, 'diff', '--name-only', '-z', 'HEAD', '--')).split(b'\\0') if p]
+    print('reconciled_tracked_file_count=' + str(len(changed)))
+    print('reconciled_private_patch=exported_no_source_logged')
+
+
 def reconcile(archive: Path, candidate_sha: str) -> int:
     with tarfile.open(archive, mode='r:') as tar:
         names = tar.getnames()
@@ -138,6 +161,8 @@ def reconcile(archive: Path, candidate_sha: str) -> int:
             try:
                 result = git(candidate, 'apply', '--3way', '--index', '-', data=local_delta)
                 if result.returncode == 0:
+                    export_private_reconciliation(candidate)
+                    export_private_reconciliation(candidate)
                     print('tracked_reconcile=applied_to_isolated_candidate')
                     return 0
                 unmerged = required(git(candidate, 'ls-files', '-u', '-z'))

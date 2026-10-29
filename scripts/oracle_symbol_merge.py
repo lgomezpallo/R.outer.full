@@ -6,6 +6,8 @@ Only run on disposable copies. Does not print private source or conflict hunks.
 from __future__ import annotations
 import ast
 import difflib
+from collections import Counter
+import textwrap
 from pathlib import Path
 import re
 import subprocess
@@ -117,6 +119,34 @@ def merge_lines(base: str, upstream: str, local: str) -> str:
             raise Blocked('merge_tool_failed')
         return merge_nonoverlapping(base, upstream, local)
 
+def oracle_semantically_subsumed(base: str, upstream: str, local: str) -> bool:
+    """Conservative proof that every changed Oracle statement exists upstream.
+
+    This does NOT infer equivalence of different code. Any local-only statement,
+    retained removed statement, or formatting-only edit blocks this fallback.
+    """
+    if local == base:
+        return True
+    if upstream == local:
+        return True
+    try:
+        trees = [ast.parse(textwrap.dedent(x)) for x in (base, upstream, local)]
+    except (SyntaxError, ValueError):
+        return False
+
+    def statements(tree):
+        return Counter(ast.dump(node, include_attributes=False) for node in ast.walk(tree)
+                       if isinstance(node, ast.stmt) and not isinstance(
+                           node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)))
+    old, current, new = map(statements, trees)
+    additions = new - old
+    deletions = old - new
+    if not additions and not deletions:
+        return False  # Oracle changed comments/formatting; do not discard.
+    return all(current[key] >= count for key, count in additions.items()) and all(
+        current[key] <= old[key] - count for key, count in deletions.items()
+    )
+
 def combine(base: str, upstream: str, local: str) -> tuple[str,int]:
     b,u,l = symbols(base),symbols(upstream),symbols(local)
     try:
@@ -140,7 +170,10 @@ def combine(base: str, upstream: str, local: str) -> tuple[str,int]:
             try:
                 selected = merge_lines(old or '',current,new)
             except Blocked as exc:
-                raise Blocked('symbol_' + str(exc) + '_at_' + name) from exc
+                if oracle_semantically_subsumed(old or '', current, new):
+                    selected = current
+                else:
+                    raise Blocked('symbol_' + str(exc) + '_at_' + name) from exc
             overlap += 1
         if selected is None:
             raise Blocked('missing_symbol')
@@ -152,6 +185,8 @@ def combine(base: str, upstream: str, local: str) -> tuple[str,int]:
     except SyntaxError as exc:
         raise Blocked('invalid_python') from exc
     if scaffold(combined) != merged_scaffold:
+        if oracle_semantically_subsumed(base, upstream, local):
+            return upstream, overlap
         raise Blocked('scaffold_mismatch')
     return combined,overlap
 

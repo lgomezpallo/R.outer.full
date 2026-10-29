@@ -398,6 +398,33 @@ def preflight_promotion_layout(promote_module: object) -> None:
     print("production_switch_preflight=passed", flush=True)
 
 
+
+def live_baseline_root(pin: str, snapshot: Path) -> Path:
+    """Preserve the actual external import checkout before rollback rehearsal."""
+    raw = command("systemctl", "show", "router.service", "-p", "ExecStart", "--value")
+    if classify_live_app_dir(raw) != "external_shadow_router":
+        return APP
+    if external_router_history(raw, pin) != "clean_known_ancestor":
+        raise StageBlocked("external_live_source_not_preserved")
+    match = re.search(r"argv\[\]=(.*?)\s+;\s+ignore_errors=", raw)
+    if match is None:
+        raise StageBlocked("external_live_source_unparseable")
+    args = shlex.split(match.group(1))
+    root_arg = args[args.index("--app-dir") + 1]
+    root = (Path(root_arg) if Path(root_arg).is_absolute() else APP / root_arg).resolve(strict=True)
+    command("git", "-C", str(root), "rev-parse", "HEAD",
+            output=snapshot / "external-live-head.txt")
+    bundle = snapshot / "external-live-source.bundle"
+    command("git", "-C", str(root), "bundle", "create", str(bundle), "HEAD")
+    if not bundle.is_file() or bundle.stat().st_size == 0:
+        raise StageBlocked("external_live_source_backup_failed")
+    for file in (snapshot / "external-live-head.txt", bundle):
+        file.chmod(0o600)
+    print("external_live_source_backup=created", flush=True)
+    return root
+
+
+
 def stage() -> None:
     pin = candidate_pin()
     os.umask(0o077)
@@ -522,8 +549,9 @@ def stage() -> None:
         # candidate promotable while its real systemd layout is unsupported.
         preflight_block = str(error)
         print("production_switch_preflight=blocked", flush=True)
-    for source, label in ((APP, "baseline-before"), (release, "candidate"),
-                          (APP, "baseline-restored")):
+    baseline = live_baseline_root(pin, snapshot)
+    for source, label in ((baseline, "baseline-before"), (release, "candidate"),
+                          (baseline, "baseline-restored")):
         passed = isolated_sidecar(source, python, snapshot, label)
         print(f"sidecar_{label.replace('-', '_')}={'passed' if passed else 'failed'}",
               flush=True)

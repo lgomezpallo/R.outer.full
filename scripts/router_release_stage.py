@@ -157,47 +157,66 @@ def backup_checkout(app: Path, snapshot: Path, base: str, active: dict[str, Path
     return {"untracked": len(names)}
 
 
-def isolated_sidecar(release: Path, python: Path, snapshot: Path) -> bool:
+def isolated_sidecar(release: Path, python: Path, snapshot: Path, label: str) -> bool:
+    """Run a disposable, OS-network-isolated service on the sidecar port.
+
+    This never edits router.service. Each invocation uses a fresh private DB,
+    no provider credentials and a transient systemd unit restricted to loopback.
+    """
     if not port_free(SIDECAR_PORT):
         raise StageBlocked("sidecar_port_busy")
-    # Allowlist inherited process settings: never pass production provider secrets,
-    # tokens, billing flags or application overrides to the disposable sidecar.
     env = {key: os.environ[key] for key in ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "TZ")
            if key in os.environ}
     env.update({
         "PYTHONPATH": str(release),
         "ROUTER_OFFLINE_ONLY": "1",
         "PYTHONDONTWRITEBYTECODE": "1",
-        "ROUTER_DB_FILE": str(snapshot / "sidecar.db"),
-        "ROUTER_CATALOG_FILE": str(snapshot / "sidecar-catalog.json"),
+        "ROUTER_DB_FILE": str(snapshot / f"sidecar-{label}.db"),
+        "ROUTER_CATALOG_FILE": str(snapshot / f"sidecar-{label}-catalog.json"),
         "ROUTER_STARTUP_PROVIDER_TESTS": "0",
         "ROUTER_STARTUP_ROUTING_SMOKE": "0",
         "ROUTER_STARTUP_CAPABILITY_PROFILE": "0",
         "ROUTER_STARTUP_ORCHESTRATION_SMOKE": "0",
         "ROUTER_STARTUP_HETEROGENEOUS_SMOKE": "0",
     })
-    with (snapshot / "sidecar.log").open("wb") as log:
-        process = subprocess.Popen(
-            [str(python), "-m", "uvicorn", "router.api:app", "--host", "127.0.0.1",
-             "--port", str(SIDECAR_PORT)],
-            cwd=release, env=env, stdout=log, stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
-        try:
-            for _ in range(30):
-                if process.poll() is not None:
-                    return False
-                if health(SIDECAR_PORT):
-                    return True
-                time.sleep(1)
-            return False
-        finally:
-            process.terminate()
-            try:
-                process.wait(timeout=8)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=5)
+    unit = "router-stage-sidecar-" + uuid.uuid4().hex[:12]
+    args = [
+        "sudo", "-n", "systemd-run", "--quiet", "--collect",
+        "--unit=" + unit,
+        "--property=User=" + getpass.getuser(),
+        "--property=WorkingDirectory=" + str(release),
+        "--property=NoNewPrivileges=yes",
+        "--property=IPAddressDeny=any",
+        "--property=IPAddressAllow=localhost",
+        "--property=ProtectSystem=strict",
+        "--property=ReadWritePaths=" + str(snapshot),
+        "--property=PrivateTmp=yes",
+    ]
+    args.extend("--setenv=" + key + "=" + value for key, value in env.items())
+    args += [str(python), "-m", "uvicorn", "router.api:app", "--host", "127.0.0.1",
+             "--port", str(SIDECAR_PORT)]
+    subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                   check=True, timeout=15)
+    try:
+        for _ in range(30):
+            if health(SIDECAR_PORT):
+                return True
+            if subprocess.run(["systemctl", "is-active", "--quiet", unit],
+                              stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL).returncode != 0:
+                return False
+            time.sleep(1)
+        return False
+    finally:
+        subprocess.run(["sudo", "-n", "systemctl", "stop", unit],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       timeout=15)
+        for _ in range(15):
+            if port_free(SIDECAR_PORT):
+                break
+            time.sleep(0.2)
+        else:
+            raise StageBlocked("sidecar_not_stopped")
 
 
 def stage() -> None:
@@ -280,10 +299,17 @@ def stage() -> None:
         for case in cases[:12]:
             print(f"staged_pytest_case={case}", flush=True)
         raise StageBlocked("staged_pytest_failed")
-    passed = isolated_sidecar(release, python, snapshot)
-    print(f"isolated_health={'passed' if passed else 'failed'}", flush=True)
-    if not passed:
-        raise StageBlocked("isolated_health_failed")
+    # Rehearse baseline -> pinned candidate -> baseline on one disposable port.
+    # This is a real process rollback rehearsal, NOT a production unit switch.
+    for source, label in ((APP, "baseline-before"), (release, "candidate"),
+                          (APP, "baseline-restored")):
+        passed = isolated_sidecar(source, python, snapshot, label)
+        print(f"sidecar_{label.replace('-', '_')}={'passed' if passed else 'failed'}",
+              flush=True)
+        if not passed:
+            raise StageBlocked("sidecar_" + label.replace("-", "_") + "_failed")
+    print("isolated_health=passed", flush=True)
+    print("isolated_process_rollback_rehearsal=passed", flush=True)
     if command("git", "rev-parse", "HEAD", cwd=APP) != original_head:
         raise StageBlocked("production_head_changed")
     if command("systemctl", "is-active", "router.service") != "active" or not health(8010):

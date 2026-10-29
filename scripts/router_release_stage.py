@@ -264,7 +264,10 @@ def preflight_promotion_layout(promote_module: object) -> None:
     try:
         parsed_argv = promote_module.original_argv(raw_exec)
         promote_module.candidate_argv(parsed_argv)
-    except promote_module.PromoteBlocked:
+    except promote_module.PromoteBlocked as error:
+        # Both are fixed internal reason codes, never service command values.
+        if str(error) in ("service_app_dir_unsupported", "candidate_app_dir_unavailable"):
+            raise StageBlocked("promotion_" + str(error)) from None
         # Emit a *category only*: never echo executable paths, flags, tokens,
         # environment values or the raw systemd record to Actions logs.
         match = re.search(r"argv\[\]=(.*?)\s+;\s+ignore_errors=", raw_exec)
@@ -421,7 +424,14 @@ def stage() -> None:
             or tuple(digest(path) for path in promotion_sources) != promotion_source_digests):
         raise StageBlocked("promotion_rehearsal_data_not_isolated")
     print("isolated_promotion_data_rehearsal=passed", flush=True)
-    preflight_promotion_layout(promote_module)
+    preflight_block = None
+    try:
+        preflight_promotion_layout(promote_module)
+    except StageBlocked as error:
+        # Keep rehearsing the isolated process rollback, but never mark the
+        # candidate promotable while its real systemd layout is unsupported.
+        preflight_block = str(error)
+        print("production_switch_preflight=blocked", flush=True)
     for source, label in ((APP, "baseline-before"), (release, "candidate"),
                           (APP, "baseline-restored")):
         passed = isolated_sidecar(source, python, snapshot, label)
@@ -438,6 +448,8 @@ def stage() -> None:
     if command("systemctl", "is-active", "router.service") != "active" or not health(8010):
         raise StageBlocked("production_health_changed")
     print("production_service_unchanged=yes", flush=True)
+    if preflight_block is not None:
+        raise StageBlocked(preflight_block)
     print("live_chat_and_fallback=not_yet_tested", flush=True)
     print("release_status=STAGED_NOT_DEPLOYED", flush=True)
 

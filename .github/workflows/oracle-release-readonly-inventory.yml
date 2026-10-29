@@ -80,7 +80,7 @@ jobs:
                   b"ROUTER_SERVICE_TOKEN", b"GROQ_API_KEY", b"NVIDIA_API_KEY",
                   b"CLOUDFLARE_API_TOKEN", b"OPENROUTER_API_KEY",
               }
-              for item in raw.split(b"\\0"):
+              for item in raw.split(b"\0"):
                   key, sep, value = item.partition(b"=")
                   if sep and key in allowed:
                       selected[key] = value

@@ -264,7 +264,15 @@ def classify_live_app_dir(raw_exec: str) -> str:
             return "checkout_child"
         if resolved_app.is_relative_to(resolved_root):
             return "ancestor_same_module" if same_module else "ancestor_unverified_module"
-        return "external_same_module" if same_module else "external_unverified_module"
+        if same_module:
+            return "external_same_module"
+        if (resolved_root.is_dir() and expected.is_file()
+                and not (resolved_root / "router").exists()
+                and not (resolved_root / "router.py").exists()):
+            return "external_inert_root"
+        if (resolved_root / "router").exists() or (resolved_root / "router.py").exists():
+            return "external_shadow_router"
+        return "external_unverified_module"
     except (OSError, ValueError, IndexError, RuntimeError):
         return "unavailable"
 
@@ -291,6 +299,7 @@ def preflight_promotion_layout(promote_module: object) -> None:
     if re.search(r"(?:KEY|TOKEN|PASSWORD|SECRET|CREDENTIAL)", inline, re.I):
         raise StageBlocked("promotion_inline_secrets_unsupported")
     raw_exec = command("systemctl", "show", "router.service", "-p", "ExecStart", "--value")
+    print("production_app_dir_provenance=" + classify_live_app_dir(raw_exec), flush=True)
     try:
         parsed_argv = promote_module.original_argv(raw_exec)
         promote_module.candidate_argv(parsed_argv)

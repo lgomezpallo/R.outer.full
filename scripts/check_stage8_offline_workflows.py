@@ -36,7 +36,7 @@ REMOTE_JOBS = {
 # Any workflow edit must update this map in an explicitly reviewed PR.
 EXPECTED_WORKFLOW_BLOBS: dict[str, str] = {
     "ci.yml": "96688b4fa9ed2626fd4a8e00572d5bd5bed23470",
-    "oracle-candidate-reconcile.yml": "34bcf546b572d03ca855280807c0f2e5c875873e",
+    "oracle-candidate-reconcile.yml": "0d26d8562a19dc9c19b61408f872c3a4cc4ba1e4",
     "oracle-ssh-readonly-access.yml": "66a452b307123f6cfcb425366ea1fc939cbf9abc",
     "check-provider-secrets.yml": "30fb296f7d0d87d180d5a1a87b69822382113eb5",
     "oracle-deploy.yml": "5dc10c0fbba1198a14e2ee65321c10d79ecb3545",
@@ -47,7 +47,7 @@ EXPECTED_WORKFLOW_BLOBS: dict[str, str] = {
 }
 
 
-EXPECTED_BRIDGE_BLOB = "3fe64abeebbabcfaa3abd0bd6af5b3e62404bfd3"
+EXPECTED_BRIDGE_BLOB = "7bf232c844ec4faa7cd5608f07bed85850d68caf"
 
 
 def _git_blob_sha(source: str) -> str:

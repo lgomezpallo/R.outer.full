@@ -20,8 +20,15 @@ import time
 import urllib.request
 from pathlib import Path
 
-PINNED_SHA = "339898a6081061b41ad2557b600e06efbc1f00ef"
-RELEASE_BRANCH = "release/router-baseline-20261025"
+RELEASE_BRANCH = "feat/offline-cooldown-restart-consistency-20261028"
+
+
+def candidate_pin() -> str:
+    """Require an explicit immutable candidate SHA; never silently stage the old baseline."""
+    sha = os.environ.get("ROUTER_RELEASE_SHA", "")
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise StageBlocked("candidate_sha_required")
+    return sha
 APP = Path("/home/ubuntu/Proyecto/Herramientas/Router")
 DATA = Path("/home/ubuntu/Proyecto/Datos/Router")
 SIDECAR_PORT = 18010
@@ -151,15 +158,13 @@ def backup_checkout(app: Path, snapshot: Path, base: str, active: dict[str, Path
 def isolated_sidecar(release: Path, python: Path, snapshot: Path) -> bool:
     if not port_free(SIDECAR_PORT):
         raise StageBlocked("sidecar_port_busy")
-    env = dict(os.environ)
-    # Do not use live databases, provider credentials or a production catalog.
-    for key in tuple(env):
-        if key.endswith("_API_KEY") or key.endswith("_TOKEN") or key in (
-            "ROUTER_MASTER_KEY", "ROUTER_SERVICE_TOKEN", "ROUTER_IACHAT_TOKEN"
-        ):
-            env.pop(key, None)
+    # Allowlist inherited process settings: never pass production provider secrets,
+    # tokens, billing flags or application overrides to the disposable sidecar.
+    env = {key: os.environ[key] for key in ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "TZ")
+           if key in os.environ}
     env.update({
         "PYTHONPATH": str(release),
+        "ROUTER_OFFLINE_ONLY": "1",
         "PYTHONDONTWRITEBYTECODE": "1",
         "ROUTER_DB_FILE": str(snapshot / "sidecar.db"),
         "ROUTER_CATALOG_FILE": str(snapshot / "sidecar-catalog.json"),
@@ -194,6 +199,7 @@ def isolated_sidecar(release: Path, python: Path, snapshot: Path) -> bool:
 
 
 def stage() -> None:
+    pin = candidate_pin()
     os.umask(0o077)
     if not APP.is_dir() or APP.is_symlink():
         raise StageBlocked("missing_or_unsafe_checkout")
@@ -214,18 +220,18 @@ def stage() -> None:
     original_head = command("git", "rev-parse", "HEAD", cwd=APP)
     command("git", "fetch", "--quiet", "origin", f"refs/heads/{RELEASE_BRANCH}", cwd=APP)
     fetched = command("git", "rev-parse", "FETCH_HEAD", cwd=APP)
-    if fetched != PINNED_SHA:
+    if fetched != pin:
         raise StageBlocked("frozen_release_sha_mismatch")
-    base = command("git", "merge-base", original_head, PINNED_SHA, cwd=APP)
+    base = command("git", "merge-base", original_head, pin, cwd=APP)
     counts = backup_checkout(APP, snapshot, base, active=service_data_paths())
     print("private_snapshot=created", flush=True)
     print(f"private_untracked_preserved={counts['untracked']}", flush=True)
-    release = release_root / PINNED_SHA
+    release = release_root / pin
     if release.exists():
-        if release.is_symlink() or command("git", "rev-parse", "HEAD", cwd=release) != PINNED_SHA:
+        if release.is_symlink() or command("git", "rev-parse", "HEAD", cwd=release) != pin:
             raise StageBlocked("existing_release_not_pinned")
     else:
-        command("git", "worktree", "add", "--detach", str(release), PINNED_SHA, cwd=APP)
+        command("git", "worktree", "add", "--detach", str(release), pin, cwd=APP)
     print("frozen_release_worktree=staged", flush=True)
     env = dict(os.environ)
     env.update({

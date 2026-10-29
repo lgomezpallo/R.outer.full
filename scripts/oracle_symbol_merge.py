@@ -252,6 +252,39 @@ def git_show(root: Path, rev: str, path: str) -> str:
         raise Blocked('missing_base_source')
     return p.stdout
 
+def safe_overlap_diagnostic(base: str, upstream: str, local: str, relative: str) -> None:
+    """Only predefined non-secret HTTP status sets and known trace flags."""
+    if relative not in {'router/router.py', 'router/storage.py'}:
+        return
+    target = ('Router._classify_failure' if relative == 'router/router.py'
+              else 'RouterStore.recent_request_traces')
+    for label, source in (('base', base), ('candidate', upstream), ('oracle', local)):
+        try:
+            source_symbol = symbols(source).get(target)
+            if source_symbol is None:
+                continue
+            tree = ast.parse(textwrap.dedent(source_symbol))
+            if relative == 'router/router.py':
+                sets = []
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Set) and all(
+                        isinstance(e, ast.Constant) and type(e.value) is int
+                        and 100 <= e.value <= 599 for e in node.elts
+                    ):
+                        sets.append(tuple(sorted(e.value for e in node.elts)))
+                print('diagnostic_' + label + '_http_sets=' +
+                      ';'.join(','.join(map(str, values)) for values in sets[:12]))
+            else:
+                allowed = {'fallback', 'provider_fallback', 'model_fallback',
+                           'attempts', 'request_id', 'created_at'}
+                keys = {node.value for node in ast.walk(tree)
+                        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+                        and node.value in allowed}
+                print('diagnostic_' + label + '_trace_keys=' + ','.join(sorted(keys)))
+        except (SyntaxError, ValueError):
+            print('diagnostic_' + label + '=unavailable')
+
+
 def main() -> int:
     if len(sys.argv) != 6:
         print('symbol_merge=invalid_arguments')
@@ -271,6 +304,13 @@ def main() -> int:
         print('symbol_merge_overlap_count='+str(overlaps))
         return 0
     except (Blocked,OSError,UnicodeError,ValueError,SyntaxError) as exc:
+        if isinstance(exc, Blocked) and relative in {'router/router.py', 'router/storage.py'}:
+            try:
+                safe_overlap_diagnostic(git_show(root,base,relative),
+                                        git_show(root,upstream,relative),
+                                        (root/relative).read_text(encoding='utf-8'), relative)
+            except (OSError,UnicodeError,ValueError,SyntaxError):
+                print('diagnostic=unavailable')
         print('symbol_merge=blocked_'+(str(exc) if isinstance(exc,Blocked) else 'invalid_source'))
         return 3
 

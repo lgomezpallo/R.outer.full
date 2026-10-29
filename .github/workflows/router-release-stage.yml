@@ -8,6 +8,7 @@ on:
       - .github/workflows/router-release-promote.yml
       - scripts/router_release_stage.py
       - scripts/router_release_promote.py
+      - scripts/check_stage8_offline_workflows.py
   workflow_dispatch:
 
 permissions:

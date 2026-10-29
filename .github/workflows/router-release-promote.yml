@@ -18,9 +18,31 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install -e ".[dev]"
+      # Dependency/image acquisition happens only in this explicit runner
+      # preparation step. The Docker build and HTTP acceptance have no network.
+      - name: Prepare local wheels and Docker base image
+        run: |
+          mkdir -p wheelhouse
+          python -m pip download --dest wheelhouse ".[dev]" "setuptools>=69" wheel
+          docker pull python:3.12-slim
+      - name: Install dependencies from local wheelhouse
+        run: python -m pip install --no-index --find-links=wheelhouse -e ".[dev]"
       - run: pytest -q
-      - run: docker build -t router-release-promote-ci .
+      - name: Build Docker with network disabled
+        run: docker build --network none --pull=false --build-arg ROUTER_OFFLINE_WHEELS=1 -t router-release-promote-ci .
+      - name: Verify G.O. HTTP contract without network
+        run: |
+          docker run --rm --network none --read-only --cap-drop ALL \\
+            --security-opt no-new-privileges \\
+            --tmpfs /tmp:rw,nosuid,size=32m \\
+            --mount type=bind,src="$PWD/tests/fixtures/go_ute_router_5823272.py",dst=/tmp/go_ute_router.py,readonly \\
+            --mount type=bind,src="$PWD/scripts/go_ute_http_acceptance_offline.py",dst=/tmp/acceptance.py,readonly \\
+            -e PYTHONDONTWRITEBYTECODE=1 \\
+            -e ROUTER_OFFLINE_ONLY=1 \\
+            -e ROUTER_SERVICE_TOKEN=ci-offline-only-token \\
+            -e ROUTER_DB_FILE=/tmp/router-ci.db \\
+            -e ROUTER_CATALOG_FILE=/tmp/router-ci-catalog.json \\
+            --entrypoint python router-release-promote-ci /tmp/acceptance.py
 
   oracle-promote:
     # Stage 8 offline freeze: never connect to Oracle or run live inference.

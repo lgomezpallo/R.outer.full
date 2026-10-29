@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import importlib.util
+import io
+import json
 import sqlite3
 from pathlib import Path
 
@@ -88,3 +90,40 @@ def test_no_destructive_git_or_database_restore():
         assert forbidden not in source
     assert 'new_argv = argv + ["--app-dir", str(RELEASE)]' in source
     assert "automatic_rollback=" in source
+
+
+def test_offline_postdeploy_verification_never_requests_inference(monkeypatch, capsys):
+    monkeypatch.setenv("ROUTER_SERVICE_TOKEN", "synthetic-token")
+    seen = []
+
+    class Response(io.BytesIO):
+        status = 200
+
+    def fake_urlopen(request, timeout):
+        seen.append((request.full_url, json.loads(request.data), request.get_header("Authorization")))
+        return Response(json.dumps({
+            "ok": False, "error": "no_eligible_provider", "text": None, "attempts": [],
+        }).encode())
+
+    monkeypatch.setattr(promote.urllib.request, "urlopen", fake_urlopen)
+    promote.inner_verify()
+    assert len(seen) == 1
+    url, payload, auth = seen[0]
+    assert url == "http://127.0.0.1:8010/route"
+    assert payload["application_name"] == "go-ute"
+    assert auth == "Bearer synthetic-token"
+    assert "postdeploy_offline_route=passed" in capsys.readouterr().out
+
+
+def test_offline_postdeploy_verification_rejects_real_answer(monkeypatch):
+    class Response(io.BytesIO):
+        status = 200
+
+    monkeypatch.setattr(
+        promote.urllib.request, "urlopen",
+        lambda *args, **kwargs: Response(json.dumps({
+            "ok": True, "error": None, "text": "real answer", "attempts": [],
+        }).encode()),
+    )
+    with pytest.raises(promote.PromoteBlocked, match="postdeploy_offline_route_failed"):
+        promote.inner_verify()

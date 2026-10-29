@@ -124,12 +124,33 @@ def inner_backup(work: Path) -> None:
     catalog = Path(os.getenv("ROUTER_CATALOG_FILE", "router-catalog.json"))
     if not catalog.is_absolute():
         catalog = APP / catalog
-    if catalog.exists():
-        if catalog.is_symlink() or not catalog.is_file():
-            raise PromoteBlocked("catalog_path_unsafe")
-        shutil.copyfile(catalog, work / "predeploy-catalog.json")
-        (work / "predeploy-catalog.json").chmod(0o600)
+    if catalog.is_symlink() or not catalog.is_file():
+        raise PromoteBlocked("catalog_path_unsafe_or_missing")
+    shutil.copyfile(catalog, work / "predeploy-catalog.json")
+    (work / "predeploy-catalog.json").chmod(0o600)
     print("production_data_snapshot=passed", flush=True)
+
+
+def prepare_candidate_data(work: Path) -> tuple[Path, Path]:
+    """Run the candidate on private snapshots, never the live Router DB/catalog.
+
+    Rolling back the systemd drop-in then restores the original code AND data
+    paths, without trying to overwrite an active WAL-mode database. Candidate
+    writes remain quarantined until a separately approved data migration.
+    """
+    sources = (work / "predeploy-router.db", work / "predeploy-catalog.json")
+    targets = (work / "candidate-router.db", work / "candidate-catalog.json")
+    for source, target in zip(sources, targets):
+        if (source.is_symlink() or not source.is_file()
+                or target.exists() or target.is_symlink()):
+            raise PromoteBlocked("candidate_data_snapshot_unavailable")
+        shutil.copyfile(source, target)
+        target.chmod(0o600)
+    with sqlite3.connect(targets[0]) as db:
+        if db.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+            raise PromoteBlocked("candidate_database_integrity_failed")
+    print("candidate_data_isolated=passed", flush=True)
+    return targets
 
 
 def inner_verify() -> None:
@@ -232,10 +253,15 @@ def promote(script: Path) -> None:
                        stderr=subprocess.DEVNULL, check=True)
     (work / "original-unit.txt").chmod(0o600)
     private_unit(script, work, user, envfiles, "backup")
+    candidate_db, candidate_catalog = prepare_candidate_data(work)
     # Retain WorkingDirectory, EnvironmentFiles and the exact existing CLI flags.
+    # The executable's environment overrides the original live-data paths.
+    # On rollback, removing this drop-in restores the untouched live DB/catalog.
     new_argv = argv + ["--app-dir", str(RELEASE)]
     content = ("[Service]\nIPAddressDeny=any\nIPAddressAllow=localhost\n"
                "ExecStart=\nExecStart=/usr/bin/env ROUTER_OFFLINE_ONLY=1 "
+               + "ROUTER_DB_FILE=" + str(candidate_db) + " "
+               + "ROUTER_CATALOG_FILE=" + str(candidate_catalog) + " "
                + " ".join(new_argv) + "\n")
     staged = work / "release-override.conf"
     staged.write_text(content)

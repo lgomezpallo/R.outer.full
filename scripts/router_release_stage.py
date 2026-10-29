@@ -415,6 +415,8 @@ def preflight_promotion_layout(promote_module: object) -> None:
             else:
                 reason = "promotion_exec_other"
         raise StageBlocked(reason) from None
+    if not promote_module.dropin_precedence_safe():
+        raise StageBlocked("promotion_service_dropin_order_unsupported")
     override = subprocess.run(
         ["sudo", "-n", "test", "-e", str(promote_module.OVERRIDE)],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,

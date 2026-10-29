@@ -113,7 +113,7 @@ def merge_lines(base: str, upstream: str, local: str) -> str:
                                 capture_output=True, text=True, check=False)
         if result.returncode == 0:
             return result.stdout
-        if result.returncode > 1:
+        if result.returncode >= 128:
             raise Blocked('merge_tool_failed')
         return merge_nonoverlapping(base, upstream, local)
 
@@ -140,7 +140,7 @@ def combine(base: str, upstream: str, local: str) -> tuple[str,int]:
             try:
                 selected = merge_lines(old or '',current,new)
             except Blocked as exc:
-                raise Blocked('symbol_' + str(exc)) from exc
+                raise Blocked('symbol_' + str(exc) + '_at_' + name) from exc
             overlap += 1
         if selected is None:
             raise Blocked('missing_symbol')

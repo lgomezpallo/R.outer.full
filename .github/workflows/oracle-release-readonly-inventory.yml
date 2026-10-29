@@ -1,0 +1,68 @@
+name: Router release - Oracle read-only inventory
+on:
+  push:
+    branches: [feat/offline-cooldown-restart-consistency-20261028]
+    paths:
+      - .github/workflows/oracle-release-readonly-inventory.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: router-release-readonly-inventory
+  cancel-in-progress: false
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Inspect current Oracle release prerequisites without mutation
+        env:
+          SSH_HOST: ${{ secrets.ORACLE_SSH_HOST }}
+          SSH_USER: ${{ secrets.ORACLE_SSH_USER }}
+          SSH_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.ORACLE_SSH_KNOWN_HOSTS }}
+          CANDIDATE_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for key in SSH_HOST SSH_USER SSH_KEY SSH_KNOWN_HOSTS; do
+            if test -z "${!key}"; then
+              echo "::error::missing_$key"
+              exit 1
+            fi
+          done
+          umask 077
+          mkdir -p ~/.ssh
+          trap 'rm -f ~/.ssh/oracle_readonly ~/.ssh/known_hosts' EXIT
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/oracle_readonly
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          echo "candidate_sha=$CANDIDATE_SHA"
+          ssh -i ~/.ssh/oracle_readonly -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=12 "$SSH_USER@$SSH_HOST" 'bash -se' <<'REMOTE'
+          set -euo pipefail
+          APP=/home/ubuntu/Proyecto/Herramientas/Router
+          DATA=/home/ubuntu/Proyecto/Datos/Router
+          cd "$APP"
+          printf 'oracle_head='; git rev-parse HEAD
+          printf 'tracked_modified='; git status --porcelain --untracked-files=no | wc -l | tr -d ' '
+          printf 'untracked='; git ls-files --others --exclude-standard | wc -l | tr -d ' '
+          printf 'service_active='; systemctl is-active router.service || true
+          printf 'service_workdir_matches_expected='
+          if test "$(systemctl show router.service -p WorkingDirectory --value)" = "$APP"; then echo yes; else echo no; fi
+          printf 'service_envfiles_present='
+          if test -n "$(systemctl show router.service -p EnvironmentFiles --value)"; then echo yes; else echo no; fi
+          printf 'service_python_exists='
+          if test -x "$APP/.venv/bin/python"; then echo yes; else echo no; fi
+          for item in "$APP/router.db" "$DATA/router.db" "$APP/router-catalog.json" "$DATA/router-catalog.json"; do
+            case "$item" in
+              "$APP/router.db") label=checkout_db ;;
+              "$DATA/router.db") label=data_db ;;
+              "$APP/router-catalog.json") label=checkout_catalog ;;
+              *) label=data_catalog ;;
+            esac
+            printf '%s=' "$label"
+            if test -f "$item" && ! test -L "$item"; then echo regular_file; elif test -L "$item"; then echo symlink; else echo absent; fi
+          done
+          echo 'provider_account_billing_status=not_verified'
+          echo 'production_changes=none'
+          echo 'remote_inference_requests=none'
+          REMOTE

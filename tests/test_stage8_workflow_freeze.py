@@ -56,6 +56,7 @@ def test_pr_ci_remains_offline_and_cannot_ssh():
     source = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
     assert "  pull_request:" in source
     assert "      - run: pytest" in source
-    assert "      - run: docker build -t router-ci ." in source
+    assert "docker build --network none --pull=false --build-arg ROUTER_OFFLINE_WHEELS=1 -t router-ci ." in source
+    assert "python -m pip install --no-index --find-links=wheelhouse" in source
     assert "ssh -i " not in source
     assert "workflow_dispatch:" not in source

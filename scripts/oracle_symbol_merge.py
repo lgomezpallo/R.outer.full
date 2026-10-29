@@ -199,6 +199,23 @@ def merge_statements(base: str, upstream: str, local: str) -> str:
     return output
 
 
+def strict_retryable_line_subsumed(base: str, upstream: str, local: str) -> bool:
+    """Preserve Oracle's sole retryable-status edit if upstream has it verbatim."""
+    old, new = base.splitlines(keepends=True), local.splitlines(keepends=True)
+    edits = [(tag, i, j, k, m) for tag, i, j, k, m in
+             difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes()
+             if tag != 'equal']
+    if len(edits) != 1:
+        return False
+    tag, i, j, k, m = edits[0]
+    if tag != 'replace' or j - i != 1 or m - k != 1:
+        return False
+    def eligible(line):
+        return re.fullmatch(r'\\s*retryable\\s*=\\s*status\\s+in\\s+\\{[0-9, ]+\\}\\s*', line.strip()) is not None
+    return (eligible(old[i]) and eligible(new[k]) and
+            new[k].strip() in {line.strip() for line in upstream.splitlines()})
+
+
 def combine(base: str, upstream: str, local: str) -> tuple[str,int]:
     b,u,l = symbols(base),symbols(upstream),symbols(local)
     try:
@@ -222,7 +239,9 @@ def combine(base: str, upstream: str, local: str) -> tuple[str,int]:
             try:
                 selected = merge_lines(old or '',current,new)
             except Blocked as exc:
-                if oracle_semantically_subsumed(old or '', current, new):
+                if (oracle_semantically_subsumed(old or '', current, new) or
+                    (name == 'Router._classify_failure' and old is not None and
+                     strict_retryable_line_subsumed(old, current, new))):
                     selected = current
                 else:
                     try:

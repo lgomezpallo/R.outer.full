@@ -266,7 +266,7 @@ def preflight_promotion_layout(promote_module: object) -> None:
     except promote_module.PromoteBlocked:
         # Emit a *category only*: never echo executable paths, flags, tokens,
         # environment values or the raw systemd record to Actions logs.
-        match = re.search(r"argv\\[\\]=(.*?)\\s+;\\s+ignore_errors=", raw_exec)
+        match = re.search(r"argv\[\]=(.*?)\s+;\s+ignore_errors=", raw_exec)
         if match is None:
             reason = "promotion_exec_record_format"
         else:

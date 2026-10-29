@@ -51,7 +51,7 @@ jobs:
           ssh -i ~/.ssh/router_oracle -o BatchMode=yes -o StrictHostKeyChecking=yes "$SSH_USER@$SSH_HOST" "ROUTER_SCRIPT_SHA=$SCRIPT_SHA ROUTER_RELEASE_SHA=$SCRIPT_SHA bash -se" <<'REMOTE'
           set -euo pipefail
           cd /home/ubuntu/Proyecto/Herramientas/Router
-          git fetch --quiet origin main
+          git fetch --quiet origin feat/offline-cooldown-restart-consistency-20261028
           git cat-file -e "$ROUTER_SCRIPT_SHA:scripts/router_release_stage.py"
           git show "$ROUTER_SCRIPT_SHA:scripts/router_release_stage.py" | python3 - stage
           REMOTE

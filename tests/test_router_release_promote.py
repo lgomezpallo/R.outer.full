@@ -127,3 +127,28 @@ def test_offline_postdeploy_verification_rejects_real_answer(monkeypatch):
     )
     with pytest.raises(promote.PromoteBlocked, match="postdeploy_offline_route_failed"):
         promote.inner_verify()
+
+
+def test_candidate_data_isolated_from_live_backup_and_rollback(tmp_path):
+    """A failed promotion must never migrate or overwrite the live SQLite/catalog."""
+    work = tmp_path / "private"
+    work.mkdir(mode=0o700)
+    db = work / "predeploy-router.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute("CREATE TABLE records (value TEXT)")
+        conn.execute("INSERT INTO records VALUES ('baseline')")
+    catalog = work / "predeploy-catalog.json"
+    catalog.write_text('{"models": ["baseline"]}')
+    candidate_db, candidate_catalog = promote.prepare_candidate_data(work)
+    with sqlite3.connect(candidate_db) as conn:
+        conn.execute("ALTER TABLE records ADD COLUMN candidate_only TEXT")
+        conn.execute("INSERT INTO records VALUES ('candidate', 'new')")
+    candidate_catalog.write_text('{"models": ["candidate"]}')
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT * FROM records").fetchall() == [("baseline",)]
+        assert [column[1] for column in conn.execute("PRAGMA table_info(records)")] == ["value"]
+    assert catalog.read_text() == '{"models": ["baseline"]}'
+    assert candidate_db.stat().st_mode & 0o777 == 0o600
+    assert candidate_catalog.stat().st_mode & 0o777 == 0o600
+    with pytest.raises(promote.PromoteBlocked, match="candidate_data_snapshot_unavailable"):
+        promote.prepare_candidate_data(work)

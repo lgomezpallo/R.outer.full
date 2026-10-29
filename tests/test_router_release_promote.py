@@ -49,21 +49,36 @@ def test_original_argv_accepts_known_uvicorn_service():
         promote.original_argv(raw.replace("router.api:app", "other.app:app"))
 
 
-def test_existing_app_dir_is_replaced_without_duplication(monkeypatch):
+def test_existing_app_dir_is_replaced_without_duplication(monkeypatch, tmp_path):
     raw = ("{ path=/home/ubuntu/Proyecto/Herramientas/Router/.venv/bin/python ; "
            "argv[]=/home/ubuntu/Proyecto/Herramientas/Router/.venv/bin/python "
            "-m uvicorn router.api:app --host 127.0.0.1 --port 8010 "
            "--app-dir /home/ubuntu/Proyecto/Herramientas/Router ; "
            "ignore_errors=no ; start_time=[n/a] }")
     args = promote.original_argv(raw)
-    monkeypatch.setattr(promote, "RELEASE", Path("/tmp/pinned-router-release"))
+    release = tmp_path / "pinned-router-release"
+    release.mkdir()
+    monkeypatch.setattr(promote, "RELEASE", release)
     result = promote.candidate_argv(args)
     assert result.count("--app-dir") == 1
-    assert result[result.index("--app-dir") + 1] == "/tmp/pinned-router-release"
+    assert result[result.index("--app-dir") + 1] == str(release)
     assert args[args.index("--app-dir") + 1] == str(promote.APP)
     with pytest.raises(promote.PromoteBlocked):
         promote.original_argv(raw.replace("--app-dir /home/ubuntu/Proyecto/Herramientas/Router",
                                          "--app-dir /tmp/untrusted"))
+    child = release / "src"
+    child.mkdir()
+    child_raw = raw.replace(
+        "--app-dir /home/ubuntu/Proyecto/Herramientas/Router",
+        "--app-dir /home/ubuntu/Proyecto/Herramientas/Router/src")
+    child_argv = promote.original_argv(child_raw)
+    assert promote.candidate_argv(child_argv)[-1] == str(child)
+    relative_raw = raw.replace(
+        "--app-dir /home/ubuntu/Proyecto/Herramientas/Router",
+        "--app-dir src")
+    assert promote.candidate_argv(promote.original_argv(relative_raw))[-1] == str(child)
+    with pytest.raises(promote.PromoteBlocked):
+        promote.original_argv(relative_raw.replace("--app-dir src", "--app-dir ../outside"))
     with pytest.raises(promote.PromoteBlocked):
         promote.original_argv(raw.replace("--app-dir /home/ubuntu/Proyecto/Herramientas/Router",
                                          "--reload"))

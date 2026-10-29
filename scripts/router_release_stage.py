@@ -262,7 +262,8 @@ def preflight_promotion_layout(promote_module: object) -> None:
         raise StageBlocked("promotion_inline_secrets_unsupported")
     raw_exec = command("systemctl", "show", "router.service", "-p", "ExecStart", "--value")
     try:
-        promote_module.original_argv(raw_exec)
+        parsed_argv = promote_module.original_argv(raw_exec)
+        promote_module.candidate_argv(parsed_argv)
     except promote_module.PromoteBlocked:
         # Emit a *category only*: never echo executable paths, flags, tokens,
         # environment values or the raw systemd record to Actions logs.

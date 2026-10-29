@@ -90,9 +90,15 @@ def original_argv(raw: str) -> list[str]:
         raise PromoteBlocked("service_exec_layout_unsupported")
     if "--app-dir" in argv:
         pos = argv.index("--app-dir")
-        # Only the current checkout (or its WorkingDirectory '.') is allowed.
-        # A different app directory may shadow the pinned Router package.
-        if pos + 1 >= len(argv) or argv[pos + 1] not in (".", str(APP)):
+        if pos + 1 >= len(argv):
+            raise PromoteBlocked("service_app_dir_unsupported")
+        original_dir = Path(argv[pos + 1])
+        # Allow only the current checkout or a child of it. Relative paths
+        # resolve from the verified service WorkingDirectory (APP).
+        if original_dir.is_absolute():
+            if not original_dir.is_relative_to(APP):
+                raise PromoteBlocked("service_app_dir_unsupported")
+        elif ".." in original_dir.parts:
             raise PromoteBlocked("service_app_dir_unsupported")
     try:
         if argv[argv.index("--host") + 1] != "127.0.0.1":
@@ -110,7 +116,15 @@ def candidate_argv(argv: list[str]) -> list[str]:
         new_argv = argv + ["--app-dir", str(RELEASE)]
     else:
         new_argv = argv.copy()
-        new_argv[new_argv.index("--app-dir") + 1] = str(RELEASE)
+        index = new_argv.index("--app-dir") + 1
+        current = Path(new_argv[index])
+        suffix = current.relative_to(APP) if current.is_absolute() else current
+        candidate_dir = RELEASE / suffix
+        # Reject missing, symlinked or escaped import roots before the switch.
+        if (not candidate_dir.is_dir() or candidate_dir.is_symlink()
+                or not candidate_dir.resolve().is_relative_to(RELEASE.resolve())):
+            raise PromoteBlocked("candidate_app_dir_unavailable")
+        new_argv[index] = str(candidate_dir)
     return new_argv
 
 

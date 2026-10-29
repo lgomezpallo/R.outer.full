@@ -102,6 +102,8 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "fix(router): reconcile preserved Oracle tracked source into PR 87"
+          git fetch origin feat/offline-cooldown-restart-consistency-20261028
+          git rebase origin/feat/offline-cooldown-restart-consistency-20261028
           git push origin "HEAD:refs/heads/feat/offline-cooldown-restart-consistency-20261028"
           echo "candidate_branch_source_reconciliation=pushed_pending_full_CI"
       - name: Erase decrypted and encrypted runner copies

@@ -18,7 +18,7 @@ spec.loader.exec_module(promote)
 
 
 def test_candidate_pin_is_required(monkeypatch):
-    assert promote.OVERRIDE.name == "99-router-frozen-release.conf"
+    assert promote.OVERRIDE.name == "zzzz-router-frozen-release.conf"
     monkeypatch.setattr(promote, "PINNED_SHA", "")
     with pytest.raises(promote.PromoteBlocked, match="candidate_sha_required"):
         promote.candidate_pin()
@@ -158,6 +158,21 @@ def test_environment_file_parser_does_not_read_values():
         promote.environment_files("garbled")
     with pytest.raises(promote.PromoteBlocked):
         promote.environment_files("/etc/../secret (ignore_errors=no)")
+
+
+
+def test_late_release_dropin_preserves_existing_custom_override(monkeypatch):
+    monkeypatch.setattr(
+        promote, "command",
+        lambda *args: "/etc/systemd/system/router.service.d/99-router-frozen-release.conf",
+    )
+    assert promote.dropin_precedence_safe()
+    monkeypatch.setattr(
+        promote, "command",
+        lambda *args: "/etc/systemd/system/router.service.d/zzzzzz-later.conf",
+    )
+    assert not promote.dropin_precedence_safe()
+
 
 
 def test_private_directory_rejects_symlink(tmp_path):

@@ -242,7 +242,7 @@ def isolated_sidecar(release: Path, python: Path, snapshot: Path, label: str) ->
 def classify_live_app_dir(raw_exec: str) -> str:
     """Report only a fixed provenance category, never a service path or secret."""
     try:
-        match = re.search(r"argv\\[\\]=(.*?)\\s+;\\s+ignore_errors=", raw_exec)
+        match = re.search(r"argv\[\]=(.*?)\s+;\s+ignore_errors=", raw_exec)
         if match is None:
             return "unparseable"
         args = shlex.split(match.group(1))

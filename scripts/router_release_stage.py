@@ -64,7 +64,7 @@ def effective_service_data_paths(raw: bytes, app: Path) -> dict[str, Path]:
     """Select only Router data locations; never log or retain credential values."""
     wanted = {b"ROUTER_DB_FILE": "db", b"ROUTER_CATALOG_FILE": "catalog"}
     selected: dict[str, Path] = {}
-    for item in raw.split(b"\\0"):
+    for item in raw.split(b"\0"):
         key, sep, value = item.partition(b"=")
         if not sep or key not in wanted or not value:
             continue

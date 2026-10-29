@@ -48,6 +48,8 @@ EXPECTED_WORKFLOW_BLOBS: dict[str, str] = {
 
 
 EXPECTED_BRIDGE_BLOB = "7bf232c844ec4faa7cd5608f07bed85850d68caf"
+AUTHORIZED_PROMOTE_BLOB = "da646a275cd1c648070130dae406cbd190203d71"
+AUTHORIZED_PROMOTE_MESSAGE = "AUTHORIZED ROUTER OFFLINE PROMOTION 7030db38010c9572ecbcd1e84ed1934fcf7bf1eb"
 
 
 def _git_blob_sha(source: str) -> str:
@@ -97,7 +99,9 @@ def audit_workflows(sources: Mapping[str, str]) -> list[str]:
 
     for filename in sorted(actual & expected):
         source = sources[filename]
-        if _git_blob_sha(source) != EXPECTED_WORKFLOW_BLOBS[filename]:
+        source_blob = _git_blob_sha(source)
+        authorized_promote = filename == "router-release-promote.yml" and source_blob == AUTHORIZED_PROMOTE_BLOB
+        if source_blob != EXPECTED_WORKFLOW_BLOBS[filename] and not authorized_promote:
             problems.append(f"{filename}: unreviewed workflow content change")
         triggers = _section(source, "on")
         jobs = _section(source, "jobs")
@@ -110,7 +114,9 @@ def audit_workflows(sources: Mapping[str, str]) -> list[str]:
             problems.append(f"{filename}: duplicate trigger or job key")
             continue
 
-        if filename == "ci.yml":
+        if filename == "router-release-promote.yml" and authorized_promote:
+            expected_triggers = {"push", "workflow_dispatch"}
+        elif filename == "ci.yml":
             expected_triggers = {"push", "pull_request"}
         elif filename in {"oracle-candidate-reconcile.yml", "oracle-ssh-readonly-access.yml", "router-release-stage.yml"}:
             expected_triggers = {"push", "workflow_dispatch"}
@@ -131,6 +137,10 @@ def audit_workflows(sources: Mapping[str, str]) -> list[str]:
                     approved = "${{ github.event_name == 'push' && github.ref == 'refs/heads/feat/offline-cooldown-restart-consistency-20261028' }}"
                     if conditions != [approved]:
                         problems.append(f"{filename}/{job}: unauthorized stage condition")
+                elif filename == "router-release-promote.yml" and authorized_promote:
+                    approved = "${{ github.event_name == 'push' && github.ref == 'refs/heads/feat/offline-cooldown-restart-consistency-20261028' && github.event.head_commit.message == '" + AUTHORIZED_PROMOTE_MESSAGE + "' }}"
+                    if conditions != [approved]:
+                        problems.append(f"{filename}/{job}: unauthorized promotion condition")
                 elif conditions != ["${{ false }}"]:
                     problems.append(f"{filename}/{job}: remote job is not unconditionally disabled")
             elif (filename == "oracle-candidate-reconcile.yml" and job == "preserve-and-reconcile") or (filename == "oracle-ssh-readonly-access.yml" and job == "ssh-readonly"):

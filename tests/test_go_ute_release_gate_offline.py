@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import shutil
+import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -126,6 +127,12 @@ def test_mocked_failed_promotion_rolls_back_service_override(monkeypatch, tmp_pa
 
     def fake_private_unit(script, work, user, envfiles, mode):
         assert mode == "backup", "post-switch real inference verification must not run"
+        # Model the real backup contract: both SQLite and catalog must exist
+        # before the candidate is allowed to start on isolated data paths.
+        with sqlite3.connect(work / "predeploy-router.db") as db:
+            db.execute("CREATE TABLE baseline (value TEXT)")
+            db.execute("INSERT INTO baseline VALUES ('preserved')")
+        (work / "predeploy-catalog.json").write_text('{"models":[]}')
         state["backup"] = True
 
     def fake_run(*args):

@@ -146,7 +146,10 @@ def reconcile(archive: Path, candidate_sha: str) -> int:
                     if record and b'\t' in record:
                         paths.add(os.fsdecode(record.split(b'\t', 1)[1]))
                 print('tracked_conflict_count=' + str(len(paths)))
-                if paths == {'router/router.py'}:
+                # Paths are repo-relative names only: never print the patch,
+                # untracked file inventory, conflict hunks, or private source.
+                print('tracked_conflict_files=' + ','.join(sorted(paths)))
+                if 'router/router.py' in paths:
                     merger = root / 'scripts' / 'oracle_method_three_way.py'
                     result = subprocess.run([sys.executable, str(merger), str(oracle), base,
                                              candidate_sha, str(candidate / 'router/router.py')],
@@ -154,9 +157,19 @@ def reconcile(archive: Path, candidate_sha: str) -> int:
                                             text=True, check=False)
                     if result.returncode == 0:
                         required(git(candidate, 'add', '--', 'router/router.py'))
-                        if not required(git(candidate, 'ls-files', '-u', '-z')):
-                            print('tracked_reconcile=method_merge_applied_to_isolated_candidate')
-                            return 0
+                        print('router_method_merge=applied')
+                    else:
+                        print('router_method_merge=blocked')
+                unmerged = required(git(candidate, 'ls-files', '-u', '-z'))
+                remaining = set()
+                for record in unmerged.split(b'\0'):
+                    if record and b'\t' in record:
+                        remaining.add(os.fsdecode(record.split(b'\t', 1)[1]))
+                print('tracked_remaining_conflict_count=' + str(len(remaining)))
+                print('tracked_remaining_conflict_files=' + ','.join(sorted(remaining)))
+                if not remaining:
+                    print('tracked_reconcile=applied_to_isolated_candidate')
+                    return 0
                 print('tracked_reconcile=blocked_private_overlap')
                 return 3
             finally:

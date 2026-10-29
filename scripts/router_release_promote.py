@@ -321,7 +321,7 @@ def pinned_process() -> bool:
         text = [item.decode(errors="replace") for item in argv if item]
         if "--app-dir" not in text or text[text.index("--app-dir") + 1] != str(RELEASE):
             return False
-        environment = (Path("/proc") / str(pid) / "environ").read_bytes().split(b"\\0")
+        environment = (Path("/proc") / str(pid) / "environ").read_bytes().split(b"\0")
         required = {b"ROUTER_OFFLINE_ONLY=1"}
         return required.issubset(set(environment))
     except (ValueError, IndexError, OSError):

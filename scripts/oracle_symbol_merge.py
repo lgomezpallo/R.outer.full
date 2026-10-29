@@ -216,6 +216,37 @@ def strict_retryable_line_subsumed(base: str, upstream: str, local: str) -> bool
             new[k].strip() in {line.strip() for line in upstream.splitlines()})
 
 
+def strict_trace_extension_subsumed(upstream: str, local: str) -> bool:
+    """Accept only the known provider-fallback trace extended by model fallback.
+
+    Require byte-for-byte agreement of the core SQL/metric code. The only
+    Oracle-specific tail permitted is the provider-only fallback computation.
+    """
+    marker = '        for trace in traces.values():\\n'
+    if upstream.count(marker) != 1 or local.count(marker) != 1:
+        return False
+    up_prefix, up_tail = upstream.split(marker, 1)
+    lo_prefix, lo_tail = local.split(marker, 1)
+    extra = '                "provider_fallback": False, "model_fallback": False,\\n'
+    if up_prefix.count(extra) != 1 or up_prefix.replace(extra, '') != lo_prefix:
+        return False
+    expected_oracle = (
+        '            trace["fallback"] = len({a["provider"] for a in trace["attempts"]}) > 1\\n'
+        '        return [traces[row["request_id"]] for row in ids]\\n'
+    )
+    if lo_tail != expected_oracle:
+        return False
+    # Candidate must explicitly preserve provider-only fallback as a separate
+    # field while reporting broader fallback for model switching.
+    required = (
+        'trace["provider_fallback"] = len(providers) > 1',
+        'trace["model_fallback"] = any(len(models) > 1 for models in models_by_provider.values())',
+        'trace["fallback"] = trace["provider_fallback"] or trace["model_fallback"]',
+        'return [traces[row["request_id"]] for row in ids]',
+    )
+    return all(up_tail.count(fragment) == 1 for fragment in required)
+
+
 def combine(base: str, upstream: str, local: str) -> tuple[str,int]:
     b,u,l = symbols(base),symbols(upstream),symbols(local)
     try:
@@ -241,7 +272,9 @@ def combine(base: str, upstream: str, local: str) -> tuple[str,int]:
             except Blocked as exc:
                 if (oracle_semantically_subsumed(old or '', current, new) or
                     (name == 'Router._classify_failure' and old is not None and
-                     strict_retryable_line_subsumed(old, current, new))):
+                     strict_retryable_line_subsumed(old, current, new)) or
+                    (name == 'RouterStore.recent_request_traces' and old is None and
+                     strict_trace_extension_subsumed(current, new))):
                     selected = current
                 else:
                     try:

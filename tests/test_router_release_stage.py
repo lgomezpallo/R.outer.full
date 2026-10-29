@@ -20,9 +20,54 @@ def git(repo: Path, *args: str) -> str:
     return subprocess.check_output(["git", *args], cwd=repo, text=True).strip()
 
 
-def test_frozen_sha_is_exact():
-    assert stage.PINNED_SHA == "339898a6081061b41ad2557b600e06efbc1f00ef"
-    assert stage.RELEASE_BRANCH == "release/router-baseline-20261025"
+def test_candidate_sha_must_be_explicit_and_match_candidate_branch(monkeypatch):
+    assert stage.RELEASE_BRANCH == "feat/offline-cooldown-restart-consistency-20261028"
+    monkeypatch.delenv("ROUTER_RELEASE_SHA", raising=False)
+    with pytest.raises(stage.StageBlocked, match="candidate_sha_required"):
+        stage.candidate_pin()
+    for invalid in ("339898a", "not-a-sha", "A" * 40, "0" * 39):
+        monkeypatch.setenv("ROUTER_RELEASE_SHA", invalid)
+        with pytest.raises(stage.StageBlocked, match="candidate_sha_required"):
+            stage.candidate_pin()
+    monkeypatch.setenv("ROUTER_RELEASE_SHA", "a" * 40)
+    assert stage.candidate_pin() == "a" * 40
+
+
+def test_sidecar_forces_offline_and_never_inherits_provider_credentials(monkeypatch, tmp_path):
+    monkeypatch.setenv("GROQ_API_KEY", "sensitive-test-placeholder")
+    monkeypatch.setenv("ROUTER_SERVICE_TOKEN", "sensitive-test-token")
+    monkeypatch.setenv("ROUTER_OFFLINE_ONLY", "0")
+    monkeypatch.setenv("ROUTER_PROVIDER_PRICING_OVERRIDE", "unsafe")
+    monkeypatch.setattr(stage, "port_free", lambda port: True)
+    monkeypatch.setattr(stage, "health", lambda port: True)
+    observed = {}
+
+    class FakeProcess:
+        def poll(self):
+            return None
+
+        def terminate(self):
+            pass
+
+        def wait(self, timeout):
+            return 0
+
+    def fake_popen(args, **kwargs):
+        observed.update(kwargs["env"])
+        return FakeProcess()
+
+    monkeypatch.setattr(stage.subprocess, "Popen", fake_popen)
+    release = tmp_path / "candidate"
+    release.mkdir()
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir()
+    assert stage.isolated_sidecar(release, tmp_path / "python", snapshot)
+    assert observed["ROUTER_OFFLINE_ONLY"] == "1"
+    assert observed["ROUTER_DB_FILE"] == str(snapshot / "sidecar.db")
+    assert observed["ROUTER_CATALOG_FILE"] == str(snapshot / "sidecar-catalog.json")
+    assert "GROQ_API_KEY" not in observed
+    assert "ROUTER_SERVICE_TOKEN" not in observed
+    assert "ROUTER_PROVIDER_PRICING_OVERRIDE" not in observed
 
 
 def test_private_directory_rejects_symlink(tmp_path: Path):

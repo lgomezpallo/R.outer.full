@@ -250,7 +250,147 @@ def strict_trace_extension_subsumed(upstream: str, local: str) -> bool:
 def scaffold_semantically_identical(a: str, b: str) -> bool:
     """Require identical non-method Python AST and preserved non-marker comments."""
     def normalize(source: str):
-        marker = re.compile(r'^([ \\t]*)# @@symbol:[A-Za-z_][\\w.]*[ \\t]*$', re.M)
+        marker = re.compile(r'^([ \t]*)# @@symbol:[A-Za-z_][\w.]*[ \t]*
+        return marker.sub(lambda match: match.group(1) + 'pass', source)
+    try:
+        if ast.dump(ast.parse(normalize(a)), include_attributes=False) != ast.dump(
+                ast.parse(normalize(b)), include_attributes=False):
+            return False
+    except SyntaxError:
+        return False
+    def comments(source):
+        return [line.strip() for line in source.splitlines()
+                if line.lstrip().startswith('#') and not line.lstrip().startswith('# @@symbol:')]
+    return all(comment in comments(a) for comment in comments(b))
+
+
+def combine(base: str, upstream: str, local: str) -> tuple[str,int]:
+    b,u,l = symbols(base),symbols(upstream),symbols(local)
+    try:
+        merged_scaffold = merge_lines(scaffold(base),scaffold(upstream),scaffold(local))
+    except Blocked as exc:
+        raise Blocked('scaffold_' + str(exc)) from exc
+    overlap = 0
+    def replacement(match):
+        nonlocal overlap
+        name = match.group(1)
+        old, current, new = b.get(name),u.get(name),l.get(name)
+        if new == old:
+            selected = current
+        elif current == old:
+            selected = new
+        elif current == new:
+            selected = current
+        elif current is None or new is None:
+            raise Blocked('changed_deleted_symbol')
+        else:
+            try:
+                selected = merge_lines(old or '',current,new)
+            except Blocked as exc:
+                if (oracle_semantically_subsumed(old or '', current, new) or
+                    (name == 'Router._classify_failure' and old is not None and
+                     strict_retryable_line_subsumed(old, current, new)) or
+                    (name == 'RouterStore.recent_request_traces' and old is None and
+                     strict_trace_extension_subsumed(current, new))):
+                    selected = current
+                else:
+                    try:
+                        selected = merge_statements(old or '', current, new)
+                    except (Blocked, SyntaxError, ValueError):
+                        raise Blocked('symbol_' + str(exc) + '_at_' + name) from exc
+            overlap += 1
+        if selected is None:
+            raise Blocked('missing_symbol')
+        return selected.rstrip('\n') + '\n'
+    combined = re.sub(r'^[ \t]*# @@symbol:([A-Za-z_][\w.]*)[ \t]*$',replacement,
+                      merged_scaffold,flags=re.MULTILINE)
+    try:
+        ast.parse(combined)
+    except SyntaxError as exc:
+        raise Blocked('invalid_python') from exc
+    if scaffold(combined) != merged_scaffold:
+        def meaningful_lines(value):
+            return [line.rstrip() for line in value.splitlines() if line.strip()]
+        if (meaningful_lines(scaffold(combined)) == meaningful_lines(merged_scaffold)
+                or scaffold_semantically_identical(scaffold(combined), merged_scaffold)):
+            return combined, overlap
+        if oracle_semantically_subsumed(base, upstream, local):
+            return upstream, overlap
+        raise Blocked('scaffold_mismatch')
+    return combined,overlap
+
+def git_show(root: Path, rev: str, path: str) -> str:
+    p = subprocess.run(['git','-C',str(root),'show',rev+':'+path],
+                       capture_output=True,text=True,check=False)
+    if p.returncode:
+        raise Blocked('missing_base_source')
+    return p.stdout
+
+def safe_overlap_diagnostic(base: str, upstream: str, local: str, relative: str) -> None:
+    """Only predefined non-secret HTTP status sets and known trace flags."""
+    if relative not in {'router/router.py', 'router/storage.py'}:
+        return
+    target = ('Router._classify_failure' if relative == 'router/router.py'
+              else 'RouterStore.recent_request_traces')
+    for label, source in (('base', base), ('candidate', upstream), ('oracle', local)):
+        try:
+            source_symbol = symbols(source).get(target)
+            if source_symbol is None:
+                continue
+            tree = ast.parse(textwrap.dedent(source_symbol))
+            if relative == 'router/router.py':
+                sets = []
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Set) and all(
+                        isinstance(e, ast.Constant) and type(e.value) is int
+                        and 100 <= e.value <= 599 for e in node.elts
+                    ):
+                        sets.append(tuple(sorted(e.value for e in node.elts)))
+                print('diagnostic_' + label + '_http_sets=' +
+                      ';'.join(','.join(map(str, values)) for values in sets[:12]))
+            else:
+                allowed = {'fallback', 'provider_fallback', 'model_fallback',
+                           'attempts', 'request_id', 'created_at'}
+                keys = {node.value for node in ast.walk(tree)
+                        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+                        and node.value in allowed}
+                print('diagnostic_' + label + '_trace_keys=' + ','.join(sorted(keys)))
+        except (SyntaxError, ValueError):
+            print('diagnostic_' + label + '=unavailable')
+
+
+def main() -> int:
+    if len(sys.argv) != 6:
+        print('symbol_merge=invalid_arguments')
+        return 2
+    root = Path(sys.argv[1]).resolve()
+    base, upstream, relative = sys.argv[2:5]
+    target = Path(sys.argv[5]).resolve()
+    if not relative.startswith('router/') or not relative.endswith('.py') or target.is_relative_to(root) or Path(sys.argv[5]).is_symlink():
+        print('symbol_merge=unsafe_target')
+        return 3
+    try:
+        merged, overlaps = combine(git_show(root,base,relative),
+                                   git_show(root,upstream,relative),
+                                   (root/relative).read_text(encoding='utf-8'))
+        target.write_text(merged,encoding='utf-8')
+        print('symbol_merge=clean')
+        print('symbol_merge_overlap_count='+str(overlaps))
+        return 0
+    except (Blocked,OSError,UnicodeError,ValueError,SyntaxError) as exc:
+        if isinstance(exc, Blocked) and relative in {'router/router.py', 'router/storage.py'}:
+            try:
+                safe_overlap_diagnostic(git_show(root,base,relative),
+                                        git_show(root,upstream,relative),
+                                        (root/relative).read_text(encoding='utf-8'), relative)
+            except (OSError,UnicodeError,ValueError,SyntaxError):
+                print('diagnostic=unavailable')
+        print('symbol_merge=blocked_'+(str(exc) if isinstance(exc,Blocked) else 'invalid_source'))
+        return 3
+
+if __name__ == '__main__':
+    raise SystemExit(main())
+, re.M)
         return marker.sub(lambda match: match.group(1) + 'pass', source)
     try:
         if ast.dump(ast.parse(normalize(a)), include_attributes=False) != ast.dump(

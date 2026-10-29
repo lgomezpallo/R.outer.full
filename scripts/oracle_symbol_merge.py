@@ -47,7 +47,7 @@ def scaffold(source: str) -> str:
             nodes = []
         for name, item in nodes:
             start = min([item.lineno] + [d.lineno for d in item.decorator_list])
-            indent = re.match(r'[ \\t]*', lines[start-1]).group(0)
+            indent = re.match(r'[ \t]*', lines[start-1]).group(0)
             edits.append((start, item.end_lineno, indent + '# @@symbol:' + name + '\n'))
     for start, end, marker in sorted(edits, reverse=True):
         lines[start-1:end] = [marker]
@@ -86,7 +86,7 @@ def combine(base: str, upstream: str, local: str) -> tuple[str,int]:
         if selected is None:
             raise Blocked('missing_symbol')
         return selected.rstrip('\n') + '\n'
-    combined = re.sub(r'^[ \\t]*# @@symbol:([A-Za-z_][\\w.]*)[ \\t]*$',replacement,
+    combined = re.sub(r'^[ \t]*# @@symbol:([A-Za-z_][\w.]*)[ \t]*$',replacement,
                       merged_scaffold,flags=re.MULTILINE)
     try:
         ast.parse(combined)

@@ -250,7 +250,7 @@ def strict_trace_extension_subsumed(upstream: str, local: str) -> bool:
 def scaffold_semantically_identical(a: str, b: str) -> bool:
     """Require identical non-method Python AST and preserved non-marker comments."""
     def normalize(source: str):
-        marker = re.compile(r'^([ \t]*)# @@symbol:[A-Za-z_][\w.]*[ \t]*
+        marker = re.compile(r'^([ \t]*)# @@symbol:[A-Za-z_][\w.]*[ \t]*$', re.M)
         return marker.sub(lambda match: match.group(1) + 'pass', source)
     try:
         if ast.dump(ast.parse(normalize(a)), include_attributes=False) != ast.dump(

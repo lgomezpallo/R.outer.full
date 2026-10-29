@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import getpass
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -325,6 +326,26 @@ def stage() -> None:
         with path.open("rb") as stream:
             return hashlib.file_digest(stream, "sha256").hexdigest()
     original_digests = tuple(digest(path) for path in originals)
+    # Rehearse the EXACT candidate promotion data isolation helper against
+    # private effective-data snapshots. This validates the code that prevents
+    # a failed production switch from migrating the original live database.
+    for source, name in zip(originals, ("predeploy-router.db", "predeploy-catalog.json")):
+        target = snapshot / name
+        if target.exists() or target.is_symlink():
+            raise StageBlocked("promotion_rehearsal_snapshot_exists")
+        shutil.copyfile(source, target)
+        target.chmod(0o600)
+    promote_path = release / "scripts/router_release_promote.py"
+    spec = importlib.util.spec_from_file_location("router_candidate_promote_rehearsal", promote_path)
+    if spec is None or spec.loader is None:
+        raise StageBlocked("promotion_rehearsal_module_unavailable")
+    promote_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(promote_module)
+    candidate_db, candidate_catalog = promote_module.prepare_candidate_data(snapshot)
+    if (not candidate_db.is_file() or not candidate_catalog.is_file()
+            or tuple(digest(path) for path in originals) != original_digests):
+        raise StageBlocked("promotion_rehearsal_data_not_isolated")
+    print("isolated_promotion_data_rehearsal=passed", flush=True)
     for source, label in ((APP, "baseline-before"), (release, "candidate"),
                           (APP, "baseline-restored")):
         passed = isolated_sidecar(source, python, snapshot, label)

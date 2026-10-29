@@ -1,0 +1,86 @@
+name: Router Oracle private snapshot and isolated reconciliation
+
+on:
+  push:
+    branches: [feat/offline-cooldown-restart-consistency-20261028]
+    paths:
+      - .github/workflows/oracle-candidate-reconcile.yml
+      - scripts/oracle_snapshot_bridge.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: router-oracle-candidate-snapshot
+  cancel-in-progress: false
+
+jobs:
+  preserve-and-reconcile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Read Oracle changes without modifying Oracle, then encrypt private snapshot
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.ORACLE_SSH_HOST }}
+          SSH_USER: ${{ secrets.ORACLE_SSH_USER }}
+          SSH_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.ORACLE_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          for name in SSH_HOST SSH_USER SSH_KEY SSH_KNOWN_HOSTS; do
+            test -n "${!name}" || { echo "::error::Missing SSH configuration"; exit 1; }
+          done
+          umask 077
+          TEMP_DIR="$(mktemp -d)"
+          trap 'rm -rf "$TEMP_DIR"' EXIT
+          printf '%s\n' "$SSH_KEY" > "$TEMP_DIR/ssh_key"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$TEMP_DIR/known_hosts"
+          chmod 600 "$TEMP_DIR/ssh_key" "$TEMP_DIR/known_hosts"
+          ssh -i "$TEMP_DIR/ssh_key" -o IdentitiesOnly=yes -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$TEMP_DIR/known_hosts" \
+            -o ConnectTimeout=12 -o PasswordAuthentication=no \
+            "$SSH_USER@$SSH_HOST" 'python3 - stream' \
+            < scripts/oracle_snapshot_bridge.py > "$TEMP_DIR/snapshot.tar"
+          # Recovery depends on the same SSH secret; do not rotate it before recovery.
+          SNAP_PASS="$( { printf 'router-oracle-snapshot-v1\n'; cat "$TEMP_DIR/ssh_key"; } | sha256sum | cut -d' ' -f1)"
+          export SNAP_PASS
+          openssl enc -aes-256-cbc -pbkdf2 -iter 250000 -salt \
+            -pass env:SNAP_PASS -in "$TEMP_DIR/snapshot.tar" \
+            -out "$RUNNER_TEMP/oracle-local-changes.enc"
+          python3 - "$RUNNER_TEMP/oracle-local-changes.enc" <<'PY'
+          import hashlib, hmac, os, pathlib, sys
+          ciphertext = pathlib.Path(sys.argv[1])
+          key = bytes.fromhex(os.environ['SNAP_PASS'])
+          digest = hmac.new(key, ciphertext.read_bytes(), hashlib.sha256).hexdigest()
+          ciphertext.with_suffix('.enc.hmac').write_text(digest + '\n')
+          PY
+          unset SNAP_PASS
+          cp "$TEMP_DIR/snapshot.tar" "$RUNNER_TEMP/oracle-snapshot-for-reconcile.tar"
+          echo 'oracle_private_snapshot=encrypted_and_authenticated'
+          echo 'oracle_production_modified=no'
+      - name: Reconcile tracked changes in runner-only disposable worktrees
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/oracle_snapshot_bridge.py reconcile \
+            "$RUNNER_TEMP/oracle-snapshot-for-reconcile.tar" "$GITHUB_SHA"
+      - name: Retain encrypted Oracle local changes for private recovery
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: oracle-local-encrypted-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/oracle-local-changes.enc
+            ${{ runner.temp }}/oracle-local-changes.enc.hmac
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+      - name: Remove plaintext copy from runner
+        if: ${{ always() }}
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/oracle-snapshot-for-reconcile.tar" "$RUNNER_TEMP/oracle-local-changes.enc" "$RUNNER_TEMP/oracle-local-changes.enc.hmac"

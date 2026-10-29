@@ -197,3 +197,18 @@ Los cuatro conflictos tracked de router/api.py, router/client.py, router/router.
 **Puertas aún cerradas:** no se fusionó a main ni se desplegó; no se tocaron Oracle, G.O., IAchat o Prisma; no hubo inferencias ni cambios de facturación. Pendientes: integración real G.O.-Router en entorno aislado, prueba de rollback específica, CI totalmente desconectado y autorización explícita de despliegue. Para tráfico de inferencia real se requiere evidencia de gratuidad sin sobregiro de la cuenta/modelo seleccionado y autorización separada. No ejecutar scripts de promoción fijados al SHA histórico 339898a.
 
 **Siguiente hito P0:** validación integrada G.O.-Router y plan de promoción/rollback de la candidata ya reconciliada, sin tocar producción.
+
+
+## Checkpoint 29/10/2026 — inventario Oracle efectivo y bloqueo de backup corregido en código
+
+**Evidencia remota de solo lectura:** [GitHub Actions run 40877913247](https://github.com/lgomezpallo/R.outer.full/actions/runs/40877913247) terminó exitosamente. La consulta SSH **no hizo fetch, no escribió archivos en Oracle, no reinició servicios ni llamó a proveedores**. El workflow temporal de inventario se eliminó luego de obtener el diagnóstico para conservar el inventario cerrado de workflows de CI; el historial de la ejecución permanece disponible.
+
+- Oracle HEAD: `fa54b3781e52de5f8d1e0c64ae12fba390721fe0`; **6 tracked modificados y 27 untracked**. El servicio `router.service` está activo, con directorio de trabajo y Python virtual esperados.
+- La **BD activa** se encuentra en la ubicación de datos `/home/ubuntu/Proyecto/Datos/Router/router.db`, no en la BD secundaria que también existe dentro del checkout.
+- El **catálogo activo** apunta a **otra ubicación privada**; no está en las dos rutas convencionales que el script de staging inspeccionaba. No se registró su ruta ni su contenido en los logs.
+- El servicio tiene token y credenciales presentes de Groq, NVIDIA, Cloudflare y OpenRouter; esto **no acredita precio cero, plan, cuota ni ausencia de facturación**. `ROUTER_OFFLINE_ONLY` no está habilitado en el proceso actual. No se realizó ninguna inferencia.
+- **Defecto bloqueante identificado:** el staging histórico respaldaba sólo las rutas convencionales, pudiendo omitir el catálogo efectivo. Se modificó `scripts/router_release_stage.py` para leer exclusivamente las ubicaciones efectivas de BD y catálogo del proceso en ejecución, conservar ambos archivos en el snapshot privado y **fallar cerrado** si no puede verificarlos. No publica valores de configuración ni secretos. Se añadieron pruebas sintéticas para comprobar conservación y rechazo de catálogo ausente.
+
+**Importante:** el script de staging todavía conserva el PIN histórico `339898a`; el arreglo del respaldo **no autoriza ejecutarlo ni prepara por sí solo la promoción de #87**. El CI de los commits de esta corrección debe aprobar antes de declararla validada. El respaldo cifrado original de 33 cambios permanece en el run 40853340673. La candidata no está desplegada y no se ha modificado producción.
+
+**Siguiente bloqueo P0:** verificar CI del arreglo, preparar staging y rollback específicos del SHA candidato (sin inferencia y sin cambiar producción), y sólo después solicitar autorización expresa de despliegue. El CI todavía no acredita instalación y build Docker completamente offline.

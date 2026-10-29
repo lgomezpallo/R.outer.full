@@ -277,6 +277,52 @@ def classify_live_app_dir(raw_exec: str) -> str:
         return "unavailable"
 
 
+
+def external_router_history(raw_exec: str, candidate_sha: str) -> str:
+    """Classify a different live import checkout without exposing any paths.
+
+    A clean checkout at a commit already contained in the candidate can be
+    preserved/reconciled. This is read-only: never reset or modify that tree.
+    """
+    try:
+        match = re.search(r"argv\\[\\]=(.*?)\\s+;\\s+ignore_errors=", raw_exec)
+        if match is None:
+            return "exec_unparseable"
+        args = shlex.split(match.group(1))
+        if args.count("--app-dir") != 1:
+            return "app_dir_unavailable"
+        value = args[args.index("--app-dir") + 1]
+        root = (Path(value) if Path(value).is_absolute() else APP / value).resolve(strict=True)
+        if not (root / "router" / "api.py").is_file():
+            return "not_router_package"
+        git_root = Path(command("git", "-C", str(root), "rev-parse", "--show-toplevel")).resolve(strict=True)
+        if git_root != root:
+            return "nested_git_root"
+        dirty = subprocess.check_output(
+            ["git", "-C", str(root), "status", "--porcelain=v1", "-z"],
+            stderr=subprocess.DEVNULL,
+        )
+        if dirty:
+            return "external_checkout_dirty"
+        external_sha = command("git", "-C", str(root), "rev-parse", "HEAD")
+        if not re.fullmatch(r"[0-9a-f]{40}", external_sha):
+            return "external_commit_invalid"
+        known = subprocess.run(
+            ["git", "-C", str(APP), "cat-file", "-e", external_sha + "^{commit}"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        if known.returncode:
+            return "external_history_unknown"
+        ancestor = subprocess.run(
+            ["git", "-C", str(APP), "merge-base", "--is-ancestor", external_sha, candidate_sha],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        return "clean_known_ancestor" if ancestor.returncode == 0 else "not_candidate_ancestor"
+    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+        return "external_history_unverified"
+
+
+
 def preflight_promotion_layout(promote_module: object) -> None:
     """Read-only rehearsal of promotion's actual systemd compatibility gates.
 
@@ -299,7 +345,10 @@ def preflight_promotion_layout(promote_module: object) -> None:
     if re.search(r"(?:KEY|TOKEN|PASSWORD|SECRET|CREDENTIAL)", inline, re.I):
         raise StageBlocked("promotion_inline_secrets_unsupported")
     raw_exec = command("systemctl", "show", "router.service", "-p", "ExecStart", "--value")
-    print("production_app_dir_provenance=" + classify_live_app_dir(raw_exec), flush=True)
+    provenance = classify_live_app_dir(raw_exec)
+    print("production_app_dir_provenance=" + provenance, flush=True)
+    if provenance == "external_shadow_router":
+        print("external_router_history=" + external_router_history(raw_exec, candidate_pin()), flush=True)
     try:
         parsed_argv = promote_module.original_argv(raw_exec)
         promote_module.candidate_argv(parsed_argv)

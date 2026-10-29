@@ -88,3 +88,55 @@ def test_no_production_mutation_commands_in_release_script():
         "git checkout -f",
     ):
         assert forbidden not in script
+
+
+def test_effective_data_paths_use_runtime_environment_without_exposing_keys(tmp_path: Path):
+    app = tmp_path / "checkout"
+    db = tmp_path / "data" / "router.db"
+    catalog = tmp_path / "private" / "catalog-live.json"
+    raw = bytes([0]).join((
+        b"ROUTER_DB_FILE=" + os.fsencode(db),
+        b"ROUTER_CATALOG_FILE=" + os.fsencode(catalog),
+        b"GROQ_API_KEY=private-test-placeholder",
+    ))
+    assert stage.effective_service_data_paths(raw, app) == {"db": db, "catalog": catalog}
+    with pytest.raises(stage.StageBlocked, match="effective_data_paths_unverified"):
+        stage.effective_service_data_paths(b"ROUTER_DB_FILE=router.db", app)
+
+
+def test_stage_backup_includes_effective_private_catalog_and_database(tmp_path: Path, monkeypatch):
+    import sqlite3
+
+    app = tmp_path / "checkout"
+    app.mkdir()
+    git(app, "init", "-q")
+    git(app, "config", "user.name", "Test")
+    git(app, "config", "user.email", "test@example.invalid")
+    (app / "router.py").write_text("original\n")
+    git(app, "add", "router.py")
+    git(app, "commit", "-qm", "base")
+    base = git(app, "rev-parse", "HEAD")
+
+    data = tmp_path / "data"
+    data.mkdir()
+    db = data / "router.db"
+    with sqlite3.connect(db) as connection:
+        connection.execute("CREATE TABLE sentinel (value TEXT)")
+        connection.execute("INSERT INTO sentinel VALUES ('preserved')")
+    private = tmp_path / "private"
+    private.mkdir()
+    catalog = private / "catalog-live.json"
+    catalog.write_text('{"models":[]}')
+    snapshot = tmp_path / "snapshot"
+    stage.private_directory(snapshot)
+    monkeypatch.setattr(stage, "DATA", tmp_path / "not-present")
+    stage.backup_checkout(app, snapshot, base, active={"db": db, "catalog": catalog})
+    with sqlite3.connect(snapshot / "effective-router.db") as connection:
+        assert connection.execute("SELECT value FROM sentinel").fetchone() == ("preserved",)
+    assert (snapshot / "effective-catalog.json").read_text() == '{"models":[]}'
+    assert (snapshot / "effective-catalog.json").stat().st_mode & 0o777 == 0o600
+    assert catalog.read_text() == '{"models":[]}'
+
+    catalog.unlink()
+    with pytest.raises(stage.StageBlocked, match="effective_catalog_missing_or_unsafe"):
+        stage.backup_checkout(app, snapshot, base, active={"db": db, "catalog": catalog})

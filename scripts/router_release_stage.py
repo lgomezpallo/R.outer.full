@@ -237,6 +237,44 @@ def isolated_sidecar(release: Path, python: Path, snapshot: Path, label: str) ->
             raise StageBlocked("sidecar_not_stopped")
 
 
+
+def preflight_promotion_layout(promote_module: object) -> None:
+    """Read-only rehearsal of promotion's actual systemd compatibility gates.
+
+    Do not inspect or print EnvironmentFile contents or secrets. This prevents
+    a green isolated rollback from masking a production switch that cannot
+    parse the live unit, while leaving the service entirely untouched.
+    """
+    if command("systemctl", "show", "router.service", "-p", "WorkingDirectory",
+               "--value") != str(APP):
+        raise StageBlocked("promotion_service_workdir_unsupported")
+    user = command("systemctl", "show", "router.service", "-p", "User", "--value")
+    if not promote_module.SAFE_USER.fullmatch(user) or user != getpass.getuser():
+        raise StageBlocked("promotion_service_user_unsupported")
+    try:
+        promote_module.environment_files(command(
+            "systemctl", "show", "router.service", "-p", "EnvironmentFiles", "--value"))
+    except promote_module.PromoteBlocked:
+        raise StageBlocked("promotion_service_environment_unsupported") from None
+    inline = command("systemctl", "show", "router.service", "-p", "Environment", "--value")
+    if re.search(r"(?:KEY|TOKEN|PASSWORD|SECRET|CREDENTIAL)", inline, re.I):
+        raise StageBlocked("promotion_inline_secrets_unsupported")
+    try:
+        promote_module.original_argv(command(
+            "systemctl", "show", "router.service", "-p", "ExecStart", "--value"))
+    except promote_module.PromoteBlocked:
+        raise StageBlocked("promotion_service_exec_unsupported") from None
+    override = subprocess.run(
+        ["sudo", "-n", "test", "-e", str(promote_module.OVERRIDE)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    if override.returncode == 0:
+        raise StageBlocked("promotion_override_already_present")
+    if override.returncode != 1:
+        raise StageBlocked("promotion_override_check_unavailable")
+    print("production_switch_preflight=passed", flush=True)
+
+
 def stage() -> None:
     pin = candidate_pin()
     os.umask(0o077)
@@ -353,6 +391,7 @@ def stage() -> None:
             or tuple(digest(path) for path in promotion_sources) != promotion_source_digests):
         raise StageBlocked("promotion_rehearsal_data_not_isolated")
     print("isolated_promotion_data_rehearsal=passed", flush=True)
+    preflight_promotion_layout(promote_module)
     for source, label in ((APP, "baseline-before"), (release, "candidate"),
                           (APP, "baseline-restored")):
         passed = isolated_sidecar(source, python, snapshot, label)

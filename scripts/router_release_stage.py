@@ -6,6 +6,7 @@ sidecar are created. This program NEVER switches router.service or edits router.
 """
 from __future__ import annotations
 
+import getpass
 import json
 import os
 import re
@@ -18,6 +19,7 @@ import tarfile
 import tempfile
 import time
 import urllib.request
+import uuid
 from pathlib import Path
 
 RELEASE_BRANCH = "feat/offline-cooldown-restart-consistency-20261028"
@@ -233,21 +235,36 @@ def stage() -> None:
     else:
         command("git", "worktree", "add", "--detach", str(release), pin, cwd=APP)
     print("frozen_release_worktree=staged", flush=True)
-    # Offline pytest must not inherit live provider keys or billing overrides either.
-    env = {key: os.environ[key] for key in ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "TZ")
-           if key in os.environ}
-    env.update({
+    # The tests assert the normal billing-denial reason, so do NOT set
+    # ROUTER_OFFLINE_ONLY for pytest: it changes the expected error codes.
+    # Instead, run the entire suite in a transient OS-level network sandbox,
+    # with no provider credentials and no access to non-loopback IP addresses.
+    env = {
         "PYTHONPATH": str(release),
         "PYTHONDONTWRITEBYTECODE": "1",
-        "ROUTER_OFFLINE_ONLY": "1",
         "ROUTER_PYTHON": str(python),
         "ROUTER_DB_FILE": str(snapshot / "pytest.db"),
         "ROUTER_CATALOG_FILE": str(snapshot / "pytest-catalog.json"),
-    })
+        "HOME": str(Path.home()),
+    }
+    unit = "router-stage-pytest-" + uuid.uuid4().hex[:12]
+    sandbox = [
+        "sudo", "-n", "systemd-run", "--quiet", "--pipe", "--wait", "--collect",
+        "--unit=" + unit,
+        "--property=User=" + getpass.getuser(),
+        "--property=WorkingDirectory=" + str(release),
+        "--property=NoNewPrivileges=yes",
+        "--property=IPAddressDeny=any",
+        "--property=IPAddressAllow=localhost",
+        "--property=ProtectSystem=strict",
+        "--property=ReadWritePaths=" + str(snapshot),
+        "--property=PrivateTmp=yes",
+    ]
+    sandbox.extend("--setenv=" + key + "=" + value for key, value in env.items())
+    sandbox += [str(python), "-m", "pytest", "-q", "-p", "no:cacheprovider"]
     with (snapshot / "pytest.log").open("wb") as log:
         result = subprocess.run(
-            [str(python), "-m", "pytest", "-q", "-p", "no:cacheprovider"],
-            cwd=release, env=env, stdout=log, stderr=subprocess.STDOUT,
+            sandbox, cwd=release, stdout=log, stderr=subprocess.STDOUT,
             timeout=180,
         )
     print(f"staged_pytest={'passed' if result.returncode == 0 else 'failed'}", flush=True)

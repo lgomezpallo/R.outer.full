@@ -27,7 +27,7 @@ jobs:
 
   oracle-stage:
     # Explicitly authorized non-production staging only. No service switch.
-    # Branch- and blob-pinned offline staging; no promotion or provider calls.
+    # Branch- and blob-pinned staging; sandboxed pytest has no outbound network.
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/feat/offline-cooldown-restart-consistency-20261028' }}
     needs: tests
     runs-on: ubuntu-latest

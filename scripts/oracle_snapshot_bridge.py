@@ -162,7 +162,6 @@ def reconcile(archive: Path, candidate_sha: str) -> int:
                 result = git(candidate, 'apply', '--3way', '--index', '-', data=local_delta)
                 if result.returncode == 0:
                     export_private_reconciliation(candidate)
-                    export_private_reconciliation(candidate)
                     print('tracked_reconcile=applied_to_isolated_candidate')
                     return 0
                 unmerged = required(git(candidate, 'ls-files', '-u', '-z'))
@@ -213,6 +212,7 @@ def reconcile(archive: Path, candidate_sha: str) -> int:
                 print('tracked_remaining_conflict_count=' + str(len(remaining)))
                 print('tracked_remaining_conflict_files=' + ','.join(sorted(remaining)))
                 if not remaining:
+                    export_private_reconciliation(candidate)
                     print('tracked_reconcile=applied_to_isolated_candidate')
                     return 0
                 print('tracked_reconcile=blocked_private_overlap')

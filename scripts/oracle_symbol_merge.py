@@ -222,17 +222,17 @@ def strict_trace_extension_subsumed(upstream: str, local: str) -> bool:
     Require byte-for-byte agreement of the core SQL/metric code. The only
     Oracle-specific tail permitted is the provider-only fallback computation.
     """
-    marker = '        for trace in traces.values():\\n'
+    marker = '        for trace in traces.values():\n'
     if upstream.count(marker) != 1 or local.count(marker) != 1:
         return False
     up_prefix, up_tail = upstream.split(marker, 1)
     lo_prefix, lo_tail = local.split(marker, 1)
-    extra = '                "provider_fallback": False, "model_fallback": False,\\n'
+    extra = '                "provider_fallback": False, "model_fallback": False,\n'
     if up_prefix.count(extra) != 1 or up_prefix.replace(extra, '') != lo_prefix:
         return False
     expected_oracle = (
-        '            trace["fallback"] = len({a["provider"] for a in trace["attempts"]}) > 1\\n'
-        '        return [traces[row["request_id"]] for row in ids]\\n'
+        '            trace["fallback"] = len({a["provider"] for a in trace["attempts"]}) > 1\n'
+        '        return [traces[row["request_id"]] for row in ids]\n'
     )
     if lo_tail != expected_oracle:
         return False

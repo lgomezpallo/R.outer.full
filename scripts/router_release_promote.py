@@ -77,6 +77,37 @@ def environment_files(raw: str) -> list[str]:
     return paths
 
 
+def clean_known_external_checkout(root: Path) -> bool:
+    """Accept only a clean, tracked Router checkout in candidate ancestry."""
+    if not re.fullmatch(r"[0-9a-f]{40}", PINNED_SHA):
+        return False
+    if (root.is_symlink() or (root / "router").is_symlink()
+            or (root / "router" / "api.py").is_symlink()):
+        return False
+    try:
+        def git(*args: str) -> bytes:
+            return subprocess.check_output(
+                ["git", "-C", str(root), *args],
+                stderr=subprocess.DEVNULL, timeout=12,
+            ).strip()
+
+        if Path(os.fsdecode(git("rev-parse", "--show-toplevel"))).resolve() != root:
+            return False
+        if git("status", "--porcelain=v1", "--untracked-files=all", "-z"):
+            return False
+        if git("ls-files", "--error-unmatch", "router/api.py") != b"router/api.py":
+            return False
+        head = os.fsdecode(git("rev-parse", "HEAD"))
+        if not re.fullmatch(r"[0-9a-f]{40}", head):
+            return False
+        return subprocess.run(
+            ["git", "-C", str(APP), "merge-base", "--is-ancestor", head, PINNED_SHA],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=12,
+        ).returncode == 0
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
+
+
 def verified_external_app_dir(original: Path) -> Path:
     """Map an external uvicorn import root only when it cannot shadow Router.
 
@@ -99,6 +130,8 @@ def verified_external_app_dir(original: Path) -> Path:
             raise PromoteBlocked("service_app_dir_unsupported")
         actual = root / "router" / "api.py"
         if actual.is_file() and actual.samefile(expected):
+            return Path(".")
+        if actual.is_file() and clean_known_external_checkout(root):
             return Path(".")
         if (root / "router").exists() or (root / "router.py").exists():
             raise PromoteBlocked("service_app_dir_unsupported")

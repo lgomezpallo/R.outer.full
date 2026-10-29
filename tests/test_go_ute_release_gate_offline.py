@@ -89,6 +89,7 @@ def test_mocked_failed_promotion_rolls_back_service_override(monkeypatch, tmp_pa
     state = {"running": "baseline", "backup": False, "verified": False}
     commands = []
 
+    monkeypatch.setattr(promote, "PINNED_SHA", "a" * 40)
     monkeypatch.setattr(promote, "APP", app)
     monkeypatch.setattr(promote, "RELEASE", tmp_path / "candidate")
     monkeypatch.setattr(promote, "BACKUPS", backups)

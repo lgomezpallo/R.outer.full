@@ -48,7 +48,7 @@ jobs:
           printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/router_oracle ~/.ssh/known_hosts
           trap 'rm -f ~/.ssh/router_oracle' EXIT
-          ssh -i ~/.ssh/router_oracle -o BatchMode=yes -o StrictHostKeyChecking=yes "$SSH_USER@$SSH_HOST" "ROUTER_SCRIPT_SHA=$SCRIPT_SHA bash -se" <<'REMOTE'
+          ssh -i ~/.ssh/router_oracle -o BatchMode=yes -o StrictHostKeyChecking=yes "$SSH_USER@$SSH_HOST" "ROUTER_SCRIPT_SHA=$SCRIPT_SHA ROUTER_RELEASE_SHA=$SCRIPT_SHA bash -se" <<'REMOTE'
           set -euo pipefail
           cd /home/ubuntu/Proyecto/Herramientas/Router
           git fetch --quiet origin main

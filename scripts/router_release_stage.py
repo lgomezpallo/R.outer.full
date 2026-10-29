@@ -323,6 +323,34 @@ def external_router_history(raw_exec: str, candidate_sha: str) -> str:
 
 
 
+
+def classify_existing_override(path: Path) -> str:
+    """Read only, emit a fixed category; never expose drop-in contents."""
+    try:
+        if subprocess.run(["sudo", "-n", "test", "-L", str(path)],
+                          stdout=subprocess.DEVNULL,
+                          stderr=subprocess.DEVNULL).returncode == 0:
+            return "symlink_unsafe"
+        raw = subprocess.check_output(
+            ["sudo", "-n", "cat", str(path)],
+            stderr=subprocess.DEVNULL, timeout=10,
+        )
+        if not raw or len(raw) > 65536:
+            return "empty_or_oversized"
+        content = raw.decode("utf-8", errors="replace")
+        if ("[Service]" in content and "ROUTER_OFFLINE_ONLY=1" in content
+                and "IPAddressDeny=any" in content
+                and "IPAddressAllow=localhost" in content
+                and "ExecStart=" in content):
+            return "previous_offline_router_release"
+        if "[Service]" in content and "ExecStart=" in content:
+            return "custom_service_exec_override"
+        return "other_service_override"
+    except (OSError, subprocess.SubprocessError):
+        return "unreadable"
+
+
+
 def preflight_promotion_layout(promote_module: object) -> None:
     """Read-only rehearsal of promotion's actual systemd compatibility gates.
 
@@ -392,6 +420,8 @@ def preflight_promotion_layout(promote_module: object) -> None:
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     if override.returncode == 0:
+        print("existing_override_kind=" + classify_existing_override(promote_module.OVERRIDE),
+              flush=True)
         raise StageBlocked("promotion_override_already_present")
     if override.returncode != 1:
         raise StageBlocked("promotion_override_check_unavailable")

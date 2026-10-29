@@ -7,6 +7,7 @@ sidecar are created. This program NEVER switches router.service or edits router.
 from __future__ import annotations
 
 import getpass
+import hashlib
 import json
 import os
 import re
@@ -316,12 +317,21 @@ def stage() -> None:
             print(f"staged_pytest_case={case}", flush=True)
         raise StageBlocked("staged_pytest_failed")
     # Rehearse baseline -> pinned candidate -> baseline on one disposable port.
+    # Verify the *original* private data snapshot remains byte-for-byte intact
+    # across each simulated migration and restoration.
     # This is a real process rollback rehearsal, NOT a production unit switch.
+    originals = (snapshot / "effective-router.db", snapshot / "effective-catalog.json")
+    def digest(path: Path) -> str:
+        with path.open("rb") as stream:
+            return hashlib.file_digest(stream, "sha256").hexdigest()
+    original_digests = tuple(digest(path) for path in originals)
     for source, label in ((APP, "baseline-before"), (release, "candidate"),
                           (APP, "baseline-restored")):
         passed = isolated_sidecar(source, python, snapshot, label)
         print(f"sidecar_{label.replace('-', '_')}={'passed' if passed else 'failed'}",
               flush=True)
+        if tuple(digest(path) for path in originals) != original_digests:
+            raise StageBlocked("effective_snapshot_changed")
         if not passed:
             raise StageBlocked("sidecar_" + label.replace("-", "_") + "_failed")
     print("isolated_health=passed", flush=True)

@@ -60,6 +60,35 @@ def sqlite_snapshot(source: Path, destination: Path) -> bool:
     return True
 
 
+def effective_service_data_paths(raw: bytes, app: Path) -> dict[str, Path]:
+    """Select only Router data locations; never log or retain credential values."""
+    wanted = {b"ROUTER_DB_FILE": "db", b"ROUTER_CATALOG_FILE": "catalog"}
+    selected: dict[str, Path] = {}
+    for item in raw.split(b"\\0"):
+        key, sep, value = item.partition(b"=")
+        if not sep or key not in wanted or not value:
+            continue
+        path = Path(os.fsdecode(value))
+        if not path.is_absolute():
+            path = app / path
+        selected[wanted[key]] = path
+    if set(selected) != {"db", "catalog"}:
+        raise StageBlocked("effective_data_paths_unverified")
+    return selected
+
+
+def service_data_paths() -> dict[str, Path]:
+    """Read the running service's effective paths, not SSH runner env files."""
+    try:
+        pid = int(command("systemctl", "show", "router.service", "-p", "MainPID", "--value"))
+        if pid <= 0:
+            raise StageBlocked("service_pid_unavailable")
+        raw = (Path("/proc") / str(pid) / "environ").read_bytes()
+    except (ValueError, OSError, subprocess.CalledProcessError):
+        raise StageBlocked("effective_data_paths_unavailable") from None
+    return effective_service_data_paths(raw, APP)
+
+
 def health(port: int) -> bool:
     try:
         with urllib.request.urlopen(
@@ -75,7 +104,7 @@ def port_free(port: int) -> bool:
         return sock.connect_ex(("127.0.0.1", port)) != 0
 
 
-def backup_checkout(app: Path, snapshot: Path, base: str) -> dict[str, int]:
+def backup_checkout(app: Path, snapshot: Path, base: str, active: dict[str, Path] | None = None) -> dict[str, int]:
     command("git", "rev-parse", "HEAD", cwd=app, output=snapshot / "oracle-head.txt")
     command("git", "status", "--porcelain=v1", "-z", cwd=app, output=snapshot / "status.bin")
     command("git", "diff", "--binary", "HEAD", "--", cwd=app, output=snapshot / "uncommitted.patch")
@@ -103,6 +132,16 @@ def backup_checkout(app: Path, snapshot: Path, base: str) -> dict[str, int]:
     ):
         if source.is_file() and not source.is_symlink():
             shutil.copy2(source, snapshot / label)
+    if active is not None:
+        db = active["db"]
+        if not sqlite_snapshot(db, snapshot / "effective-router.db"):
+            raise StageBlocked("effective_database_missing")
+        catalog = active["catalog"]
+        if catalog.is_symlink() or not catalog.is_file():
+            raise StageBlocked("effective_catalog_missing_or_unsafe")
+        shutil.copyfile(catalog, snapshot / "effective-catalog.json")
+        (snapshot / "effective-catalog.json").chmod(0o600)
+        print("effective_data_snapshot=created", flush=True)
     for item in snapshot.iterdir():
         if item.is_file():
             item.chmod(0o600)
@@ -178,7 +217,7 @@ def stage() -> None:
     if fetched != PINNED_SHA:
         raise StageBlocked("frozen_release_sha_mismatch")
     base = command("git", "merge-base", original_head, PINNED_SHA, cwd=APP)
-    counts = backup_checkout(APP, snapshot, base)
+    counts = backup_checkout(APP, snapshot, base, active=service_data_paths())
     print("private_snapshot=created", flush=True)
     print(f"private_untracked_preserved={counts['untracked']}", flush=True)
     release = release_root / PINNED_SHA

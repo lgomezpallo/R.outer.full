@@ -5,7 +5,9 @@ on:
     branches: [feat/offline-cooldown-restart-consistency-20261028]
     paths:
       - .github/workflows/router-release-stage.yml
+      - .github/workflows/router-release-promote.yml
       - scripts/router_release_stage.py
+      - scripts/router_release_promote.py
   workflow_dispatch:
 
 permissions:

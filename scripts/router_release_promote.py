@@ -86,8 +86,14 @@ def original_argv(raw: str) -> list[str]:
         raise PromoteBlocked("service_exec_layout_unsupported")
     if not str(Path(argv[0])).startswith(str(APP / ".venv/bin/")):
         raise PromoteBlocked("service_interpreter_unsupported")
-    if "router.api:app" not in argv or "--app-dir" in argv or "--reload" in argv:
+    if "router.api:app" not in argv or "--reload" in argv or argv.count("--app-dir") > 1:
         raise PromoteBlocked("service_exec_layout_unsupported")
+    if "--app-dir" in argv:
+        pos = argv.index("--app-dir")
+        # Only the current checkout (or its WorkingDirectory '.') is allowed.
+        # A different app directory may shadow the pinned Router package.
+        if pos + 1 >= len(argv) or argv[pos + 1] not in (".", str(APP)):
+            raise PromoteBlocked("service_app_dir_unsupported")
     try:
         if argv[argv.index("--host") + 1] != "127.0.0.1":
             raise PromoteBlocked("service_host_unsupported")
@@ -96,6 +102,16 @@ def original_argv(raw: str) -> list[str]:
     except (ValueError, IndexError):
         raise PromoteBlocked("service_exec_layout_unsupported") from None
     return argv
+
+
+def candidate_argv(argv: list[str]) -> list[str]:
+    """Replace an existing uvicorn --app-dir instead of duplicating the flag."""
+    if "--app-dir" not in argv:
+        new_argv = argv + ["--app-dir", str(RELEASE)]
+    else:
+        new_argv = argv.copy()
+        new_argv[new_argv.index("--app-dir") + 1] = str(RELEASE)
+    return new_argv
 
 
 def private_dir(path: Path) -> None:
@@ -257,7 +273,7 @@ def promote(script: Path) -> None:
     # Retain WorkingDirectory, EnvironmentFiles and the exact existing CLI flags.
     # The executable's environment overrides the original live-data paths.
     # On rollback, removing this drop-in restores the untouched live DB/catalog.
-    new_argv = argv + ["--app-dir", str(RELEASE)]
+    new_argv = candidate_argv(argv)
     content = ("[Service]\nIPAddressDeny=any\nIPAddressAllow=localhost\n"
                "ExecStart=\nExecStart=/usr/bin/env ROUTER_OFFLINE_ONLY=1 "
                + "ROUTER_DB_FILE=" + str(candidate_db) + " "

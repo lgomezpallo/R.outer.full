@@ -280,8 +280,10 @@ def preflight_promotion_layout(promote_module: object) -> None:
                 reason = "promotion_exec_interpreter"
             elif "router.api:app" not in args:
                 reason = "promotion_exec_application"
-            elif "--app-dir" in args or "--reload" in args:
-                reason = "promotion_exec_conflicting_flags"
+            elif "--reload" in args:
+                reason = "promotion_exec_reload"
+            elif "--app-dir" in args:
+                reason = "promotion_exec_appdir_value"
             elif "--host" not in args or args.index("--host") + 1 >= len(args) or args[args.index("--host") + 1] != "127.0.0.1":
                 reason = "promotion_exec_host"
             elif "--port" not in args or args.index("--port") + 1 >= len(args) or args[args.index("--port") + 1] != "8010":

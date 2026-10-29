@@ -49,6 +49,26 @@ def test_original_argv_accepts_known_uvicorn_service():
         promote.original_argv(raw.replace("router.api:app", "other.app:app"))
 
 
+def test_existing_app_dir_is_replaced_without_duplication(monkeypatch):
+    raw = ("{ path=/home/ubuntu/Proyecto/Herramientas/Router/.venv/bin/python ; "
+           "argv[]=/home/ubuntu/Proyecto/Herramientas/Router/.venv/bin/python "
+           "-m uvicorn router.api:app --host 127.0.0.1 --port 8010 "
+           "--app-dir /home/ubuntu/Proyecto/Herramientas/Router ; "
+           "ignore_errors=no ; start_time=[n/a] }")
+    args = promote.original_argv(raw)
+    monkeypatch.setattr(promote, "RELEASE", Path("/tmp/pinned-router-release"))
+    result = promote.candidate_argv(args)
+    assert result.count("--app-dir") == 1
+    assert result[result.index("--app-dir") + 1] == "/tmp/pinned-router-release"
+    assert args[args.index("--app-dir") + 1] == str(promote.APP)
+    with pytest.raises(promote.PromoteBlocked):
+        promote.original_argv(raw.replace("--app-dir /home/ubuntu/Proyecto/Herramientas/Router",
+                                         "--app-dir /tmp/untrusted"))
+    with pytest.raises(promote.PromoteBlocked):
+        promote.original_argv(raw.replace("--app-dir /home/ubuntu/Proyecto/Herramientas/Router",
+                                         "--reload"))
+
+
 def test_environment_file_parser_does_not_read_values():
     assert promote.environment_files("/etc/router-providers.env (ignore_errors=no)") == [
         "/etc/router-providers.env"

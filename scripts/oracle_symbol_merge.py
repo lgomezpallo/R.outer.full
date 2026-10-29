@@ -304,6 +304,7 @@ def combine(base: str, upstream: str, local: str) -> tuple[str,int]:
         return selected.rstrip('\n') + '\n'
     combined = re.sub(r'^[ \t]*# @@symbol:([A-Za-z_][\w.]*)[ \t]*$',replacement,
                       merged_scaffold,flags=re.MULTILINE)
+    combined = combined.rstrip('\n') + '\n'
     try:
         ast.parse(combined)
     except SyntaxError as exc:

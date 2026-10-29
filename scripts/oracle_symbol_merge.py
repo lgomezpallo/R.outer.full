@@ -292,6 +292,10 @@ def combine(base: str, upstream: str, local: str) -> tuple[str,int]:
     except SyntaxError as exc:
         raise Blocked('invalid_python') from exc
     if scaffold(combined) != merged_scaffold:
+        def meaningful_lines(value):
+            return [line.rstrip() for line in value.splitlines() if line.strip()]
+        if meaningful_lines(scaffold(combined)) == meaningful_lines(merged_scaffold):
+            return combined, overlap
         if oracle_semantically_subsumed(base, upstream, local):
             return upstream, overlap
         raise Blocked('scaffold_mismatch')

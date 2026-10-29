@@ -247,6 +247,23 @@ def strict_trace_extension_subsumed(upstream: str, local: str) -> bool:
     return all(up_tail.count(fragment) == 1 for fragment in required)
 
 
+def scaffold_semantically_identical(a: str, b: str) -> bool:
+    """Require identical non-method Python AST and preserved non-marker comments."""
+    def normalize(source: str):
+        marker = re.compile(r'^([ \\t]*)# @@symbol:[A-Za-z_][\\w.]*[ \\t]*$', re.M)
+        return marker.sub(lambda match: match.group(1) + 'pass', source)
+    try:
+        if ast.dump(ast.parse(normalize(a)), include_attributes=False) != ast.dump(
+                ast.parse(normalize(b)), include_attributes=False):
+            return False
+    except SyntaxError:
+        return False
+    def comments(source):
+        return [line.strip() for line in source.splitlines()
+                if line.lstrip().startswith('#') and not line.lstrip().startswith('# @@symbol:')]
+    return all(comment in comments(a) for comment in comments(b))
+
+
 def combine(base: str, upstream: str, local: str) -> tuple[str,int]:
     b,u,l = symbols(base),symbols(upstream),symbols(local)
     try:
@@ -294,7 +311,8 @@ def combine(base: str, upstream: str, local: str) -> tuple[str,int]:
     if scaffold(combined) != merged_scaffold:
         def meaningful_lines(value):
             return [line.rstrip() for line in value.splitlines() if line.strip()]
-        if meaningful_lines(scaffold(combined)) == meaningful_lines(merged_scaffold):
+        if (meaningful_lines(scaffold(combined)) == meaningful_lines(merged_scaffold)
+                or scaffold_semantically_identical(scaffold(combined), merged_scaffold)):
             return combined, overlap
         if oracle_semantically_subsumed(base, upstream, local):
             return upstream, overlap

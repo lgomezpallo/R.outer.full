@@ -62,6 +62,54 @@ jobs:
             printf '%s=' "$label"
             if test -f "$item" && ! test -L "$item"; then echo regular_file; elif test -L "$item"; then echo symlink; else echo absent; fi
           done
+          # Inspect only selected effective process-environment keys in memory.
+          # Never print values, environment files, credentials or full paths.
+          ROUTER_PID="$(systemctl show router.service -p MainPID --value)"
+          ROUTER_PID="$ROUTER_PID" APP="$APP" DATA="$DATA" python3 - <<'PY'
+          import os
+          from pathlib import Path
+          pid = os.environ["ROUTER_PID"]
+          try:
+              raw = Path("/proc") .joinpath(pid, "environ").read_bytes()
+          except (OSError, ValueError):
+              print("effective_runtime_environment=unavailable")
+          else:
+              selected = {}
+              allowed = {
+                  b"ROUTER_DB_FILE", b"ROUTER_CATALOG_FILE", b"ROUTER_OFFLINE_ONLY",
+                  b"ROUTER_SERVICE_TOKEN", b"GROQ_API_KEY", b"NVIDIA_API_KEY",
+                  b"CLOUDFLARE_API_TOKEN", b"OPENROUTER_API_KEY",
+              }
+              for item in raw.split(b"\\0"):
+                  key, sep, value = item.partition(b"=")
+                  if sep and key in allowed:
+                      selected[key] = value
+              app = os.environ["APP"]
+              data = os.environ["DATA"]
+              for key, label, filename in (
+                  (b"ROUTER_DB_FILE", "active_db", "router.db"),
+                  (b"ROUTER_CATALOG_FILE", "active_catalog", "router-catalog.json"),
+              ):
+                  value = selected.get(key, b"")
+                  if not value:
+                      kind = "unset_or_default"
+                  elif value == os.fsencode(app + "/" + filename):
+                      kind = "checkout"
+                  elif value == os.fsencode(data + "/" + filename):
+                      kind = "data"
+                  else:
+                      kind = "other_private_location"
+                  print(f"{label}_target={kind}")
+              print("runtime_offline_only=" + ("yes" if selected.get(b"ROUTER_OFFLINE_ONLY") == b"1" else "no_or_unset"))
+              for key, label in (
+                  (b"ROUTER_SERVICE_TOKEN", "service_token"),
+                  (b"GROQ_API_KEY", "groq"),
+                  (b"NVIDIA_API_KEY", "nvidia"),
+                  (b"CLOUDFLARE_API_TOKEN", "cloudflare"),
+                  (b"OPENROUTER_API_KEY", "openrouter"),
+              ):
+                  print(f"{label}_credential_present=" + ("yes" if selected.get(key) else "no"))
+          PY
           echo 'provider_account_billing_status=not_verified'
           echo 'production_changes=none'
           echo 'remote_inference_requests=none'

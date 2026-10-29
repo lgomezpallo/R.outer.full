@@ -27,7 +27,7 @@ PINNED_SHA = os.environ.get("ROUTER_RELEASE_SHA", "")
 APP = Path("/home/ubuntu/Proyecto/Herramientas/Router")
 RELEASE = Path.home() / "router-releases" / PINNED_SHA
 BACKUPS = Path.home() / "router-private-backups"
-OVERRIDE = Path("/etc/systemd/system/router.service.d/99-router-frozen-release.conf")
+OVERRIDE = Path("/etc/systemd/system/router.service.d/zzzz-router-frozen-release.conf")
 ENV_PATTERN = re.compile(r"(-?/[^\s()]+)\s+\(ignore_errors=(?:yes|no)\)")
 SAFE_USER = re.compile(r"[a-z_][a-z0-9_-]*")
 
@@ -194,6 +194,19 @@ def candidate_argv(argv: list[str]) -> list[str]:
     return new_argv
 
 
+
+def dropin_precedence_safe() -> bool:
+    """A new late drop-in must not collide with or precede an existing one."""
+    try:
+        raw = command("systemctl", "show", "router.service", "-p",
+                      "DropInPaths", "--value")
+        paths = raw.split()
+        return all(Path(item).name < OVERRIDE.name for item in paths)
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+
 def private_dir(path: Path) -> None:
     if path.is_symlink():
         raise PromoteBlocked("unsafe_private_directory")
@@ -306,7 +319,11 @@ def pinned_process() -> bool:
             return False
         argv = (Path("/proc") / str(pid) / "cmdline").read_bytes().split(b"\0")
         text = [item.decode(errors="replace") for item in argv if item]
-        return "--app-dir" in text and text[text.index("--app-dir") + 1] == str(RELEASE)
+        if "--app-dir" not in text or text[text.index("--app-dir") + 1] != str(RELEASE):
+            return False
+        environment = (Path("/proc") / str(pid) / "environ").read_bytes().split(b"\\0")
+        required = {b"ROUTER_OFFLINE_ONLY=1"}
+        return required.issubset(set(environment))
     except (ValueError, IndexError, OSError):
         return False
 
@@ -338,6 +355,8 @@ def promote(script: Path) -> None:
     if re.search(r"(?:KEY|TOKEN|PASSWORD|SECRET|CREDENTIAL)", inline, re.I):
         raise PromoteBlocked("inline_secret_environment_unsupported")
     argv = original_argv(command("systemctl", "show", "router.service", "-p", "ExecStart", "--value"))
+    if not dropin_precedence_safe():
+        raise PromoteBlocked("service_dropin_order_unsupported")
     if subprocess.run(["sudo", "-n", "test", "-e", str(OVERRIDE)],
                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
         raise PromoteBlocked("existing_release_override")

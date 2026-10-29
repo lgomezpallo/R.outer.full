@@ -285,7 +285,7 @@ def external_router_history(raw_exec: str, candidate_sha: str) -> str:
     preserved/reconciled. This is read-only: never reset or modify that tree.
     """
     try:
-        match = re.search(r"argv\\[\\]=(.*?)\\s+;\\s+ignore_errors=", raw_exec)
+        match = re.search(r"argv\[\]=(.*?)\s+;\s+ignore_errors=", raw_exec)
         if match is None:
             return "exec_unparseable"
         args = shlex.split(match.group(1))

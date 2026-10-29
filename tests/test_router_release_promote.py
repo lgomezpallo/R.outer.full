@@ -84,6 +84,36 @@ def test_existing_app_dir_is_replaced_without_duplication(monkeypatch, tmp_path)
                                          "--reload"))
 
 
+
+def test_external_app_dir_remaps_only_when_it_cannot_shadow_live_router(monkeypatch, tmp_path):
+    app = tmp_path / "checkout"
+    (app / "router").mkdir(parents=True)
+    (app / "router" / "api.py").write_text("app = object()\n")
+    external = tmp_path / "external-import-root"
+    external.mkdir()
+    release = tmp_path / "candidate"
+    release.mkdir()
+    monkeypatch.setattr(promote, "APP", app)
+    monkeypatch.setattr(promote, "RELEASE", release)
+    raw = (
+        f"{{ path={app}/.venv/bin/python ; argv[]={app}/.venv/bin/python "
+        f"-m uvicorn router.api:app --host 127.0.0.1 --port 8010 "
+        f"--app-dir {external} ; ignore_errors=no ; start_time=[n/a] }}"
+    )
+    argv = promote.original_argv(raw)
+    candidate = promote.candidate_argv(argv)
+    assert candidate[candidate.index("--app-dir") + 1] == str(release)
+    assert argv[argv.index("--app-dir") + 1] == str(external)
+
+    (external / "router").mkdir()
+    (external / "router" / "api.py").write_text("app = 'different source'\n")
+    with pytest.raises(promote.PromoteBlocked, match="service_app_dir_unsupported"):
+        promote.original_argv(raw)
+    with pytest.raises(promote.PromoteBlocked, match="service_app_dir_unsupported"):
+        promote.candidate_argv(argv)
+
+
+
 def test_environment_file_parser_does_not_read_values():
     assert promote.environment_files("/etc/router-providers.env (ignore_errors=no)") == [
         "/etc/router-providers.env"

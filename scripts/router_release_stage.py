@@ -450,6 +450,12 @@ def live_baseline_root(pin: str, snapshot: Path) -> Path:
     command("git", "-C", str(root), "bundle", "create", str(bundle), "HEAD")
     if not bundle.is_file() or bundle.stat().st_size == 0:
         raise StageBlocked("external_live_source_backup_failed")
+    verified = subprocess.run(
+        ["git", "-C", str(root), "bundle", "verify", str(bundle)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20,
+    )
+    if verified.returncode:
+        raise StageBlocked("external_live_source_bundle_invalid")
     for file in (snapshot / "external-live-head.txt", bundle):
         file.chmod(0o600)
     print("external_live_source_backup=created", flush=True)

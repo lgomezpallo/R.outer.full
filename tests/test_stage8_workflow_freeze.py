@@ -32,10 +32,6 @@ def test_oracle_jobs_fail_closed_in_offline_freeze(filename, job):
         approved = "    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/feat/offline-cooldown-restart-consistency-20261028' }}"
         assert approved in job_header, "Oracle staging is not pinned to the candidate branch"
         assert job_header.count("    if: ") == 1
-    elif filename == "router-release-promote.yml":
-        authorized = "    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/feat/offline-cooldown-restart-consistency-20261028' && github.event.head_commit.message == 'AUTHORIZED ROUTER OFFLINE PROMOTION 7030db38010c9572ecbcd1e84ed1934fcf7bf1eb' }}"
-        assert "    if: ${{ false }}" in job_header or authorized in job_header
-        assert job_header.count("    if: ") == 1
     else:
         assert "    if: ${{ false }}" in job_header, f"{filename}: Oracle job is enabled"
     assert "ssh -i " in job_body, f"{filename}: review changed remote execution path"
@@ -49,9 +45,6 @@ def test_oracle_workflows_have_no_automatic_triggers(filename):
     assert "  workflow_dispatch:" in triggers
     if filename == "router-release-stage.yml":
         assert "  push:\n    branches: [feat/offline-cooldown-restart-consistency-20261028]\n    paths:\n      - .github/workflows/router-release-stage.yml\n" in triggers
-    elif filename == "router-release-promote.yml":
-        if "  push:" in triggers:
-            assert "  push:\\n    branches: [feat/offline-cooldown-restart-consistency-20261028]\\n    paths:\\n      - .github/workflows/router-release-promote.yml\\n".replace("\\n", "\n") in triggers
     else:
         assert "  push:" not in triggers
     assert "  pull_request:" not in triggers

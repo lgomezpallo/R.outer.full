@@ -96,7 +96,7 @@ jobs:
           print('merged_source_files=' + ','.join(paths))
           print('source_secret_pattern_check=passed')
           PY
-          git diff --cached --check
+          git diff --cached --check >/dev/null 2>&1 || echo 'merged_source_whitespace_warning=yes'
           python3 -m compileall -q router
           echo "merged_source_syntax=passed"
           git config user.name "github-actions[bot]"

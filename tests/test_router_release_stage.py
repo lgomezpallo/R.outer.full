@@ -54,7 +54,15 @@ def test_sidecar_forces_offline_and_never_inherits_provider_credentials(monkeypa
     release.mkdir()
     snapshot = tmp_path / "snapshot"
     snapshot.mkdir()
+    import sqlite3
+    with sqlite3.connect(snapshot / "effective-router.db") as db:
+        db.execute("CREATE TABLE sentinel (value TEXT)")
+        db.execute("INSERT INTO sentinel VALUES ('preserved')")
+    (snapshot / "effective-catalog.json").write_text('{"models":[]}')
     assert stage.isolated_sidecar(release, tmp_path / "python", snapshot, "candidate")
+    with sqlite3.connect(snapshot / "sidecar-candidate.db") as db:
+        assert db.execute("SELECT value FROM sentinel").fetchone() == ("preserved",)
+    assert (snapshot / "sidecar-candidate-catalog.json").read_text() == '{"models":[]}'
     start = observed[0]
     assert "systemd-run" in start
     assert "--property=IPAddressDeny=any" in start

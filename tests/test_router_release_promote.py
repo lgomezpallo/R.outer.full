@@ -14,9 +14,22 @@ promote = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(promote)
 
 
-def test_pin_and_override_are_fixed():
-    assert promote.PINNED_SHA == "339898a6081061b41ad2557b600e06efbc1f00ef"
+def test_candidate_pin_is_required(monkeypatch):
     assert promote.OVERRIDE.name == "99-router-frozen-release.conf"
+    monkeypatch.setattr(promote, "PINNED_SHA", "")
+    with pytest.raises(promote.PromoteBlocked, match="candidate_sha_required"):
+        promote.candidate_pin()
+    monkeypatch.setattr(promote, "PINNED_SHA", "a" * 40)
+    assert promote.candidate_pin() == "a" * 40
+
+
+def test_promotion_forces_offline_and_blocks_egress():
+    source = MODULE.read_text()
+    assert "IPAddressDeny=any" in source
+    assert "IPAddressAllow=localhost" in source
+    assert "/usr/bin/env ROUTER_OFFLINE_ONLY=1" in source
+    assert "postdeploy_offline_route=passed" in source
+    assert "/v1/chat/completions" not in source
 
 
 def test_original_argv_accepts_known_uvicorn_service():

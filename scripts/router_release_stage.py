@@ -239,6 +239,36 @@ def isolated_sidecar(release: Path, python: Path, snapshot: Path, label: str) ->
 
 
 
+def classify_live_app_dir(raw_exec: str) -> str:
+    """Report only a fixed provenance category, never a service path or secret."""
+    try:
+        match = re.search(r"argv\\[\\]=(.*?)\\s+;\\s+ignore_errors=", raw_exec)
+        if match is None:
+            return "unparseable"
+        args = shlex.split(match.group(1))
+        if args.count("--app-dir") != 1:
+            return "absent_or_ambiguous"
+        index = args.index("--app-dir") + 1
+        if index >= len(args):
+            return "missing_value"
+        supplied = Path(args[index])
+        root = supplied if supplied.is_absolute() else APP / supplied
+        resolved_root = root.resolve(strict=True)
+        resolved_app = APP.resolve(strict=True)
+        if resolved_root == resolved_app:
+            return "checkout_alias"
+        expected = resolved_app / "router" / "api.py"
+        actual = resolved_root / "router" / "api.py"
+        same_module = expected.is_file() and actual.is_file() and expected.samefile(actual)
+        if resolved_root.is_relative_to(resolved_app):
+            return "checkout_child"
+        if resolved_app.is_relative_to(resolved_root):
+            return "ancestor_same_module" if same_module else "ancestor_unverified_module"
+        return "external_same_module" if same_module else "external_unverified_module"
+    except (OSError, ValueError, IndexError, RuntimeError):
+        return "unavailable"
+
+
 def preflight_promotion_layout(promote_module: object) -> None:
     """Read-only rehearsal of promotion's actual systemd compatibility gates.
 
@@ -266,6 +296,8 @@ def preflight_promotion_layout(promote_module: object) -> None:
         promote_module.candidate_argv(parsed_argv)
     except promote_module.PromoteBlocked as error:
         # Both are fixed internal reason codes, never service command values.
+        if str(error) == "service_app_dir_unsupported":
+            print("production_app_dir_provenance=" + classify_live_app_dir(raw_exec), flush=True)
         if str(error) in ("service_app_dir_unsupported", "candidate_app_dir_unavailable"):
             raise StageBlocked("promotion_" + str(error)) from None
         # Emit a *category only*: never echo executable paths, flags, tokens,

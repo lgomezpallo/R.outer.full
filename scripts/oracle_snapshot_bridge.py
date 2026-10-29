@@ -115,7 +115,7 @@ def export_private_reconciliation(candidate: Path) -> None:
     fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, 'wb') as handle:
         handle.write(patch)
-    changed = [p for p in required(git(candidate, 'diff', '--name-only', '-z', 'HEAD', '--')).split(b'\\0') if p]
+    changed = [p for p in required(git(candidate, 'diff', '--name-only', '-z', 'HEAD', '--')).split(b'\0') if p]
     print('reconciled_tracked_file_count=' + str(len(changed)))
     print('reconciled_private_patch=exported_no_source_logged')
 

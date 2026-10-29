@@ -41,8 +41,8 @@ EXPECTED_WORKFLOW_BLOBS: dict[str, str] = {
     "check-provider-secrets.yml": "30fb296f7d0d87d180d5a1a87b69822382113eb5",
     "oracle-deploy.yml": "5dc10c0fbba1198a14e2ee65321c10d79ecb3545",
     "router-oracle-monitor.yml": "c7fc8ddb2501c33c772488d97bf6dbe216dbbb68",
-    "router-release-stage.yml": "99bce96af6476e194360c57745cfd257b9226697",
-    "router-release-promote.yml": "c40cb5a57296f14237d3123af6c4fe3bb26d080e",
+    "router-release-stage.yml": "b97493b6210e97d3bd586fc761a343e421a52210",
+    "router-release-promote.yml": "5b086e2d61fe84d9c26201792fc269aba001652f",
     "router-release-live-smoke.yml": "e95e4775c95b397d69a00d0290dc56f838178648",
 }
 

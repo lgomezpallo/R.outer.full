@@ -35,7 +35,7 @@ REMOTE_JOBS = {
 # Pin the complete reviewed workflow contents, not only their names/jobs.
 # Any workflow edit must update this map in an explicitly reviewed PR.
 EXPECTED_WORKFLOW_BLOBS: dict[str, str] = {
-    "ci.yml": "af28fb693fba05be5218aad913a6e03fb6f228de",
+    "ci.yml": "b351afd4f3ae6c9af3ccd650719f4ef4ff41aa2d",
     "oracle-candidate-reconcile.yml": "e24d2e9be6c2a19bb13c88cdab640a573891076c",
     "oracle-ssh-readonly-access.yml": "66a452b307123f6cfcb425366ea1fc939cbf9abc",
     "check-provider-secrets.yml": "30fb296f7d0d87d180d5a1a87b69822382113eb5",

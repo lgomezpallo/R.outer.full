@@ -13,9 +13,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install -e ".[dev]"
+      # Explicit preparation downloads wheels and the base image. The actual
+      # pytest and Docker build below use only local artifacts, with Docker
+      # network disabled. This is not a fully air-gapped GitHub Actions job.
+      - name: Prepare local dependencies and Docker base image
+        run: |
+          mkdir -p wheelhouse
+          python -m pip download --dest wheelhouse ".[dev]" "setuptools>=69" wheel
+          docker pull python:3.12-slim
+      - name: Install Python test dependencies from local wheelhouse
+        run: python -m pip install --no-index --find-links=wheelhouse -e ".[dev]"
       - run: pytest
-      - run: docker build -t router-ci .
+      - name: Build Docker without build network or package index
+        run: docker build --network none --pull=false --build-arg ROUTER_OFFLINE_WHEELS=1 -t router-ci .
       - name: Real G.O. client + Router loopback acceptance (network disabled)
         run: |
           docker run --rm --network none --read-only --cap-drop ALL \

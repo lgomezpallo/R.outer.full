@@ -165,14 +165,30 @@ def isolated_sidecar(release: Path, python: Path, snapshot: Path, label: str) ->
     """
     if not port_free(SIDECAR_PORT):
         raise StageBlocked("sidecar_port_busy")
+    # Exercise both code versions against a *copy of the effective live-data
+    # snapshot*, never a new empty DB. Recreate the copy for baseline rollback
+    # so candidate migrations cannot contaminate the restored baseline.
+    source_db = snapshot / "effective-router.db"
+    source_catalog = snapshot / "effective-catalog.json"
+    sidecar_db = snapshot / f"sidecar-{label}.db"
+    sidecar_catalog = snapshot / f"sidecar-{label}-catalog.json"
+    for source, destination in ((source_db, sidecar_db),
+                                (source_catalog, sidecar_catalog)):
+        if source.is_symlink() or not source.is_file() or destination.exists() or destination.is_symlink():
+            raise StageBlocked("sidecar_snapshot_unsafe")
+        shutil.copyfile(source, destination)
+        destination.chmod(0o600)
+    with sqlite3.connect(sidecar_db) as restored:
+        if restored.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+            raise StageBlocked("sidecar_snapshot_integrity_failed")
     env = {key: os.environ[key] for key in ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "TZ")
            if key in os.environ}
     env.update({
         "PYTHONPATH": str(release),
         "ROUTER_OFFLINE_ONLY": "1",
         "PYTHONDONTWRITEBYTECODE": "1",
-        "ROUTER_DB_FILE": str(snapshot / f"sidecar-{label}.db"),
-        "ROUTER_CATALOG_FILE": str(snapshot / f"sidecar-{label}-catalog.json"),
+        "ROUTER_DB_FILE": str(sidecar_db),
+        "ROUTER_CATALOG_FILE": str(sidecar_catalog),
         "ROUTER_STARTUP_PROVIDER_TESTS": "0",
         "ROUTER_STARTUP_ROUTING_SMOKE": "0",
         "ROUTER_STARTUP_CAPABILITY_PROFILE": "0",

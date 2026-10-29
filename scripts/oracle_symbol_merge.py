@@ -147,6 +147,58 @@ def oracle_semantically_subsumed(base: str, upstream: str, local: str) -> bool:
         current[key] <= old[key] - count for key, count in deletions.items()
     )
 
+def merge_statements(base: str, upstream: str, local: str) -> str:
+    """Last resort: combine distinct whole Python statements within one method.
+
+    Never merges two edits to the same statement or silently drops comments.
+    """
+    def parse(source: str):
+        tree = ast.parse(textwrap.dedent(source))
+        if len(tree.body) != 1 or not isinstance(tree.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)):
+            raise Blocked('not_single_function')
+        function = tree.body[0]
+        lines = source.splitlines(keepends=True)
+        if not function.body:
+            raise Blocked('empty_body')
+        starts = [node.lineno - 1 for node in function.body]
+        prefix = ''.join(lines[:starts[0]])
+        blocks = [''.join(lines[a:b]) for a, b in zip(starts, starts[1:] + [len(lines)])]
+        return prefix, blocks
+
+    bp, bb = parse(base)
+    up, ub = parse(upstream)
+    lp, lb = parse(local)
+    if lp == bp:
+        prefix = up
+    elif up == bp or up == lp:
+        prefix = lp
+    else:
+        raise Blocked('overlapping_function_header')
+    def edits(other):
+        return [(i, j, other[k:m]) for tag, i, j, k, m in
+                difflib.SequenceMatcher(None, bb, other, autojunk=False).get_opcodes()
+                if tag != 'equal']
+    uc, lc = edits(ub), edits(lb)
+    result_edits = list(uc)
+    for a, z, value in lc:
+        duplicate = False
+        for i, j, existing in uc:
+            if (a, z, value) == (i, j, existing):
+                duplicate = True
+                break
+            if (a < j and i < z) or (a == z == i == j) or (
+                a == z and i <= a < j) or (i == j and a <= i < z):
+                raise Blocked('overlapping_statements')
+        if not duplicate:
+            result_edits.append((a, z, value))
+    merged = list(bb)
+    for a, z, value in sorted(result_edits, key=lambda item: (item[0], item[1]), reverse=True):
+        merged[a:z] = value
+    output = prefix + ''.join(merged)
+    ast.parse(textwrap.dedent(output))
+    return output
+
+
 def combine(base: str, upstream: str, local: str) -> tuple[str,int]:
     b,u,l = symbols(base),symbols(upstream),symbols(local)
     try:
@@ -173,7 +225,10 @@ def combine(base: str, upstream: str, local: str) -> tuple[str,int]:
                 if oracle_semantically_subsumed(old or '', current, new):
                     selected = current
                 else:
-                    raise Blocked('symbol_' + str(exc) + '_at_' + name) from exc
+                    try:
+                        selected = merge_statements(old or '', current, new)
+                    except (Blocked, SyntaxError, ValueError):
+                        raise Blocked('symbol_' + str(exc) + '_at_' + name) from exc
             overlap += 1
         if selected is None:
             raise Blocked('missing_symbol')

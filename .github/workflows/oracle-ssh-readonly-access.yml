@@ -1,0 +1,40 @@
+name: Oracle SSH read-only access check
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/oracle-ssh-readonly-access.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  ssh-readonly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check existing SSH credentials and inspect Router without changing it
+        env:
+          SSH_HOST: ${{ secrets.ORACLE_SSH_HOST }}
+          SSH_USER: ${{ secrets.ORACLE_SSH_USER }}
+          SSH_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.ORACLE_SSH_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for value in SSH_HOST SSH_USER SSH_KEY SSH_KNOWN_HOSTS; do
+            test -n "${!value}" || { echo "::error::Missing required SSH setting: $value"; exit 1; }
+          done
+          umask 077
+          mkdir -p ~/.ssh
+          trap 'rm -f ~/.ssh/router_oracle ~/.ssh/known_hosts' EXIT
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/router_oracle
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          ssh -i ~/.ssh/router_oracle -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=12 "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          cd /home/ubuntu/Proyecto/Herramientas/Router
+          printf 'SSH_OK\n'
+          printf 'HEAD='; git rev-parse --short HEAD
+          printf 'tracked_modified='; git status --porcelain --untracked-files=no | wc -l
+          printf 'untracked='; git ls-files --others --exclude-standard | wc -l
+          printf 'router_service='; systemctl is-active router.service || true
+          REMOTE

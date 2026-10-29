@@ -27,7 +27,7 @@ jobs:
 
   oracle-stage:
     # Explicitly authorized non-production staging only. No service switch.
-    # Triggered only by a change to this workflow on the candidate branch.
+    # Branch- and blob-pinned offline staging; no promotion or provider calls.
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/feat/offline-cooldown-restart-consistency-20261028' }}
     needs: tests
     runs-on: ubuntu-latest

@@ -233,10 +233,13 @@ def stage() -> None:
     else:
         command("git", "worktree", "add", "--detach", str(release), pin, cwd=APP)
     print("frozen_release_worktree=staged", flush=True)
-    env = dict(os.environ)
+    # Offline pytest must not inherit live provider keys or billing overrides either.
+    env = {key: os.environ[key] for key in ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "TZ")
+           if key in os.environ}
     env.update({
         "PYTHONPATH": str(release),
         "PYTHONDONTWRITEBYTECODE": "1",
+        "ROUTER_OFFLINE_ONLY": "1",
         "ROUTER_PYTHON": str(python),
         "ROUTER_DB_FILE": str(snapshot / "pytest.db"),
         "ROUTER_CATALOG_FILE": str(snapshot / "pytest-catalog.json"),

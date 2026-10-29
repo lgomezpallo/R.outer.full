@@ -77,6 +77,36 @@ def environment_files(raw: str) -> list[str]:
     return paths
 
 
+def verified_external_app_dir(original: Path) -> Path:
+    """Map an external uvicorn import root only when it cannot shadow Router.
+
+    An external root with a different Router package is never silently
+    replaced: that may be the actual running production implementation.
+    The only allowed external roots are aliases of this checkout or inert
+    directories with no router module/package at their top level.
+    """
+    try:
+        root = original.resolve(strict=True)
+        checkout = APP.resolve(strict=True)
+        if not root.is_dir():
+            raise PromoteBlocked("service_app_dir_unsupported")
+        if root == checkout:
+            return Path(".")
+        if root.is_relative_to(checkout):
+            return root.relative_to(checkout)
+        expected = checkout / "router" / "api.py"
+        if not expected.is_file():
+            raise PromoteBlocked("service_app_dir_unsupported")
+        actual = root / "router" / "api.py"
+        if actual.is_file() and actual.samefile(expected):
+            return Path(".")
+        if (root / "router").exists() or (root / "router.py").exists():
+            raise PromoteBlocked("service_app_dir_unsupported")
+        return Path(".")
+    except (OSError, RuntimeError, ValueError):
+        raise PromoteBlocked("service_app_dir_unsupported") from None
+
+
 def original_argv(raw: str) -> list[str]:
     match = re.search(r"argv\[\]=(.*?)\s+;\s+ignore_errors=", raw)
     if not match:
@@ -97,7 +127,7 @@ def original_argv(raw: str) -> list[str]:
         # resolve from the verified service WorkingDirectory (APP).
         if original_dir.is_absolute():
             if not original_dir.is_relative_to(APP):
-                raise PromoteBlocked("service_app_dir_unsupported")
+                verified_external_app_dir(original_dir)
         elif ".." in original_dir.parts:
             raise PromoteBlocked("service_app_dir_unsupported")
     try:
@@ -118,7 +148,10 @@ def candidate_argv(argv: list[str]) -> list[str]:
         new_argv = argv.copy()
         index = new_argv.index("--app-dir") + 1
         current = Path(new_argv[index])
-        suffix = current.relative_to(APP) if current.is_absolute() else current
+        if current.is_absolute() and not current.is_relative_to(APP):
+            suffix = verified_external_app_dir(current)
+        else:
+            suffix = current.relative_to(APP) if current.is_absolute() else current
         candidate_dir = RELEASE / suffix
         # Reject missing, symlinked or escaped import roots before the switch.
         if (not candidate_dir.is_dir() or candidate_dir.is_symlink()

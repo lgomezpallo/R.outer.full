@@ -36,7 +36,7 @@ REMOTE_JOBS = {
 # Any workflow edit must update this map in an explicitly reviewed PR.
 EXPECTED_WORKFLOW_BLOBS: dict[str, str] = {
     "ci.yml": "96688b4fa9ed2626fd4a8e00572d5bd5bed23470",
-    "oracle-candidate-reconcile.yml": "681c4d99b9ff0b705e7d77012f982da4aa3d12e3",
+    "oracle-candidate-reconcile.yml": "34bcf546b572d03ca855280807c0f2e5c875873e",
     "oracle-ssh-readonly-access.yml": "66a452b307123f6cfcb425366ea1fc939cbf9abc",
     "check-provider-secrets.yml": "30fb296f7d0d87d180d5a1a87b69822382113eb5",
     "oracle-deploy.yml": "5dc10c0fbba1198a14e2ee65321c10d79ecb3545",

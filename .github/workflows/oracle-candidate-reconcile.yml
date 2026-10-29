@@ -8,10 +8,11 @@ on:
       - scripts/oracle_snapshot_bridge.py
       - scripts/oracle_method_three_way.py
       - scripts/oracle_symbol_merge.py
+      - scripts/check_stage8_offline_workflows.py
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   actions: read
 
 concurrency:
@@ -62,11 +63,48 @@ jobs:
           echo 'oracle_production_modified=no'
       - name: Reconcile tracked changes in runner-only disposable worktrees
         shell: bash
+        env:
+          ROUTER_RECONCILE_PATCH_PATH: ${{ runner.temp }}/oracle-merged.patch
         run: |
           set -euo pipefail
           python3 scripts/oracle_snapshot_bridge.py reconcile \
             "$RUNNER_TEMP/oracle-snapshot-for-reconcile.tar" "$GITHUB_SHA"
+      - name: Stage verified tracked Oracle reconciliation on the candidate branch only
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "$RUNNER_TEMP/oracle-merged.patch" || { echo "::error::No merged patch"; exit 1; }
+          git apply --check "$RUNNER_TEMP/oracle-merged.patch"
+          git apply --index "$RUNNER_TEMP/oracle-merged.patch"
+          python3 - <<'PY'
+          import pathlib, re, subprocess
+          paths = [p.decode('utf-8') for p in subprocess.check_output(
+              ['git', 'diff', '--cached', '--name-only', '-z']).split(b'\0') if p]
+          if not paths or any(not re.fullmatch(r'router/[A-Za-z0-9_/-]+\.py', p) for p in paths):
+              raise SystemExit('blocked: reconciled changes outside reviewed Router Python sources')
+          patch = pathlib.Path(__import__('os').environ['RUNNER_TEMP'], 'oracle-merged.patch').read_text()
+          added = '\n'.join(line[1:] for line in patch.splitlines()
+                            if line.startswith('+') and not line.startswith('+++'))
+          sensitive = (
+              r'-----BEGIN [A-Z ]*PRIVATE KEY-----',
+              r'(?i)(?:sk-[A-Za-z0-9_-]{20,}|gsk_[A-Za-z0-9_-]{20,}|nvapi-[A-Za-z0-9_-]{20,})',
+              r'(?i)(?:api[_-]?key|password|secret|access[_-]?token)\s*[:=]\s*["\x27][A-Za-z0-9_+/=-]{20,}',
+          )
+          if any(re.search(pattern, added) for pattern in sensitive):
+              raise SystemExit('blocked: possible credential in reconciled source')
+          print('merged_source_files=' + ','.join(paths))
+          print('source_secret_pattern_check=passed')
+          PY
+          git diff --cached --check
+          python3 -m compileall -q router
+          echo "merged_source_syntax=passed"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix(router): reconcile preserved Oracle tracked source into PR 87"
+          git push origin "HEAD:refs/heads/feat/offline-cooldown-restart-consistency-20261028"
+          echo "candidate_branch_source_reconciliation=pushed_pending_full_CI"
       - name: Erase decrypted and encrypted runner copies
         if: ${{ always() }}
         shell: bash
-        run: rm -f "$RUNNER_TEMP/oracle-snapshot-for-reconcile.tar" "$RUNNER_TEMP/oracle-encrypted/oracle-local-changes.enc" "$RUNNER_TEMP/oracle-encrypted/oracle-local-changes.enc.hmac"
+        run: rm -f "$RUNNER_TEMP/oracle-merged.patch" "$RUNNER_TEMP/oracle-snapshot-for-reconcile.tar" "$RUNNER_TEMP/oracle-encrypted/oracle-local-changes.enc" "$RUNNER_TEMP/oracle-encrypted/oracle-local-changes.enc.hmac"

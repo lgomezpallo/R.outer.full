@@ -59,7 +59,7 @@ def test_ci_cannot_gain_oracle_secrets_or_ssh():
 def test_remote_action_cannot_move_into_unfrozen_tests_job():
     sources = _baseline()
     sources["router-release-stage.yml"] = sources["router-release-stage.yml"].replace(
-        "      - run: pytest -q", "      - run: pytest -q\n      - run: ssh -i /tmp/key host", 1
+        "      - run: python3 -m py_compile scripts/router_release_stage.py", "      - run: python3 -m py_compile scripts/router_release_stage.py\n      - run: ssh -i /tmp/key host", 1
     )
     assert any("remote action outside frozen job" in p for p in audit_workflows(sources))
 
@@ -79,8 +79,8 @@ def test_approved_job_cannot_change_existing_command():
 def test_manual_tests_job_cannot_gain_hidden_provider_call():
     sources = _baseline()
     sources["router-release-stage.yml"] = sources["router-release-stage.yml"].replace(
-        "      - run: pytest -q",
-        "      - run: pytest -q\n      - run: curl -X POST https://api.nvidia.com/v1/chat/completions",
+        "      - run: python3 -m py_compile scripts/router_release_stage.py",
+        "      - run: python3 -m py_compile scripts/router_release_stage.py\n      - run: curl -X POST https://api.nvidia.com/v1/chat/completions",
         1,
     )
     assert any("unreviewed workflow content change" in p for p in audit_workflows(sources))

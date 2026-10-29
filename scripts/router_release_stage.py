@@ -252,6 +252,16 @@ def stage() -> None:
         )
     print(f"staged_pytest={'passed' if result.returncode == 0 else 'failed'}", flush=True)
     if result.returncode:
+        # Only expose public test identifiers; private assertion text stays on Oracle.
+        pattern = re.compile(r"^(?:FAILED|ERROR) (tests/[A-Za-z0-9_./\[\]-]+(?:::[A-Za-z0-9_./\[\]-]+)*)")
+        cases = []
+        for line in (snapshot / "pytest.log").read_text(errors="replace").splitlines():
+            match = pattern.match(line)
+            if match:
+                cases.append(match.group(1))
+        print(f"staged_pytest_failure_count={len(cases)}", flush=True)
+        for case in cases[:12]:
+            print(f"staged_pytest_case={case}", flush=True)
         raise StageBlocked("staged_pytest_failed")
     passed = isolated_sidecar(release, python, snapshot)
     print(f"isolated_health={'passed' if passed else 'failed'}", flush=True)

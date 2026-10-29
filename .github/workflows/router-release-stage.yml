@@ -22,10 +22,11 @@ jobs:
       # No package downloads, no Docker registry and no inference here.
       # The pinned candidate already passed Router CI; staging runs pytest
       # again using the installed Oracle venv with provider keys stripped.
+      - run: python3 scripts/check_stage8_offline_workflows.py
       - run: python3 -m py_compile scripts/router_release_stage.py
 
   oracle-stage:
-    # One-time non-production staging requested by the user. No service switch.
+    # Explicitly authorized non-production staging only. No service switch.
     # Triggered only by a change to this workflow on the candidate branch.
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/feat/offline-cooldown-restart-consistency-20261028' }}
     needs: tests

@@ -41,7 +41,7 @@ EXPECTED_WORKFLOW_BLOBS: dict[str, str] = {
     "check-provider-secrets.yml": "30fb296f7d0d87d180d5a1a87b69822382113eb5",
     "oracle-deploy.yml": "5dc10c0fbba1198a14e2ee65321c10d79ecb3545",
     "router-oracle-monitor.yml": "c7fc8ddb2501c33c772488d97bf6dbe216dbbb68",
-    "router-release-stage.yml": "5ef5d5ec01099a4db686ceb1d8a39544cef7953f",
+    "router-release-stage.yml": "372e24bc17f9e647a74aa8b2849b11e14a6d1738",
     "router-release-promote.yml": "c40cb5a57296f14237d3123af6c4fe3bb26d080e",
     "router-release-live-smoke.yml": "e95e4775c95b397d69a00d0290dc56f838178648",
 }
@@ -112,7 +112,7 @@ def audit_workflows(sources: Mapping[str, str]) -> list[str]:
 
         if filename == "ci.yml":
             expected_triggers = {"push", "pull_request"}
-        elif filename in {"oracle-candidate-reconcile.yml", "oracle-ssh-readonly-access.yml"}:
+        elif filename in {"oracle-candidate-reconcile.yml", "oracle-ssh-readonly-access.yml", "router-release-stage.yml"}:
             expected_triggers = {"push", "workflow_dispatch"}
         else:
             expected_triggers = {"workflow_dispatch"}
@@ -127,7 +127,11 @@ def audit_workflows(sources: Mapping[str, str]) -> list[str]:
         for job, body in job_map.items():
             if filename in REMOTE_JOBS and job == REMOTE_JOBS[filename]:
                 conditions = re.findall(r"^    if:\s*(.*?)\s*$", body, re.M)
-                if conditions != ["${{ false }}"]:
+                if filename == "router-release-stage.yml":
+                    approved = "${{ github.event_name == 'push' && github.ref == 'refs/heads/feat/offline-cooldown-restart-consistency-20261028' }}"
+                    if conditions != [approved]:
+                        problems.append(f"{filename}/{job}: unauthorized stage condition")
+                elif conditions != ["${{ false }}"]:
                     problems.append(f"{filename}/{job}: remote job is not unconditionally disabled")
             elif (filename == "oracle-candidate-reconcile.yml" and job == "preserve-and-reconcile") or (filename == "oracle-ssh-readonly-access.yml" and job == "ssh-readonly"):
                 # Exception: exact reviewed workflow and bridge SHA only. SSH reads
@@ -151,7 +155,7 @@ def main() -> int:
         for error in errors:
             print(f"STAGE8_POLICY_FAIL {error}")
         return 1
-    print("STAGE8_POLICY_OK: 9 reviewed workflows; two pinned read-only Oracle jobs; 5 production remote jobs disabled")
+    print("STAGE8_POLICY_OK: 9 reviewed workflows; authorized staging only; promotion and live inference disabled")
     return 0
 
 

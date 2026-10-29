@@ -83,7 +83,7 @@ def test_mocked_failed_promotion_rolls_back_service_override(monkeypatch, tmp_pa
     app = tmp_path / "app"
     app.mkdir()
     backups = tmp_path / "private-backups"
-    override = tmp_path / "systemd" / "99-router-frozen-release.conf"
+    override = tmp_path / "systemd" / "zzzz-router-frozen-release.conf"
     baseline_data = tmp_path / "baseline.db"
     baseline_data.write_bytes(b"synthetic-database-marker")
     before = baseline_data.read_bytes()
@@ -108,6 +108,7 @@ def test_mocked_failed_promotion_rolls_back_service_override(monkeypatch, tmp_pa
             "User": "operator",
             "EnvironmentFiles": "/tmp/synthetic-router.env (ignore_errors=no)",
             "Environment": "",
+            "DropInPaths": "/etc/systemd/system/router.service.d/99-existing-custom.conf",
             "ExecStart": (
                 "{ path=" + str(app / ".venv/bin/python") + " ; argv[]="
                 + str(app / ".venv/bin/python")

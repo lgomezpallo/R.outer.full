@@ -40,34 +40,31 @@ def test_sidecar_forces_offline_and_never_inherits_provider_credentials(monkeypa
     monkeypatch.setenv("ROUTER_PROVIDER_PRICING_OVERRIDE", "unsafe")
     monkeypatch.setattr(stage, "port_free", lambda port: True)
     monkeypatch.setattr(stage, "health", lambda port: True)
-    observed = {}
+    observed = []
 
-    class FakeProcess:
-        def poll(self):
-            return None
+    class Result:
+        returncode = 0
 
-        def terminate(self):
-            pass
+    def fake_run(args, **kwargs):
+        observed.append(args)
+        return Result()
 
-        def wait(self, timeout):
-            return 0
-
-    def fake_popen(args, **kwargs):
-        observed.update(kwargs["env"])
-        return FakeProcess()
-
-    monkeypatch.setattr(stage.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(stage.subprocess, "run", fake_run)
     release = tmp_path / "candidate"
     release.mkdir()
     snapshot = tmp_path / "snapshot"
     snapshot.mkdir()
-    assert stage.isolated_sidecar(release, tmp_path / "python", snapshot)
-    assert observed["ROUTER_OFFLINE_ONLY"] == "1"
-    assert observed["ROUTER_DB_FILE"] == str(snapshot / "sidecar.db")
-    assert observed["ROUTER_CATALOG_FILE"] == str(snapshot / "sidecar-catalog.json")
-    assert "GROQ_API_KEY" not in observed
-    assert "ROUTER_SERVICE_TOKEN" not in observed
-    assert "ROUTER_PROVIDER_PRICING_OVERRIDE" not in observed
+    assert stage.isolated_sidecar(release, tmp_path / "python", snapshot, "candidate")
+    start = observed[0]
+    assert "systemd-run" in start
+    assert "--property=IPAddressDeny=any" in start
+    assert "--property=IPAddressAllow=localhost" in start
+    assert "--setenv=ROUTER_OFFLINE_ONLY=1" in start
+    assert "--setenv=ROUTER_DB_FILE=" + str(snapshot / "sidecar-candidate.db") in start
+    assert "--setenv=ROUTER_CATALOG_FILE=" + str(snapshot / "sidecar-candidate-catalog.json") in start
+    assert not any("GROQ_API_KEY" in arg or "ROUTER_SERVICE_TOKEN" in arg
+                   or "ROUTER_PROVIDER_PRICING_OVERRIDE" in arg for arg in start)
+    assert any("systemctl" in args and "stop" in args for args in observed)
 
 
 def test_private_directory_rejects_symlink(tmp_path: Path):

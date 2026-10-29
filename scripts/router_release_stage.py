@@ -339,9 +339,13 @@ def stage() -> None:
     spec = importlib.util.spec_from_file_location("router_candidate_promote_rehearsal", promote_path)
     if spec is None or spec.loader is None:
         raise StageBlocked("promotion_rehearsal_module_unavailable")
-    promote_module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(promote_module)
-    candidate_db, candidate_catalog = promote_module.prepare_candidate_data(snapshot)
+    try:
+        promote_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(promote_module)
+        candidate_db, candidate_catalog = promote_module.prepare_candidate_data(snapshot)
+    except Exception:
+        # Never emit candidate tracebacks or private snapshot paths to CI logs.
+        raise StageBlocked("promotion_data_rehearsal_failed") from None
     if (not candidate_db.is_file() or not candidate_catalog.is_file()
             or tuple(digest(path) for path in originals) != original_digests):
         raise StageBlocked("promotion_rehearsal_data_not_isolated")

@@ -2,6 +2,12 @@ name: Promote frozen Router release with automatic rollback
 
 on:
   workflow_dispatch:
+    inputs:
+      promote_oracle:
+        description: 'Promover a Oracle solo si verificaciones de facturacion y produccion estan aprobadas'
+        type: boolean
+        required: true
+        default: false
 
 permissions:
   contents: read
@@ -45,9 +51,9 @@ jobs:
             --entrypoint python router-release-promote-ci /tmp/acceptance.py
 
   oracle-promote:
-    # Stage 8 offline freeze: never connect to Oracle or run live inference.
-    # Re-enabling requires a separately reviewed, explicitly authorized change.
-    if: ${{ false }}
+    # Fail closed: all three gates must be explicitly enabled before Oracle access.
+    # These vars must only be set after independent account-billing verification.
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.promote_oracle == true && vars.ROUTER_BILLING_VERIFIED == 'true' && vars.ROUTER_PRODUCTION_PROMOTION_ENABLED == 'true' }}
     needs: tests
     runs-on: ubuntu-latest
     timeout-minutes: 12

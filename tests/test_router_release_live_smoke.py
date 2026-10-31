@@ -22,6 +22,10 @@ def test_pin_and_private_output_allowlist(monkeypatch):
     with pytest.raises(smoke.SmokeBlocked, match="candidate_sha_required"):
         smoke.candidate_pin()
     monkeypatch.setattr(smoke, "PINNED_SHA", "a" * 40)
+    monkeypatch.setattr(smoke, "SCRIPT_SHA", "")
+    with pytest.raises(smoke.SmokeBlocked, match="script_sha_required"):
+        smoke.candidate_pin()
+    monkeypatch.setattr(smoke, "SCRIPT_SHA", "b" * 40)
     assert smoke.candidate_pin() == "a" * 40
     assert smoke.VALID_STATUSES == ("live_health=passed", "live_chat=passed", "live_fallback=passed")
 
@@ -64,8 +68,13 @@ def test_sqlite_online_snapshot_does_not_change_source(tmp_path):
 
 def test_live_smoke_cannot_deploy_or_mutate_checkout():
     source = MODULE.read_text()
-    assert 'PINNED_SHA = os.environ.get("ROUTER_SCRIPT_SHA", "")' in source
-    assert '"--property=Environment=ROUTER_SCRIPT_SHA=" + PINNED_SHA' in source
+    assert 'SCRIPT_SHA = os.environ.get("ROUTER_SCRIPT_SHA", "")' in source
+    assert 'PINNED_SHA = os.environ.get("ROUTER_RELEASE_SHA", "")' in source
+    assert '"--property=Environment=ROUTER_SCRIPT_SHA=" + SCRIPT_SHA' in source
+    assert 'os.environ["ROUTER_OFFLINE_ONLY"] = "0"' in source
+    assert 'models[0].billing_status != "free"' in source
+    assert 'billing_ineligibility_reason(provider, models[0])' in source
+    assert 'promote_module.effective_live_data_paths()' in source
     assert "candidate_pin()" in source
     for forbidden in (
         "git reset --hard", "git clean -fd", "systemctl restart router.service",

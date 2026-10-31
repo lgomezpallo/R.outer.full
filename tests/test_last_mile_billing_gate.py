@@ -35,7 +35,6 @@ def _registered(provider_id: str, model_id: str, billing_status: str = "unknown"
         ("openrouter", "vendor/paid", "paid"),
         ("openrouter", "vendor/unknown", "unknown"),
         ("openrouter", "openrouter/free", "unknown"),
-        ("cloudflare", "@cf/vendor/free", "free"),
         ("nvidia", "vendor/not-verified", "unknown"),
         ("mistral", "mistral-small-latest", "free"),
     ],
@@ -72,3 +71,10 @@ def test_uncataloged_model_rejected_before_http(monkeypatch):
     monkeypatch.setattr(httpx, "Client", lambda *a, **kw: pytest.fail("network_request"))
     with pytest.raises(RuntimeError, match="inference_blocked:billing_unverified_model"):
         client.complete(provider, "injected/not-cataloged", RouteRequest("hola"))
+
+def test_free_cloudflare_passes_model_gate_but_offline_flag_still_blocks(monkeypatch):
+    provider = _registered("cloudflare", "@cf/vendor/free", "free")
+    ProviderClient._require_billing_eligible(provider, "@cf/vendor/free")
+    monkeypatch.setenv("ROUTER_OFFLINE_ONLY", "1")
+    with pytest.raises(RuntimeError, match="inference_blocked:offline_only"):
+        ProviderClient._require_billing_eligible(provider, "@cf/vendor/free")

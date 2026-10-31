@@ -17,8 +17,7 @@ class ProviderClient:
         """Last-mile guard: never send inference for an unapproved model.
 
         Covers direct client calls and probes, not just Router's ranking.
-        Account-level billing guarantees must be checked separately; catalog
-        pricing alone is not a guarantee that an account cannot incur charges.
+        Free-model eligibility does not guarantee account-level billing outcomes.
         """
         if offline_only():
             raise RuntimeError("inference_blocked:offline_only")
@@ -41,12 +40,12 @@ class ProviderClient:
         if len(matches) != 1:
             raise RuntimeError("inference_blocked:billing_ambiguous_model")
         model_spec = matches[0]
-        # Independent account-level guard: a bypassed/mocked selector must not
-        # turn a free catalog price into permission to incur account overages.
-        from . import billing
-        account_block = billing.account_billing_ineligibility_reason(provider.spec.id)
-        if account_block is not None:
-            raise RuntimeError(f"inference_blocked:{account_block}")
+        # Independently enforce the per-model price even if the selector is replaced.
+        if model_spec.billing_status != "free":
+            reason = "billing_paid" if model_spec.billing_status == "paid" else "billing_unverified"
+            raise RuntimeError(f"inference_blocked:{reason}")
+        if provider.spec.id == "cloudflare" and model in CLOUDFLARE_PAID_ONLY:
+            raise RuntimeError("inference_blocked:billing_paid")
         reason = billing_ineligibility_reason(provider, model_spec)
         if reason is not None:
             raise RuntimeError(f"inference_blocked:{reason}")

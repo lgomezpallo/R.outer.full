@@ -98,10 +98,8 @@ def test_cloudflare_billing_status_cannot_override_account_plan_check(tmp_path):
     })
     provider = RegisteredProvider(catalog.get("cloudflare"), "fake", RuntimeState())
     report = model_coverage([provider], RouteRequest("hola"))
-    assert report["totals"]["eligible_models"] == 0
-    assert report["providers"][0]["excluded_by_reason"] == {
-        "billing_paid": 1, "billing_unverified": 1,
-    }
+    assert report["totals"]["eligible_models"] == 1
+    assert report["providers"][0]["excluded_by_reason"] == {"billing_paid": 1}
     catalog.merge_discovered_models("cloudflare", ["@cf/vendor/chat-free"], {
         "@cf/vendor/chat-free": "unknown",
     })

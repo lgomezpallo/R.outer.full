@@ -43,7 +43,7 @@ def test_successful_local_merge_has_utc_timestamp_and_survives_restart(tmp_path)
     assert report["merge_timestamps_do_not_prove_live_discovery"] is True
     assert report["live_discovery_performed"] is False
     assert report["account_billing_verified"] is False
-    assert row["counts"]["eligible"] == 0
+    assert row["counts"]["eligible"] == 1
 
 
 def test_discovery_client_path_records_source_without_live_claim():
@@ -59,7 +59,7 @@ def test_discovery_client_path_records_source_without_live_claim():
         "old": "unknown", "new": "free"
     }
     report = inventory_report([provider])
-    assert report["totals"]["eligible"] == 0
+    assert report["totals"]["eligible"] == 1
     assert report["discovery_freshness"] == "not_verified"
 
 

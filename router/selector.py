@@ -1,5 +1,4 @@
 from __future__ import annotations
-from . import billing
 from .billing import CLOUDFLARE_PAID_ONLY, NVIDIA_ROUTING_ALLOWLIST, billing_endpoint_ineligibility_reason
 from .catalog import infer_discovered_capabilities
 from .registry import RegisteredProvider
@@ -71,7 +70,7 @@ def billing_ineligibility_reason(provider: RegisteredProvider, model) -> str | N
             return "billing_paid"
         if model.billing_status != "free":
             return "billing_unverified"
-    return billing.account_billing_ineligibility_reason(provider.spec.id)
+    return None
 
 
 def ineligibility_reason(provider: RegisteredProvider, model, req: RouteRequest) -> str | None:

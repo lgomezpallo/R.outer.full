@@ -107,6 +107,12 @@ def authenticated_smoke_token(api) -> str:
             raise SmokeBlocked("router_anonymous_auth_unsafe") from None
     else:
         raise SmokeBlocked("router_anonymous_auth_unsafe")
+    try:
+        identity = api.require_auth("Bearer " + token)
+    except HTTPException:
+        raise SmokeBlocked("router_token_auth_failed") from None
+    if identity not in {"service", "iachat"}:
+        raise SmokeBlocked("router_token_auth_failed")
     return token
 
 

@@ -121,5 +121,6 @@ def test_smoke_uses_500_for_model_scope_and_429_for_provider_scope():
     source = MODULE.read_text()
     assert '429 if scope == "provider" else 500' in source
     assert 'live_fallback_scope=' in source
+    assert 'for scope in ("provider", "model"):' in source
     assert 'scope == "provider" or model == first_model' in source
     assert 'fallback_decisions = rank(api.router.registry.all(), request)' in source

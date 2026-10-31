@@ -27,7 +27,7 @@ import urllib.request
 import uuid
 from pathlib import Path
 
-RELEASE_BRANCH = "feat/offline-cooldown-restart-consistency-20261028"
+RELEASE_BRANCH = "main"
 
 
 def candidate_pin() -> str:

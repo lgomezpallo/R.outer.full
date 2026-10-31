@@ -33,10 +33,10 @@ def test_oracle_jobs_fail_closed_in_offline_freeze(filename, job):
         assert approved in job_header, "Oracle staging is not pinned to the candidate branch"
         assert job_header.count("    if: ") == 1
     elif filename == "router-release-promote.yml":
-        approved = "    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor == 'lgomezpallo' && github.event.before == 'b8391aaaa2e941d95643fd4778326e7263a2db47' && startsWith(github.event.head_commit.message, 'Router release main-ref promotion gate') }}"
+        approved = "    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor == 'lgomezpallo' && github.event.before == 'dc3e64ea0e5b70ed0d93a64d272e14a261ef0c46' && startsWith(github.event.head_commit.message, 'Router release effective-path promotion gate') }}"
         assert approved in job_header, "Production promotion requires one-time main push"
         assert job_header.count("    if: ") == 1
-        assert "          SCRIPT_SHA: 96cae21106abdd15cba19195374b116892c58008" in source
+        assert "          SCRIPT_SHA: dc3e64ea0e5b70ed0d93a64d272e14a261ef0c46" in source
         assert "    environment: router-production" in job_body
         assert approved in source.split("  tests:", 1)[1].split("  oracle-promote:", 1)[0]
     else:

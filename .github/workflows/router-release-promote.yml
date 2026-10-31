@@ -15,7 +15,7 @@ concurrency:
 jobs:
   tests:
     # Exact release PR merged by the repository owner; all other closes skip.
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor == 'lgomezpallo' && github.event.before == 'b8391aaaa2e941d95643fd4778326e7263a2db47' && startsWith(github.event.head_commit.message, 'Router release main-ref promotion gate') }}
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor == 'lgomezpallo' && github.event.before == 'dc3e64ea0e5b70ed0d93a64d272e14a261ef0c46' && startsWith(github.event.head_commit.message, 'Router release effective-path promotion gate') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -50,7 +50,7 @@ jobs:
 
   oracle-promote:
     # Merge-gated, owner-authorized release PR only; offline and reversible.
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor == 'lgomezpallo' && github.event.before == 'b8391aaaa2e941d95643fd4778326e7263a2db47' && startsWith(github.event.head_commit.message, 'Router release main-ref promotion gate') }}
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor == 'lgomezpallo' && github.event.before == 'dc3e64ea0e5b70ed0d93a64d272e14a261ef0c46' && startsWith(github.event.head_commit.message, 'Router release effective-path promotion gate') }}
     needs: tests
     runs-on: ubuntu-latest
     timeout-minutes: 12
@@ -63,7 +63,7 @@ jobs:
           SSH_USER: ${{ secrets.ORACLE_SSH_USER }}
           SSH_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
           SSH_KNOWN_HOSTS: ${{ secrets.ORACLE_SSH_KNOWN_HOSTS }}
-          SCRIPT_SHA: 96cae21106abdd15cba19195374b116892c58008
+          SCRIPT_SHA: dc3e64ea0e5b70ed0d93a64d272e14a261ef0c46
         run: |
           set -euo pipefail
           test -n "$SSH_HOST" && test -n "$SSH_USER" && test -n "$SSH_KEY" && test -n "$SSH_KNOWN_HOSTS"

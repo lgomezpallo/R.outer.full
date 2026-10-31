@@ -42,7 +42,7 @@ EXPECTED_WORKFLOW_BLOBS: dict[str, str] = {
     "oracle-deploy.yml": "5dc10c0fbba1198a14e2ee65321c10d79ecb3545",
     "router-oracle-monitor.yml": "c7fc8ddb2501c33c772488d97bf6dbe216dbbb68",
     "router-release-stage.yml": "25adf54657c656cb8645cfa938472132428a2c30",
-    "router-release-promote.yml": "17d34a6370f1c90d5a4db70cbdd61b9fa2489fff",
+    "router-release-promote.yml": "a4466c539f732af051f04bbd982c89492eaa17eb",
     "router-release-live-smoke.yml": "e95e4775c95b397d69a00d0290dc56f838178648",
 }
 
@@ -134,10 +134,10 @@ def audit_workflows(sources: Mapping[str, str]) -> list[str]:
                     if conditions != [approved]:
                         problems.append(f"{filename}/{job}: unauthorized stage condition")
                 elif filename == "router-release-promote.yml":
-                    approved = "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor == 'lgomezpallo' && github.event.before == 'b8391aaaa2e941d95643fd4778326e7263a2db47' && startsWith(github.event.head_commit.message, 'Router release main-ref promotion gate') }}"
+                    approved = "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor == 'lgomezpallo' && github.event.before == 'dc3e64ea0e5b70ed0d93a64d272e14a261ef0c46' && startsWith(github.event.head_commit.message, 'Router release effective-path promotion gate') }}"
                     if conditions != [approved]:
                         problems.append(f"{filename}/{job}: promotion requires exact authorized main push")
-                    if "          SCRIPT_SHA: 96cae21106abdd15cba19195374b116892c58008" not in source:
+                    if "          SCRIPT_SHA: dc3e64ea0e5b70ed0d93a64d272e14a261ef0c46" not in source:
                         problems.append(f"{filename}/{job}: promotion script SHA is not pinned")
                     if "  push:\n    branches: [main]" not in source:
                         problems.append(f"{filename}/{job}: missing exact merge-only trigger")

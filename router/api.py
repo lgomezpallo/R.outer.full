@@ -121,7 +121,8 @@ class RouteInput(BaseModel):
     task: str = Field(min_length=1, max_length=100000)
     context: str = ""
     conversation: list[ChatMessage] = Field(default_factory=list, max_length=100)
-    images: list[str] = Field(default_factory=list, max_length=3)
+    # IAchat accepts up to five still images; retain the per-image 2 MB validation.
+    images: list[str] = Field(default_factory=list, max_length=5)
     requirements: list[str] = Field(default_factory=list)
     required_capabilities: list[str] = Field(default_factory=lambda: ["chat"])
     preferred_model_class: str | None = None

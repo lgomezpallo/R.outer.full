@@ -42,7 +42,7 @@ EXPECTED_WORKFLOW_BLOBS: dict[str, str] = {
     "oracle-deploy.yml": "5dc10c0fbba1198a14e2ee65321c10d79ecb3545",
     "router-oracle-monitor.yml": "c7fc8ddb2501c33c772488d97bf6dbe216dbbb68",
     "router-release-stage.yml": "25adf54657c656cb8645cfa938472132428a2c30",
-    "router-release-promote.yml": "bd67e6d114617eb51337f4bc7fb82792f3b01c7c",
+    "router-release-promote.yml": "17d34a6370f1c90d5a4db70cbdd61b9fa2489fff",
     "router-release-live-smoke.yml": "e95e4775c95b397d69a00d0290dc56f838178648",
 }
 
@@ -115,7 +115,7 @@ def audit_workflows(sources: Mapping[str, str]) -> list[str]:
         elif filename in {"oracle-candidate-reconcile.yml", "oracle-ssh-readonly-access.yml", "router-release-stage.yml"}:
             expected_triggers = {"push", "workflow_dispatch"}
         elif filename == "router-release-promote.yml":
-            expected_triggers = {"pull_request"}
+            expected_triggers = {"push"}
         else:
             expected_triggers = {"workflow_dispatch"}
         if set(trigger_map) != expected_triggers:
@@ -134,12 +134,12 @@ def audit_workflows(sources: Mapping[str, str]) -> list[str]:
                     if conditions != [approved]:
                         problems.append(f"{filename}/{job}: unauthorized stage condition")
                 elif filename == "router-release-promote.yml":
-                    approved = "${{ github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.number == 89 && github.event.pull_request.base.ref == 'main' && github.event.pull_request.head.repo.full_name == 'lgomezpallo/R.outer.full' && github.event.pull_request.head.ref == 'release/router-reviewed-oracle-promotion-20261031' && github.event.pull_request.merged_by.login == 'lgomezpallo' }}"
+                    approved = "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor == 'lgomezpallo' && github.event.before == 'b8391aaaa2e941d95643fd4778326e7263a2db47' && startsWith(github.event.head_commit.message, 'Router release main-ref promotion gate') }}"
                     if conditions != [approved]:
-                        problems.append(f"{filename}/{job}: promotion must be PR89-owner-merge-only")
+                        problems.append(f"{filename}/{job}: promotion requires exact authorized main push")
                     if "          SCRIPT_SHA: 96cae21106abdd15cba19195374b116892c58008" not in source:
                         problems.append(f"{filename}/{job}: promotion script SHA is not pinned")
-                    if "  pull_request:\n    types: [closed]\n    branches: [main]" not in source:
+                    if "  push:\n    branches: [main]" not in source:
                         problems.append(f"{filename}/{job}: missing exact merge-only trigger")
                     if "    environment: router-production" not in source:
                         problems.append(f"{filename}/{job}: missing production environment gate")
@@ -169,7 +169,7 @@ def main() -> int:
         for error in errors:
             print(f"STAGE8_POLICY_FAIL {error}")
         return 1
-    print("STAGE8_POLICY_OK: 9 reviewed workflows; promotion PR89-owner-merge-only at pinned SHA; live inference disabled")
+    print("STAGE8_POLICY_OK: 9 reviewed workflows; promotion one-time main push at pinned SHA; live inference disabled")
     return 0
 
 

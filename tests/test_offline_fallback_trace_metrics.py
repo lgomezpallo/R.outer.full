@@ -198,3 +198,51 @@ def test_mixed_model_failures_and_cross_provider_fallback_keep_metrics(
     assert stats[("groq", "first")]["failure_count"] == 1
     assert stats[("groq", "second")]["failure_count"] == 1
     assert stats[("openrouter", "third")]["success_count"] == 1
+
+
+def test_openrouter_two_explicit_free_models_recover_from_model_500(
+    tmp_path, hypothetical_account_approval,
+):
+    """A single provider can recover from model failure, never from provider quota."""
+    from dataclasses import replace
+    client = ScriptedClient({
+        ("openrouter", "free-primary"): [_http_error(500)],
+        ("openrouter", "free-backup"): ["offline recovered"],
+    })
+    router, store = _router(
+        tmp_path, client,
+        _provider(
+            "openrouter",
+            _model("free-primary", priority=95),
+            _model("free-backup", priority=60),
+            replace(_model("paid-never", priority=50), billing_status="paid"),
+            replace(_model("unknown-never", priority=40), billing_status="unknown"),
+        ),
+        max_retries=0,
+    )
+    response = router.route(RouteRequest("hola", decompose=False, application_name="offline"))
+    assert response.ok and response.provider == "openrouter" and response.model == "free-backup"
+    assert client.calls == [("openrouter", "free-primary"), ("openrouter", "free-backup")]
+    assert [(d.provider, d.model) for d in response.decisions] == [
+        ("openrouter", "free-primary"), ("openrouter", "free-backup")
+    ]
+    trace = store.recent_request_traces(application_name="offline")[0]
+    assert trace["model_fallback"] is True and trace["provider_fallback"] is False
+
+
+def test_openrouter_provider_wide_429_does_not_retry_other_models_on_same_provider(
+    tmp_path, hypothetical_account_approval,
+):
+    client = ScriptedClient({
+        ("openrouter", "free-primary"): [_http_error(429)],
+        ("openrouter", "free-backup"): ["MUST_NOT_BE_USED"],
+    })
+    router, _ = _router(
+        tmp_path, client,
+        _provider("openrouter", _model("free-primary", priority=90), _model("free-backup", priority=30)),
+        max_retries=2,
+    )
+    response = router.route(RouteRequest("hola", decompose=False))
+    assert not response.ok and response.error == "all_attempts_failed"
+    assert client.calls == [("openrouter", "free-primary")]
+    assert router.registry.all()[0].state.available is False

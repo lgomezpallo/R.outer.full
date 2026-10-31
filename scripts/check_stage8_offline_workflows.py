@@ -43,7 +43,7 @@ EXPECTED_WORKFLOW_BLOBS: dict[str, str] = {
     "router-oracle-monitor.yml": "c7fc8ddb2501c33c772488d97bf6dbe216dbbb68",
     "router-release-stage.yml": "25adf54657c656cb8645cfa938472132428a2c30",
     "router-release-promote.yml": "a4466c539f732af051f04bbd982c89492eaa17eb",
-    "router-release-live-smoke.yml": "e95e4775c95b397d69a00d0290dc56f838178648",
+    "router-release-live-smoke.yml": "d29fda0152ca88293bf33347edede453faf7808d",
 }
 
 
@@ -114,7 +114,7 @@ def audit_workflows(sources: Mapping[str, str]) -> list[str]:
             expected_triggers = {"push", "pull_request"}
         elif filename in {"oracle-candidate-reconcile.yml", "oracle-ssh-readonly-access.yml", "router-release-stage.yml"}:
             expected_triggers = {"push", "workflow_dispatch"}
-        elif filename == "router-release-promote.yml":
+        elif filename in {"router-release-promote.yml", "router-release-live-smoke.yml"}:
             expected_triggers = {"push"}
         else:
             expected_triggers = {"workflow_dispatch"}
@@ -145,6 +145,16 @@ def audit_workflows(sources: Mapping[str, str]) -> list[str]:
                         problems.append(f"{filename}/{job}: missing production environment gate")
                     if f"    if: {approved}" not in source.split("  tests:", 1)[1].split("  oracle-promote:", 1)[0]:
                         problems.append(f"{filename}/tests: merge gate missing")
+                elif filename == "router-release-live-smoke.yml":
+                    approved = "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor == 'lgomezpallo' && github.event.before == '429ec271938e95159d256f94e9650bbfa012e750' && startsWith(github.event.head_commit.message, 'Router isolated free-model live smoke gate') }}"
+                    if conditions != [approved]:
+                        problems.append(f"{filename}/{job}: live smoke requires exact authorized main push")
+                    if "          RELEASE_SHA: dc3e64ea0e5b70ed0d93a64d272e14a261ef0c46" not in source:
+                        problems.append(f"{filename}/{job}: frozen release SHA not pinned")
+                    if "    environment: router-production" not in source:
+                        problems.append(f"{filename}/{job}: protected environment missing")
+                    if f"    if: {approved}" not in source.split("  tests:", 1)[1].split("  oracle-live-smoke:", 1)[0]:
+                        problems.append(f"{filename}/tests: one-time gate missing")
                 elif conditions != ["${{ false }}"]:
                     problems.append(f"{filename}/{job}: remote job is not unconditionally disabled")
             elif (filename == "oracle-candidate-reconcile.yml" and job == "preserve-and-reconcile") or (filename == "oracle-ssh-readonly-access.yml" and job == "ssh-readonly"):

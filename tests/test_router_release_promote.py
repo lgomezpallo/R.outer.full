@@ -276,18 +276,18 @@ def test_private_backup_uses_effective_process_data_paths_not_provider_envfiles(
     db.write_bytes(b"sqlite-fixture")
     catalog = tmp_path / "catalog.json"
     catalog.write_text("{}")
-    raw = (b"PROVIDER_API_KEY=do-not-copy-to-private-unit\\0"
-           b"ROUTER_DB_FILE=live.db\\0"
-           b"ROUTER_CATALOG_FILE=catalog.json\\0")
+    raw = (b"PROVIDER_API_KEY=do-not-copy-to-private-unit\0"
+           b"ROUTER_DB_FILE=live.db\0"
+           b"ROUTER_CATALOG_FILE=catalog.json\0")
     assert promote.effective_data_paths_from_environ(raw, tmp_path) == (
         str(db), str(catalog))
     with pytest.raises(promote.PromoteBlocked, match="effective_data_paths_unavailable"):
-        promote.effective_data_paths_from_environ(b"ROUTER_DB_FILE=live.db\\0", tmp_path)
+        promote.effective_data_paths_from_environ(b"ROUTER_DB_FILE=live.db\0", tmp_path)
     alias = tmp_path / "alias.json"
     alias.symlink_to(catalog)
     with pytest.raises(promote.PromoteBlocked, match="effective_data_paths_unsafe"):
         promote.effective_data_paths_from_environ(
-            b"ROUTER_DB_FILE=live.db\\0ROUTER_CATALOG_FILE=alias.json\\0", tmp_path)
+            b"ROUTER_DB_FILE=live.db\0ROUTER_CATALOG_FILE=alias.json\0", tmp_path)
     source = MODULE.read_text()
     assert 'if mode == "backup":' in source
     assert '"--setenv=ROUTER_DB_FILE=" + db_path' in source

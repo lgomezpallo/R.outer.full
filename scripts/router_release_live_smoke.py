@@ -20,7 +20,8 @@ import tempfile
 import uuid
 from pathlib import Path
 
-PINNED_SHA = os.environ.get("ROUTER_SCRIPT_SHA", "")
+SCRIPT_SHA = os.environ.get("ROUTER_SCRIPT_SHA", "")
+PINNED_SHA = os.environ.get("ROUTER_RELEASE_SHA", "")
 APP = Path("/home/ubuntu/Proyecto/Herramientas/Router")
 RELEASE = Path.home() / "router-releases" / PINNED_SHA
 BACKUPS = Path.home() / "router-private-backups"
@@ -37,6 +38,8 @@ def candidate_pin() -> str:
     """Require the exact release SHA supplied by the reviewed workflow."""
     if not re.fullmatch(r"[0-9a-f]{40}", PINNED_SHA):
         raise SmokeBlocked("candidate_sha_required")
+    if not re.fullmatch(r"[0-9a-f]{40}", SCRIPT_SHA):
+        raise SmokeBlocked("script_sha_required")
     return PINNED_SHA
 
 
@@ -85,25 +88,26 @@ def internal(work: Path) -> None:
     if prod_workdir != APP:
         raise SmokeBlocked("unexpected_production_workdir")
 
-    source_db = Path(os.getenv("ROUTER_DB_FILE", "router.db"))
-    if not source_db.is_absolute():
-        source_db = prod_workdir / source_db
-    source_catalog = Path(os.getenv("ROUTER_CATALOG_FILE", "router-catalog.json"))
-    if not source_catalog.is_absolute():
-        source_catalog = prod_workdir / source_catalog
+    # Use the actual effective production data snapshot, not EnvironmentFiles
+    # that may omit paths supplied by the active systemd release drop-in.
+    source_db = Path(os.environ.get("ROUTER_EFFECTIVE_DB_FILE", ""))
+    source_catalog = Path(os.environ.get("ROUTER_EFFECTIVE_CATALOG_FILE", ""))
+    if not source_db.is_absolute() or not source_catalog.is_absolute():
+        raise SmokeBlocked("effective_data_paths_missing")
     isolated_db = work / "smoke.db"
-    if source_db.exists():
-        backup_sqlite(source_db, isolated_db)
-    if source_catalog.exists():
-        if source_catalog.is_symlink() or not source_catalog.is_file():
-            raise SmokeBlocked("catalog_path_unsafe")
-        shutil.copyfile(source_catalog, work / "smoke-catalog.json")
-        (work / "smoke-catalog.json").chmod(0o600)
+    backup_sqlite(source_db, isolated_db)
+    if source_catalog.is_symlink() or not source_catalog.is_file():
+        raise SmokeBlocked("catalog_path_unsafe")
+    shutil.copyfile(source_catalog, work / "smoke-catalog.json")
+    (work / "smoke-catalog.json").chmod(0o600)
 
     # MUST override production data paths before importing router.api.
     os.environ["ROUTER_DB_FILE"] = str(isolated_db)
     os.environ["ROUTER_CATALOG_FILE"] = str(work / "smoke-catalog.json")
     os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+    # Online access is allowed ONLY inside this isolated short-lived unit.
+    # The production router.service stays offline and loopback-only.
+    os.environ["ROUTER_OFFLINE_ONLY"] = "0"
     for key in ("ROUTER_STARTUP_PROVIDER_TESTS", "ROUTER_STARTUP_ROUTING_SMOKE",
                 "ROUTER_STARTUP_CAPABILITY_PROFILE", "ROUTER_STARTUP_ORCHESTRATION_SMOKE",
                 "ROUTER_STARTUP_HETEROGENEOUS_SMOKE"):
@@ -113,7 +117,7 @@ def internal(work: Path) -> None:
     import httpx
     from fastapi.testclient import TestClient
     from router import api
-    from router.selector import rank
+    from router.selector import rank, billing_ineligibility_reason
     from router.types import RouteRequest
 
     token = os.getenv("ROUTER_SERVICE_TOKEN") or os.getenv("ROUTER_IACHAT_TOKEN")
@@ -126,6 +130,21 @@ def internal(work: Path) -> None:
         providers = api.router.registry.all()
         if len(providers) < 2:
             raise SmokeBlocked("insufficient_live_providers")
+        # Fail closed before ANY real provider request unless every ranked
+        # candidate is explicitly free and its endpoint is eligible.
+        request = RouteRequest(task="Say hola in one short sentence.", decompose=False,
+                               timeout_s=22, application_name="release-smoke")
+        decisions = rank(providers, request)
+        provider_map = {provider.spec.id: provider for provider in providers}
+        if not decisions:
+            raise SmokeBlocked("no_explicit_free_candidates")
+        for decision in decisions:
+            provider = provider_map.get(decision.provider)
+            models = ([m for m in provider.spec.models if m.id == decision.model]
+                      if provider is not None else [])
+            if (len(models) != 1 or models[0].billing_status != "free"
+                    or billing_ineligibility_reason(provider, models[0]) is not None):
+                raise SmokeBlocked("nonfree_candidate_rejected")
         reply = client.post("/v1/chat/completions", json={
             "model": "router-ia-auto",
             "messages": [{"role": "user", "content": "Reply with a short greeting in Spanish."}],
@@ -139,9 +158,6 @@ def internal(work: Path) -> None:
             raise SmokeBlocked("live_chat_empty")
         print("live_chat=passed", flush=True)
 
-        request = RouteRequest(task="Say hola in one short sentence.", decompose=False,
-                               timeout_s=22, application_name="release-smoke")
-        decisions = rank(providers, request)
         distinct = list(dict.fromkeys(item.provider for item in decisions))
         if len(distinct) < 2:
             raise SmokeBlocked("insufficient_fallback_candidates")
@@ -185,6 +201,15 @@ def orchestrate(script: Path) -> None:
         raise SmokeBlocked("inline_secret_environment_unsupported")
     envfiles = environment_files(command("systemctl", "show", "router.service",
                                          "-p", "EnvironmentFiles", "--value"))
+    # Reuse the tested, read-only effective-path resolver from the pinned release.
+    import importlib.util
+    promote_path = RELEASE / "scripts/router_release_promote.py"
+    spec = importlib.util.spec_from_file_location("smoke_pinned_promote", promote_path)
+    if spec is None or spec.loader is None:
+        raise SmokeBlocked("effective_path_resolver_missing")
+    promote_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(promote_module)
+    effective_db, effective_catalog = promote_module.effective_live_data_paths()
     private_dir(BACKUPS)
     work = Path(tempfile.mkdtemp(prefix="router-live-smoke-", dir=BACKUPS))
     work.chmod(0o700)
@@ -197,7 +222,10 @@ def orchestrate(script: Path) -> None:
             "--property=ProtectSystem=strict",
             "--property=ReadWritePaths=" + str(work),
             "--property=Environment=ROUTER_PRODUCTION_WORKDIR=" + str(APP),
-            "--property=Environment=ROUTER_SCRIPT_SHA=" + PINNED_SHA]
+            "--property=Environment=ROUTER_SCRIPT_SHA=" + SCRIPT_SHA,
+            "--setenv=ROUTER_RELEASE_SHA=" + PINNED_SHA,
+            "--setenv=ROUTER_EFFECTIVE_DB_FILE=" + effective_db,
+            "--setenv=ROUTER_EFFECTIVE_CATALOG_FILE=" + effective_catalog]
     args.extend("--property=EnvironmentFile=" + entry for entry in envfiles)
     args += [str(APP / ".venv/bin/python"), str(script), "internal", str(work)]
     try:

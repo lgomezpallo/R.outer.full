@@ -154,13 +154,23 @@ def test_live_smoke_auth_preflight_rejects_missing_or_unsafe_auth(monkeypatch):
     with pytest.raises(smoke.SmokeBlocked, match="router_anonymous_auth_unsafe"):
         smoke.authenticated_smoke_token(accepts_anonymous)
 
-    def rejects_anonymous(authorization):
-        assert authorization is None
-        raise HTTPException(status_code=401, detail="unauthorized")
+    def authenticates_only_token(authorization):
+        if authorization is None:
+            raise HTTPException(status_code=401, detail="unauthorized")
+        assert authorization == "Bearer offline-fixture-token"
+        return "iachat"
 
     assert smoke.authenticated_smoke_token(
-        SimpleNamespace(require_auth=rejects_anonymous)
+        SimpleNamespace(require_auth=authenticates_only_token)
     ) == "offline-fixture-token"
+
+    def rejects_all_tokens(authorization):
+        raise HTTPException(status_code=401, detail="unauthorized")
+
+    with pytest.raises(smoke.SmokeBlocked, match="router_token_auth_failed"):
+        smoke.authenticated_smoke_token(
+            SimpleNamespace(require_auth=rejects_all_tokens)
+        )
 
     def unexpected_rejection(authorization):
         raise HTTPException(status_code=403, detail="unexpected")

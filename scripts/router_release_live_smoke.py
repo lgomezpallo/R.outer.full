@@ -27,6 +27,7 @@ RELEASE = Path.home() / "router-releases" / PINNED_SHA
 BACKUPS = Path.home() / "router-private-backups"
 VALID_STATUSES = ("live_health=passed", "live_chat=passed", "live_fallback=passed")
 SAFE_FALLBACK_DIAGNOSTICS = frozenset({"single_model", "no_attempts", "first_provider_not_attempted", "no_second_attempt", "second_provider_failed", "second_model_failed", "unexpected_result"})
+SAFE_POOL_CATEGORIES = frozenset({"none", "one_model", "multiple_models_one_provider", "multiple_providers"})
 ENV_PATTERN = re.compile(r"(-?/[^\s()]+)\s+\(ignore_errors=(?:yes|no)\)")
 SAFE_USER = re.compile(r"[a-z_][a-z0-9_-]*")
 
@@ -76,6 +77,17 @@ def backup_sqlite(source: Path, target: Path) -> None:
         with sqlite3.connect(target) as clone:
             original.backup(clone)
     target.chmod(0o600)
+
+def eligible_pool_category(decisions) -> str:
+    """Only fixed categories, never account names, model IDs or catalog data."""
+    if not decisions:
+        return "none"
+    if len(decisions) == 1:
+        return "one_model"
+    if len({item.provider for item in decisions}) > 1:
+        return "multiple_providers"
+    return "multiple_models_one_provider"
+
 
 def fallback_plan(decisions):
     """Prefer provider-wide 429 recovery; otherwise test model-specific recovery.
@@ -165,6 +177,7 @@ def internal(work: Path) -> None:
         request = RouteRequest(task="Say hola in one short sentence.", decompose=False,
                                timeout_s=22, application_name="release-smoke")
         decisions = rank(providers, request)
+        print("live_free_pool=" + eligible_pool_category(decisions), flush=True)
         provider_map = {provider.spec.id: provider for provider in providers}
         if not decisions:
             raise SmokeBlocked("no_explicit_free_candidates")
@@ -193,6 +206,7 @@ def internal(work: Path) -> None:
         # remains, verify model-specific 500 recovery using a second free model.
         # Never describe model recovery as provider quota recovery.
         fallback_decisions = rank(api.router.registry.all(), request)
+        print("live_fallback_pool=" + eligible_pool_category(fallback_decisions), flush=True)
         plan = fallback_plan(fallback_decisions)
         if plan is None:
             print("live_fallback_diagnostic=single_model", flush=True)
@@ -299,6 +313,10 @@ def orchestrate(script: Path) -> None:
         for scope in ("provider", "model"):
             if "live_fallback_scope=" + scope in output:
                 print("live_fallback_scope=" + scope, flush=True)
+        for key in ("live_free_pool", "live_fallback_pool"):
+            for category in sorted(SAFE_POOL_CATEGORIES):
+                if key + "=" + category in output:
+                    print(key + "=" + category, flush=True)
         if result.returncode != 0 or not all(label in output for label in VALID_STATUSES):
             raise SmokeBlocked("live_smoke_failed")
         if command("systemctl", "is-active", "router.service") != "active":

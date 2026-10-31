@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   tests:
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor == 'lgomezpallo' && github.event.before == '429ec271938e95159d256f94e9650bbfa012e750' && startsWith(github.event.head_commit.message, 'Router isolated free-model live smoke gate') }}
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor == 'lgomezpallo' && github.event.before == '3377e3088c5249a0662aa05870eba18886d4f4e7' && startsWith(github.event.head_commit.message, 'Router isolated free-model live smoke gate') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -46,7 +46,7 @@ jobs:
 
   oracle-live-smoke:
     # Exactly one reviewed main merge; short-lived isolated inference only.
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor == 'lgomezpallo' && github.event.before == '429ec271938e95159d256f94e9650bbfa012e750' && startsWith(github.event.head_commit.message, 'Router isolated free-model live smoke gate') }}
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor == 'lgomezpallo' && github.event.before == '3377e3088c5249a0662aa05870eba18886d4f4e7' && startsWith(github.event.head_commit.message, 'Router isolated free-model live smoke gate') }}
     needs: tests
     runs-on: ubuntu-latest
     timeout-minutes: 12
@@ -60,7 +60,7 @@ jobs:
           SSH_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
           SSH_KNOWN_HOSTS: ${{ secrets.ORACLE_SSH_KNOWN_HOSTS }}
           SCRIPT_SHA: ${{ github.sha }}
-          RELEASE_SHA: dc3e64ea0e5b70ed0d93a64d272e14a261ef0c46
+          RELEASE_SHA: 3377e3088c5249a0662aa05870eba18886d4f4e7
         run: |
           set -euo pipefail
           test -n "$SSH_HOST" && test -n "$SSH_USER" && test -n "$SSH_KEY" && test -n "$SSH_KNOWN_HOSTS"

@@ -26,6 +26,7 @@ APP = Path("/home/ubuntu/Proyecto/Herramientas/Router")
 RELEASE = Path.home() / "router-releases" / PINNED_SHA
 BACKUPS = Path.home() / "router-private-backups"
 VALID_STATUSES = ("live_health=passed", "live_chat=passed", "live_fallback=passed")
+SAFE_FALLBACK_DIAGNOSTICS = frozenset({"single_provider", "no_attempts", "first_provider_not_attempted", "no_second_attempt", "second_provider_failed", "unexpected_result"})
 ENV_PATTERN = re.compile(r"(-?/[^\s()]+)\s+\(ignore_errors=(?:yes|no)\)")
 SAFE_USER = re.compile(r"[a-z_][a-z0-9_-]*")
 
@@ -158,8 +159,13 @@ def internal(work: Path) -> None:
             raise SmokeBlocked("live_chat_empty")
         print("live_chat=passed", flush=True)
 
-        distinct = list(dict.fromkeys(item.provider for item in decisions))
+        # Re-rank after the live chat: its health/cooldown observations may
+        # change candidate order. Inject quota failure into the actual first
+        # eligible provider of this separate fallback request.
+        fallback_decisions = rank(api.router.registry.all(), request)
+        distinct = list(dict.fromkeys(item.provider for item in fallback_decisions))
         if len(distinct) < 2:
+            print("live_fallback_diagnostic=single_provider", flush=True)
             raise SmokeBlocked("insufficient_fallback_candidates")
         first = distinct[0]
         real_complete = api.router.client.complete
@@ -178,6 +184,17 @@ def internal(work: Path) -> None:
         if (not result.ok or not result.text or len(attempted) < 2
                 or attempted[0] != first or result.provider == first
                 or result.provider not in attempted):
+            if not attempted:
+                reason = "no_attempts"
+            elif attempted[0] != first:
+                reason = "first_provider_not_attempted"
+            elif len(set(attempted)) < 2:
+                reason = "no_second_attempt"
+            elif not result.ok:
+                reason = "second_provider_failed"
+            else:
+                reason = "unexpected_result"
+            print("live_fallback_diagnostic=" + reason, flush=True)
             raise SmokeBlocked("live_fallback_failed")
         print("live_fallback=passed", flush=True)
 
@@ -239,6 +256,11 @@ def orchestrate(script: Path) -> None:
         for label in VALID_STATUSES:
             if label in output:
                 print(label, flush=True)
+        # Export only fixed categorical diagnostics, never private logs,
+        # provider names, model names, credentials, paths, prompts or answers.
+        for reason in sorted(SAFE_FALLBACK_DIAGNOSTICS):
+            if "live_fallback_diagnostic=" + reason in output:
+                print("live_fallback_diagnostic=" + reason, flush=True)
         if result.returncode != 0 or not all(label in output for label in VALID_STATUSES):
             raise SmokeBlocked("live_smoke_failed")
         if command("systemctl", "is-active", "router.service") != "active":

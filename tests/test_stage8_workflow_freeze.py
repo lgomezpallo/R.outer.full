@@ -33,8 +33,8 @@ def test_oracle_jobs_fail_closed_in_offline_freeze(filename, job):
         assert approved in job_header, "Oracle staging is not pinned to the candidate branch"
         assert job_header.count("    if: ") == 1
     elif filename == "router-release-promote.yml":
-        approved = "    if: ${{ github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.number == 89 && github.event.pull_request.base.ref == 'main' && github.event.pull_request.head.repo.full_name == 'lgomezpallo/R.outer.full' && github.event.pull_request.head.ref == 'release/router-reviewed-oracle-promotion-20261031' && github.event.pull_request.merged_by.login == 'lgomezpallo' }}"
-        assert approved in job_header, "Production promotion must require PR89 merged by owner"
+        approved = "    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor == 'lgomezpallo' && github.event.before == 'b8391aaaa2e941d95643fd4778326e7263a2db47' && startsWith(github.event.head_commit.message, 'Router release main-ref promotion gate') }}"
+        assert approved in job_header, "Production promotion requires one-time main push"
         assert job_header.count("    if: ") == 1
         assert "          SCRIPT_SHA: 96cae21106abdd15cba19195374b116892c58008" in source
         assert "    environment: router-production" in job_body
@@ -52,11 +52,11 @@ def test_oracle_workflows_have_no_automatic_triggers(filename):
     if filename != "router-release-promote.yml":
         assert "  workflow_dispatch:" in triggers
     if filename == "router-release-promote.yml":
-        assert "  pull_request:\n    types: [closed]\n    branches: [main]" in triggers
+        assert "  push:\n    branches: [main]" in triggers
         assert "  workflow_dispatch:" not in triggers
     elif filename == "router-release-stage.yml":
         assert "  push:\n    branches: [main]\n    paths:\n      - .github/workflows/router-release-stage.yml\n" in triggers
-    else:
+    elif filename != "router-release-stage.yml":
         assert "  push:" not in triggers
     if filename != "router-release-promote.yml":
         assert "  pull_request:" not in triggers

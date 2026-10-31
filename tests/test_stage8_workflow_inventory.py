@@ -31,7 +31,7 @@ def test_new_job_in_existing_workflow_fails_policy():
 def test_automatic_trigger_in_manual_workflow_fails_policy():
     sources = _baseline()
     sources["router-release-live-smoke.yml"] = sources["router-release-live-smoke.yml"].replace(
-        "  workflow_dispatch:\n", "  workflow_dispatch:\n  schedule:\n    - cron: '0 * * * *'\n", 1
+        "  push:\n", "  push:\n  schedule:\n    - cron: '0 * * * *'\n", 1
     )
     assert any("unauthorized triggers" in p for p in audit_workflows(sources))
 

@@ -1,7 +1,8 @@
 name: Live-provider smoke of frozen Router release (no deployment)
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [main]
 
 permissions:
   contents: read
@@ -12,23 +13,44 @@ concurrency:
 
 jobs:
   tests:
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor == 'lgomezpallo' && github.event.before == '429ec271938e95159d256f94e9650bbfa012e750' && startsWith(github.event.head_commit.message, 'Router isolated free-model live smoke gate') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install -e ".[dev]"
+      - name: Prepare offline test wheels and Docker base
+        run: |
+          mkdir -p wheelhouse
+          python -m pip download --dest wheelhouse ".[dev]" "setuptools>=69" wheel
+          docker pull python:3.12-slim
+      - name: Install from local wheelhouse
+        run: python -m pip install --no-index --find-links=wheelhouse -e ".[dev]"
       - run: pytest -q
-      - run: docker build -t router-release-live-smoke-ci .
+      - name: Build Docker without network
+        run: docker build --network none --pull=false --build-arg ROUTER_OFFLINE_WHEELS=1 -t router-live-smoke-ci .
+      - name: Verify isolated G.O. HTTP contract without network
+        run: |
+          docker run --rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --tmpfs /tmp:rw,nosuid,size=32m \
+            --mount type=bind,src="$PWD/tests/fixtures/go_ute_router_5823272.py",dst=/tmp/go_ute_router.py,readonly \
+            --mount type=bind,src="$PWD/scripts/go_ute_http_acceptance_offline.py",dst=/tmp/acceptance.py,readonly \
+            -e PYTHONDONTWRITEBYTECODE=1 \
+            -e ROUTER_OFFLINE_ONLY=1 \
+            -e ROUTER_SERVICE_TOKEN=ci-offline-only-token \
+            -e ROUTER_DB_FILE=/tmp/router-ci.db \
+            -e ROUTER_CATALOG_FILE=/tmp/router-ci-catalog.json \
+            --entrypoint python router-live-smoke-ci /tmp/acceptance.py
 
   oracle-live-smoke:
-    # Stage 8 offline freeze: never connect to Oracle or run live inference.
-    # Re-enabling requires a separately reviewed, explicitly authorized change.
-    if: ${{ false }}
+    # Exactly one reviewed main merge; short-lived isolated inference only.
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor == 'lgomezpallo' && github.event.before == '429ec271938e95159d256f94e9650bbfa012e750' && startsWith(github.event.head_commit.message, 'Router isolated free-model live smoke gate') }}
     needs: tests
     runs-on: ubuntu-latest
     timeout-minutes: 12
+    environment: router-production
     steps:
       - uses: actions/checkout@v4
       - name: Test real provider chat and controlled fallback against isolated release
@@ -38,17 +60,19 @@ jobs:
           SSH_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
           SSH_KNOWN_HOSTS: ${{ secrets.ORACLE_SSH_KNOWN_HOSTS }}
           SCRIPT_SHA: ${{ github.sha }}
+          RELEASE_SHA: dc3e64ea0e5b70ed0d93a64d272e14a261ef0c46
         run: |
           set -euo pipefail
           test -n "$SSH_HOST" && test -n "$SSH_USER" && test -n "$SSH_KEY" && test -n "$SSH_KNOWN_HOSTS"
           [[ "$SCRIPT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
           umask 077
           mkdir -m 700 -p ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/router_oracle
           printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/router_oracle ~/.ssh/known_hosts
           trap 'rm -f ~/.ssh/router_oracle' EXIT
-          ssh -i ~/.ssh/router_oracle -o BatchMode=yes -o StrictHostKeyChecking=yes "$SSH_USER@$SSH_HOST" "ROUTER_SCRIPT_SHA=$SCRIPT_SHA bash -se" <<'REMOTE'
+          ssh -i ~/.ssh/router_oracle -o BatchMode=yes -o StrictHostKeyChecking=yes "$SSH_USER@$SSH_HOST" "ROUTER_SCRIPT_SHA=$SCRIPT_SHA ROUTER_RELEASE_SHA=$RELEASE_SHA bash -se" <<'REMOTE'
           set -euo pipefail
           umask 077
           cd /home/ubuntu/Proyecto/Herramientas/Router

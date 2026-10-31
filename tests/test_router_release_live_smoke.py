@@ -14,8 +14,15 @@ smoke = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(smoke)
 
 
-def test_pin_and_private_output_allowlist():
-    assert smoke.PINNED_SHA == "339898a6081061b41ad2557b600e06efbc1f00ef"
+def test_pin_and_private_output_allowlist(monkeypatch):
+    monkeypatch.setattr(smoke, "PINNED_SHA", "")
+    with pytest.raises(smoke.SmokeBlocked, match="candidate_sha_required"):
+        smoke.candidate_pin()
+    monkeypatch.setattr(smoke, "PINNED_SHA", "339898a")
+    with pytest.raises(smoke.SmokeBlocked, match="candidate_sha_required"):
+        smoke.candidate_pin()
+    monkeypatch.setattr(smoke, "PINNED_SHA", "a" * 40)
+    assert smoke.candidate_pin() == "a" * 40
     assert smoke.VALID_STATUSES == ("live_health=passed", "live_chat=passed", "live_fallback=passed")
 
 
@@ -57,6 +64,9 @@ def test_sqlite_online_snapshot_does_not_change_source(tmp_path):
 
 def test_live_smoke_cannot_deploy_or_mutate_checkout():
     source = MODULE.read_text()
+    assert 'PINNED_SHA = os.environ.get("ROUTER_SCRIPT_SHA", "")' in source
+    assert '"--property=Environment=ROUTER_SCRIPT_SHA=" + PINNED_SHA' in source
+    assert "candidate_pin()" in source
     for forbidden in (
         "git reset --hard", "git clean -fd", "systemctl restart router.service",
         "systemctl stop router.service", "git checkout -f",

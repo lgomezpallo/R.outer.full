@@ -20,7 +20,7 @@ import tempfile
 import uuid
 from pathlib import Path
 
-PINNED_SHA = "339898a6081061b41ad2557b600e06efbc1f00ef"
+PINNED_SHA = os.environ.get("ROUTER_SCRIPT_SHA", "")
 APP = Path("/home/ubuntu/Proyecto/Herramientas/Router")
 RELEASE = Path.home() / "router-releases" / PINNED_SHA
 BACKUPS = Path.home() / "router-private-backups"
@@ -31,6 +31,13 @@ SAFE_USER = re.compile(r"[a-z_][a-z0-9_-]*")
 
 class SmokeBlocked(Exception):
     pass
+
+
+def candidate_pin() -> str:
+    """Require the exact release SHA supplied by the reviewed workflow."""
+    if not re.fullmatch(r"[0-9a-f]{40}", PINNED_SHA):
+        raise SmokeBlocked("candidate_sha_required")
+    return PINNED_SHA
 
 
 def command(*args: str) -> str:
@@ -69,6 +76,7 @@ def backup_sqlite(source: Path, target: Path) -> None:
 
 def internal(work: Path) -> None:
     """Run in a short-lived unit with provider environment, isolated data."""
+    candidate_pin()
     if not work.is_dir() or work.is_symlink():
         raise SmokeBlocked("unsafe_private_directory")
     if command("git", "-C", str(RELEASE), "rev-parse", "HEAD") != PINNED_SHA:
@@ -159,6 +167,7 @@ def internal(work: Path) -> None:
 
 
 def orchestrate(script: Path) -> None:
+    candidate_pin()
     if command("systemctl", "is-active", "router.service") != "active":
         raise SmokeBlocked("production_not_active")
     if command("git", "-C", str(RELEASE), "rev-parse", "HEAD") != PINNED_SHA:
@@ -187,7 +196,8 @@ def orchestrate(script: Path) -> None:
             "--property=NoNewPrivileges=yes",
             "--property=ProtectSystem=strict",
             "--property=ReadWritePaths=" + str(work),
-            "--property=Environment=ROUTER_PRODUCTION_WORKDIR=" + str(APP)]
+            "--property=Environment=ROUTER_PRODUCTION_WORKDIR=" + str(APP),
+            "--property=Environment=ROUTER_SCRIPT_SHA=" + PINNED_SHA]
     args.extend("--property=EnvironmentFile=" + entry for entry in envfiles)
     args += [str(APP / ".venv/bin/python"), str(script), "internal", str(work)]
     try:

@@ -288,6 +288,36 @@ def inner_verify() -> None:
     print("postdeploy_offline_route=passed", flush=True)
 
 
+def effective_live_data_paths() -> tuple[str, str]:
+    """Read only the two effective data paths from the running Router process.
+
+    The systemd EnvironmentFiles alone may not contain variables supplied by
+    an existing drop-in or other service configuration. Never copy provider
+    credentials into the backup unit or print the process environment.
+    """
+    try:
+        pid = int(command("systemctl", "show", "router.service", "-p", "MainPID", "--value"))
+        if pid <= 0:
+            raise PromoteBlocked("effective_data_paths_unavailable")
+        raw = (Path("/proc") / str(pid) / "environ").read_bytes()
+        selected: dict[bytes, Path] = {}
+        for entry in raw.split(b"\\0"):
+            key, sep, value = entry.partition(b"=")
+            if sep and key in (b"ROUTER_DB_FILE", b"ROUTER_CATALOG_FILE") and value:
+                path = Path(os.fsdecode(value))
+                if not path.is_absolute():
+                    path = APP / path
+                selected[key] = path
+        if set(selected) != {b"ROUTER_DB_FILE", b"ROUTER_CATALOG_FILE"}:
+            raise PromoteBlocked("effective_data_paths_unavailable")
+        paths = (selected[b"ROUTER_DB_FILE"], selected[b"ROUTER_CATALOG_FILE"])
+        if any(path.is_symlink() or not path.is_file() for path in paths):
+            raise PromoteBlocked("effective_data_paths_unsafe")
+        return tuple(map(str, paths))
+    except (OSError, ValueError):
+        raise PromoteBlocked("effective_data_paths_unavailable") from None
+
+
 def private_unit(script: Path, work: Path, user: str, envfiles: list[str], mode: str) -> None:
     unit = "router-promote-check-" + uuid.uuid4().hex[:12]
     args = ["sudo", "-n", "systemd-run", "--quiet", "--pipe", "--wait", "--collect",
@@ -295,7 +325,14 @@ def private_unit(script: Path, work: Path, user: str, envfiles: list[str], mode:
             "--property=WorkingDirectory=" + str(APP),
             "--property=NoNewPrivileges=yes", "--property=ProtectSystem=strict",
             "--property=ReadWritePaths=" + str(work)]
-    args.extend("--property=EnvironmentFile=" + path for path in envfiles)
+    if mode == "backup":
+        # Backup needs only the verified effective data paths. Do not inherit
+        # provider credentials or assume EnvironmentFiles reproduce live paths.
+        db_path, catalog_path = effective_live_data_paths()
+        args += ["--setenv=ROUTER_DB_FILE=" + db_path,
+                 "--setenv=ROUTER_CATALOG_FILE=" + catalog_path]
+    else:
+        args.extend("--property=EnvironmentFile=" + path for path in envfiles)
     args += [str(APP / ".venv/bin/python"), str(script), mode, str(work)]
     try:
         with (work / ("private-" + mode + ".log")).open("wb") as log:

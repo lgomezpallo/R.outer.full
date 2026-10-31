@@ -122,5 +122,18 @@ def test_smoke_uses_500_for_model_scope_and_429_for_provider_scope():
     assert '429 if scope == "provider" else 500' in source
     assert 'live_fallback_scope=' in source
     assert 'for scope in ("provider", "model"):' in source
+    assert 'for key in ("live_free_pool", "live_fallback_pool"):' in source
     assert 'scope == "provider" or model == first_model' in source
     assert 'fallback_decisions = rank(api.router.registry.all(), request)' in source
+
+
+def test_free_candidate_pool_reports_only_safe_categories():
+    from router.types import Decision
+    first = Decision("openrouter", "free-a", 100)
+    assert smoke.eligible_pool_category([]) == "none"
+    assert smoke.eligible_pool_category([first]) == "one_model"
+    assert smoke.eligible_pool_category([first, Decision("openrouter", "free-b", 90)]) == "multiple_models_one_provider"
+    assert smoke.eligible_pool_category([first, Decision("groq", "free-c", 80)]) == "multiple_providers"
+    assert set(smoke.SAFE_POOL_CATEGORIES) == {
+        "none", "one_model", "multiple_models_one_provider", "multiple_providers",
+    }

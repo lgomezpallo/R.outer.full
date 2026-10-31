@@ -301,7 +301,7 @@ def effective_live_data_paths() -> tuple[str, str]:
             raise PromoteBlocked("effective_data_paths_unavailable")
         raw = (Path("/proc") / str(pid) / "environ").read_bytes()
         selected: dict[bytes, Path] = {}
-        for entry in raw.split(b"\\0"):
+        for entry in raw.split(b"\0"):
             key, sep, value = entry.partition(b"=")
             if sep and key in (b"ROUTER_DB_FILE", b"ROUTER_CATALOG_FILE") and value:
                 path = Path(os.fsdecode(value))

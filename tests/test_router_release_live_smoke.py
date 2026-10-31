@@ -28,6 +28,10 @@ def test_pin_and_private_output_allowlist(monkeypatch):
     monkeypatch.setattr(smoke, "SCRIPT_SHA", "b" * 40)
     assert smoke.candidate_pin() == "a" * 40
     assert smoke.VALID_STATUSES == ("live_health=passed", "live_chat=passed", "live_fallback=passed")
+    assert smoke.SAFE_FALLBACK_DIAGNOSTICS == frozenset({
+        "single_provider", "no_attempts", "first_provider_not_attempted",
+        "no_second_attempt", "second_provider_failed", "unexpected_result",
+    })
 
 
 def test_environment_file_parser():
@@ -76,6 +80,9 @@ def test_live_smoke_cannot_deploy_or_mutate_checkout():
     assert 'billing_ineligibility_reason(provider, models[0])' in source
     assert 'promote_module.effective_live_data_paths()' in source
     assert "candidate_pin()" in source
+    assert "fallback_decisions = rank(api.router.registry.all(), request)" in source
+    assert "live_fallback_diagnostic=" in source
+    assert "for reason in sorted(SAFE_FALLBACK_DIAGNOSTICS):" in source
     for forbidden in (
         "git reset --hard", "git clean -fd", "systemctl restart router.service",
         "systemctl stop router.service", "git checkout -f",

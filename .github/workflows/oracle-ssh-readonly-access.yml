@@ -78,7 +78,49 @@ jobs:
               mod.private_dir(mod.BACKUPS)
               work = Path(tempfile.mkdtemp(prefix="router-diagnostic-", dir=mod.BACKUPS))
               work.chmod(0o700)
-              mod.private_unit(script, work, user, envfiles, "backup")
+              try:
+                  mod.private_unit(script, work, user, envfiles, "backup")
+              except mod.PromoteBlocked as error:
+                  if str(error) != "private_backup_failed":
+                      raise
+                  # Reproduce ONLY the private snapshot inside an equivalent
+                  # transient unit. Print a reason code, never its environment.
+                  import uuid
+                  diagnostic = work / "backup-diagnostic.py"
+                  diagnostic.write_text("\\n".join([
+                      "import importlib.util, re, sys",
+                      "from pathlib import Path",
+                      "spec = importlib.util.spec_from_file_location('pinned', sys.argv[1])",
+                      "m = importlib.util.module_from_spec(spec)",
+                      "spec.loader.exec_module(m)",
+                      "try:",
+                      "    m.inner_backup(Path(sys.argv[2]))",
+                      "    print('diagnostic_inner_backup=passed')",
+                      "except Exception as e:",
+                      "    code = str(e) if isinstance(e, m.PromoteBlocked) else type(e).__name__.lower()",
+                      "    if not re.fullmatch(r'[a-z0-9_]{1,90}', code): code = 'unexpected'",
+                      "    print('diagnostic_inner_backup=' + code)",
+                      "    sys.exit(2)",
+                      ""]))
+                  isolated = work / "backup-diagnostic-data"
+                  isolated.mkdir(mode=0o700)
+                  unit = "router-backup-diagnostic-" + uuid.uuid4().hex[:10]
+                  args = ["sudo", "-n", "systemd-run", "--quiet", "--pipe", "--wait", "--collect",
+                          "--unit=" + unit, "--property=User=" + user,
+                          "--property=WorkingDirectory=" + str(mod.APP),
+                          "--property=NoNewPrivileges=yes",
+                          "--property=ProtectSystem=strict",
+                          "--property=ReadWritePaths=" + str(work)]
+                  args.extend("--property=EnvironmentFile=" + path for path in envfiles)
+                  args += [str(mod.APP / ".venv/bin/python"), str(diagnostic), str(script), str(isolated)]
+                  log = work / "backup-diagnostic.log"
+                  with log.open("wb") as output:
+                      result = subprocess.run(args, stdout=output, stderr=subprocess.STDOUT, timeout=35)
+                  matched = re.search(r"diagnostic_inner_backup=([a-z0-9_]{1,90})", log.read_text(errors="replace"))
+                  print("diagnostic_inner_backup=" + (matched.group(1) if matched else "transient_unit_failed"), flush=True)
+                  subprocess.run(["sudo", "-n", "systemctl", "stop", unit],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+                  raise
               phase = "snapshot"
               mod.prepare_candidate_data(work)
               print("diagnostic_snapshot=passed", flush=True)

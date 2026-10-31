@@ -37,4 +37,59 @@ jobs:
           printf 'tracked_modified='; git status --porcelain --untracked-files=no | wc -l
           printf 'untracked='; git ls-files --others --exclude-standard | wc -l
           printf 'router_service='; systemctl is-active router.service || true
+          # Diagnose only: no router.service restart, drop-in or provider inference.
+          ROUTER_RELEASE_SHA=96cae21106abdd15cba19195374b116892c58008 python3 - <<'PY'
+          import getpass, importlib.util, os, re, subprocess, sys, tempfile
+          from pathlib import Path
+          pin = os.environ["ROUTER_RELEASE_SHA"]
+          script = Path.home() / "router-releases" / pin / "scripts/router_release_promote.py"
+          phase = "candidate"
+          try:
+              if not script.is_file() or script.is_symlink():
+                  raise RuntimeError("pinned_script_missing")
+              spec = importlib.util.spec_from_file_location("release_diagnostic", script)
+              mod = importlib.util.module_from_spec(spec)
+              spec.loader.exec_module(mod)
+              if mod.candidate_pin() != pin:
+                  raise RuntimeError("pin_mismatch")
+              if mod.command("git", "-C", str(mod.RELEASE), "rev-parse", "HEAD") != pin:
+                  raise RuntimeError("release_worktree_mismatch")
+              phase = "health"
+              if not mod.wait_health():
+                  raise RuntimeError("production_preflight_unhealthy")
+              phase = "service_layout"
+              if mod.command("systemctl", "show", "router.service", "-p", "WorkingDirectory", "--value") != str(mod.APP):
+                  raise RuntimeError("workdir_unsupported")
+              user = mod.command("systemctl", "show", "router.service", "-p", "User", "--value")
+              if not mod.SAFE_USER.fullmatch(user) or user != getpass.getuser():
+                  raise RuntimeError("service_user_unsupported")
+              envfiles = mod.environment_files(mod.command("systemctl", "show", "router.service", "-p", "EnvironmentFiles", "--value"))
+              inline = mod.command("systemctl", "show", "router.service", "-p", "Environment", "--value")
+              if re.search(r"(?:KEY|TOKEN|PASSWORD|SECRET|CREDENTIAL)", inline, re.I):
+                  raise RuntimeError("inline_secrets_unsupported")
+              argv = mod.original_argv(mod.command("systemctl", "show", "router.service", "-p", "ExecStart", "--value"))
+              if not mod.dropin_precedence_safe():
+                  raise RuntimeError("dropin_precedence_unsupported")
+              if subprocess.run(["sudo", "-n", "test", "-e", str(mod.OVERRIDE)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+                  raise RuntimeError("override_already_present")
+              mod.candidate_argv(argv)
+              print("diagnostic_service_layout=passed", flush=True)
+              phase = "backup"
+              mod.private_dir(mod.BACKUPS)
+              work = Path(tempfile.mkdtemp(prefix="router-diagnostic-", dir=mod.BACKUPS))
+              work.chmod(0o700)
+              mod.private_unit(script, work, user, envfiles, "backup")
+              phase = "snapshot"
+              mod.prepare_candidate_data(work)
+              print("diagnostic_snapshot=passed", flush=True)
+              phase = "complete"
+              print("diagnostic_promotion_preflight=passed", flush=True)
+          except Exception as error:
+              code = str(error) if isinstance(error, (RuntimeError, getattr(sys.modules.get("release_diagnostic"), "PromoteBlocked", RuntimeError))) else type(error).__name__.lower()
+              if not re.fullmatch(r"[a-z0-9_]{1,90}", code):
+                  code = "unexpected_error"
+              print("diagnostic_block_phase=" + phase, flush=True)
+              print("diagnostic_block_code=" + code, flush=True)
+              sys.exit(2)
+          PY
           REMOTE

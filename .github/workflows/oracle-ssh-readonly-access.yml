@@ -87,7 +87,7 @@ jobs:
                   # transient unit. Print a reason code, never its environment.
                   import uuid
                   diagnostic = work / "backup-diagnostic.py"
-                  diagnostic.write_text("\\n".join([
+                  diagnostic.write_text("\n".join([
                       "import importlib.util, re, sys",
                       "from pathlib import Path",
                       "spec = importlib.util.spec_from_file_location('pinned', sys.argv[1])",

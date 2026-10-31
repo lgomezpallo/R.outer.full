@@ -1,14 +1,17 @@
 # Router — etapa 8: validación offline y bloqueo de ejecución real (2026-10-26)
 
+**Actualización 30/10/2026:** este documento describe controles históricos. Se eliminó la auditoría de facturación de cuentas como condición obligatoria de desarrollo, integración y fusión. Se mantienen la selección `free` por modelo, el rechazo de `paid`/`unknown`, el aislamiento de staging y el bloqueo de promoción productiva hasta verificar la recuperación y la autorización de despliegue. No se garantizan cargos cero.
+
 ## Alcance y límites
 
 Esta rama parte del PR #54 y continúa la cadena de PR draft #45–#54. No se fusiona ni despliega.
 Etapas 1–7: implementación y tests **offline**; no equivalen a autorización para inferencia real.
 El cierre técnico de etapa 1 **no** verifica el estado económico de las cuentas.
 
-**Bloqueo pendiente:** verificación externa de facturación y límites de Groq, NVIDIA,
-Cloudflare y OpenRouter. No afirmar riesgo económico cero ni activar tráfico hasta contar
-con evidencia verificable por cuenta y autorización explícita del usuario.
+**Regla actual:** no exigir verificación externa de facturación de Groq, NVIDIA,
+Cloudflare ni OpenRouter como prerrequisito. La selección y el transporte siguen
+rechazando modelos pagos o de precio desconocido; el modo offline evita inferencia
+en ensayos. Promoción productiva y cambios de servicio requieren controles propios.
 
 **Referencia productiva congelada:** `339898a` (SHA completo en pruebas existentes).
 No se inspeccionó Oracle en esta etapa; no se afirma que la VM esté actualmente en ese commit.
@@ -33,9 +36,9 @@ tanto, no ejecutar manualmente workflows Oracle ni promover código.
 
 ## Evidencia mínima para una futura decisión (no ejecutar ahora)
 
-1. Comprobar con acceso autorizado a cada panel de cuenta: facturación,
-   método de pago, excedentes, límites de gasto y si los límites son duros.
-   Registrar fecha, cuenta y evidencia sin publicar credenciales.
+1. Verificar en el catálogo y en el transporte que cada modelo elegible esté
+   explícitamente marcado gratuito y que los modelos pagos/desconocidos queden
+   excluidos. La auditoría de cuentas es opcional, no un bloqueo del release.
 2. Revisar los PR encadenados, su base y el último commit, con CI aprobado.
    Validar que los tests de facturación estrictos no dependan de los mocks
    que simulan cuentas autorizadas en los tests históricos.

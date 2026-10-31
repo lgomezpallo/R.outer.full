@@ -10,7 +10,7 @@ Las aplicaciones no conocen Groq, OpenRouter, NVIDIA, Mistral, Cerebras, SambaNo
 
 ## Criterio de costo
 
-**No se presume costo monetario cero** por la etiqueta «gratis» de un modelo. El tráfico de inferencia está bloqueado por defecto mientras no exista verificación independiente de la facturación de cada cuenta y autorización explícita. El costo estratégico de selección (rareza, reemplazabilidad) es distinto del riesgo de cobro.
+**Política vigente:** sólo son elegibles modelos marcados explícitamente `free`, con endpoint permitido. Los modelos `paid` o `unknown` se excluyen en selección y transporte; ante agotamiento de cuota se intenta otro gratuito o se falla sin respuesta. La auditoría de facturación por cuenta no es un prerrequisito de desarrollo, CI o fusión. La marca `free` no garantiza ausencia de cargos en una cuenta. No contratar servicios ni habilitar pagos. El costo estratégico de selección (rareza, reemplazabilidad) es distinto del riesgo de cobro.
 
 Entre candidatos saludables y suficientes, usa primero el menos valioso. Los modelos fuertes/escasos quedan para tareas que realmente los necesiten.
 
@@ -64,4 +64,4 @@ POST /route acepta task, context, requirements, capacidades, decompose opcional 
 
 ## Estado
 
-La candidata de entrega se valida sólo offline. **No está fusionada, desplegada ni integrada operativamente con Gestión de Obras UTE**; las cuentas de Groq/NVIDIA/Cloudflare/OpenRouter no están verificadas para cobro cero y no se autoriza inferencia real. Ver [checklist y contrato de release](docs/RELEASE_CANDIDATE_GO_UTE_OFFLINE.md).
+La candidata de PR #87 requiere CI y staging aislado satisfactorios antes de fusionar o promover. `oracle-promote` permanece deshabilitado; ninguna validación offline acredita un despliegue productivo. La falta de auditoría económica por cuenta ya no bloquea integrar código. No se garantiza ausencia de cargos. Ver [checklist y contrato de release](docs/RELEASE_CANDIDATE_GO_UTE_OFFLINE.md).

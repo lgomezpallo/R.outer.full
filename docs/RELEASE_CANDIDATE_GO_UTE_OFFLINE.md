@@ -1,5 +1,7 @@
 # Router — candidata de entrega offline para Gestión de Obras UTE
 
+> **Decisión vigente 30/10/2026 (prevalece sobre checkpoints históricos de abajo):** la auditoría de facturación por cuenta, plan y sobregiros ya NO es prerrequisito para desarrollo, CI, fusión ni preparación del despliegue. Solamente modelos con precio explícitamente `free` y endpoint permitido pueden ser elegibles; `paid` y `unknown` quedan excluidos. Al agotarse cuota, fallback a otro modelo gratuito o fallo cerrado. No se autoriza contratar servicios, cambiar planes, habilitar cobros ni garantizar que las cuentas nunca puedan facturar. El job `oracle-promote` sigue congelado: promover producción es una operación de alto riesgo independiente de esta decisión. El historial anterior conserva su fecha y no describe las reglas vigentes.
+
 Fecha de consolidación: 2026-10-28. **Sin autorización de despliegue, fusión ni tráfico de inferencia.**
 
 ## Fuente única y conservación de cambios
@@ -14,9 +16,9 @@ Fecha de consolidación: 2026-10-28. **Sin autorización de despliegue, fusión 
 ## Modos y límites reales
 
 - `ROUTER_OFFLINE_ONLY=1` impide que el cliente HTTP emita inferencias/probes y consultas de inventario; suprime descubrimiento al agregar/cargar proveedores y las búsquedas RSS de contexto, y evita iniciar smokes activos al arrancar.
-- Además, el bloqueo por cuenta en `router/billing.py` sigue siendo **fail-closed para todas las cuentas**: Groq, NVIDIA, Cloudflare, OpenRouter y proveedores sin aprobación. Una etiqueta de modelo gratuito no acredita que una cuenta no facture.
+- La política de `router/billing.py` ya no exige auditoría por cuenta. La selección y el transporte conservan bloqueo por **modelo** para `paid`/`unknown`, duplicados, destinos no permitidos y modelos Cloudflare explícitamente pagos. `free` no garantiza ausencia de cargos en la cuenta.
 - La bandera offline es una protección de aplicación, **no** un firewall de sistema ni una prueba formal de ausencia de todo tráfico posible. En una futura validación aislada, aplicar también una política de salida de red denegada. No ejecutar el servidor en Oracle durante esta fase.
-- El código permite inspeccionar salud, catálogo y diagnósticos offline. **El chat no puede generar respuestas reales** mientras el bloqueo de facturación permanezca vigente. No presentar esta candidata como un servicio de IA ya utilizable por G.O.
+- El código permite inspeccionar salud, catálogo y diagnósticos offline. Con `ROUTER_OFFLINE_ONLY=1` el chat no genera respuestas externas; sin esa bandera sólo se consideran modelos `free` y endpoints aprobados. Ningún staging demuestra todavía inferencia real.
 - La consulta `/health` con `status: ok` sólo acredita disponibilidad HTTP, **no** inferencia habilitada ni cuentas verificadas.
 
 ## Contrato mínimo de integración con G.O. (sin ejecutar aún)
@@ -45,7 +47,7 @@ La aplicación Gestión de Obras UTE es independiente; la integración aquí es 
 - [ ] Aprobar y ensayar rollback de código **y** datos en un entorno aislado. Restaurar un commit anterior no revierte migraciones SQLite.
 - [ ] Ejecutar smoke HTTP local en entorno aislado, con `ROUTER_OFFLINE_ONLY=1`, sin claves de proveedores y salida a Internet denegada.
 - [ ] Integración real G.O.↔Router y prueba extremo a extremo: **pendiente**.
-- [ ] Verificación autorizada de **cada cuenta** Groq/NVIDIA/Cloudflare/OpenRouter: plan, método de pago, sobregiros, límites duros, fecha y evidencia privada. **Bloqueante**.
+- [x] Auditoría de facturación por cuenta retirada como prerrequisito por decisión explícita del usuario. Se conservan bloqueos por modelo y no se afirma riesgo económico nulo.
 - [ ] Autorización explícita adicional para fusión, despliegue o tráfico real: **pendiente**.
 
 ## Smoke tests propuestos, NO ejecutar en producción

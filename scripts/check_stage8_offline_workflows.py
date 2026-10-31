@@ -41,8 +41,8 @@ EXPECTED_WORKFLOW_BLOBS: dict[str, str] = {
     "check-provider-secrets.yml": "30fb296f7d0d87d180d5a1a87b69822382113eb5",
     "oracle-deploy.yml": "5dc10c0fbba1198a14e2ee65321c10d79ecb3545",
     "router-oracle-monitor.yml": "c7fc8ddb2501c33c772488d97bf6dbe216dbbb68",
-    "router-release-stage.yml": "b97493b6210e97d3bd586fc761a343e421a52210",
-    "router-release-promote.yml": "5b086e2d61fe84d9c26201792fc269aba001652f",
+    "router-release-stage.yml": "25adf54657c656cb8645cfa938472132428a2c30",
+    "router-release-promote.yml": "0e875abfc094456bde24607b0251f0505ef16c60",
     "router-release-live-smoke.yml": "e95e4775c95b397d69a00d0290dc56f838178648",
 }
 
@@ -128,7 +128,7 @@ def audit_workflows(sources: Mapping[str, str]) -> list[str]:
             if filename in REMOTE_JOBS and job == REMOTE_JOBS[filename]:
                 conditions = re.findall(r"^    if:\s*(.*?)\s*$", body, re.M)
                 if filename == "router-release-stage.yml":
-                    approved = "${{ github.event_name == 'push' && github.ref == 'refs/heads/feat/offline-cooldown-restart-consistency-20261028' }}"
+                    approved = "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}"
                     if conditions != [approved]:
                         problems.append(f"{filename}/{job}: unauthorized stage condition")
                 elif conditions != ["${{ false }}"]:

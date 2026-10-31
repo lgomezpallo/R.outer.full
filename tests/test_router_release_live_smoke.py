@@ -29,8 +29,8 @@ def test_pin_and_private_output_allowlist(monkeypatch):
     assert smoke.candidate_pin() == "a" * 40
     assert smoke.VALID_STATUSES == ("live_health=passed", "live_chat=passed", "live_fallback=passed")
     assert smoke.SAFE_FALLBACK_DIAGNOSTICS == frozenset({
-        "single_provider", "no_attempts", "first_provider_not_attempted",
-        "no_second_attempt", "second_provider_failed", "unexpected_result",
+        "single_model", "no_attempts", "first_provider_not_attempted",
+        "no_second_attempt", "second_provider_failed", "second_model_failed", "unexpected_result",
     })
 
 
@@ -90,3 +90,36 @@ def test_live_smoke_cannot_deploy_or_mutate_checkout():
         assert forbidden not in source
     assert 'os.environ["ROUTER_DB_FILE"] = str(isolated_db)' in source
     assert 'os.environ["ROUTER_CATALOG_FILE"] = str(work / "smoke-catalog.json")' in source
+
+
+def test_fallback_plan_distinguishes_provider_quota_from_model_failure():
+    from router.types import Decision
+    one = [Decision("openrouter", "free-a", 100)]
+    same_provider = [*one, Decision("openrouter", "free-b", 90)]
+    distinct = [*same_provider, Decision("groq", "free-c", 80)]
+    assert smoke.fallback_plan(one) is None
+    assert smoke.fallback_plan(same_provider) == ("model", "openrouter", "free-a")
+    assert smoke.fallback_plan(distinct) == ("provider", "openrouter", "free-a")
+
+
+def test_fallback_success_requires_distinct_model_or_provider():
+    from router.types import Attempt, RouteResponse
+    from router.types import Decision
+    first = Attempt("openrouter", "free-a", False, 1)
+    same = Attempt("openrouter", "free-b", True, 1)
+    other = Attempt("groq", "free-c", True, 1)
+    def result(second, provider, model):
+        return RouteResponse(True, "offline", provider, model, [first, second], [])
+    assert smoke.fallback_succeeded(result(same, "openrouter", "free-b"), "model", "openrouter", "free-a")
+    assert not smoke.fallback_succeeded(result(same, "openrouter", "free-b"), "provider", "openrouter", "free-a")
+    assert smoke.fallback_succeeded(result(other, "groq", "free-c"), "provider", "openrouter", "free-a")
+    assert not smoke.fallback_succeeded(result(other, "groq", "free-c"), "model", "openrouter", "free-a")
+    assert not smoke.fallback_succeeded(result(first, "openrouter", "free-a"), "model", "openrouter", "free-a")
+
+
+def test_smoke_uses_500_for_model_scope_and_429_for_provider_scope():
+    source = MODULE.read_text()
+    assert '429 if scope == "provider" else 500' in source
+    assert 'live_fallback_scope=' in source
+    assert 'scope == "provider" or model == first_model' in source
+    assert 'fallback_decisions = rank(api.router.registry.all(), request)' in source

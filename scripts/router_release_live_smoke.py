@@ -26,7 +26,7 @@ APP = Path("/home/ubuntu/Proyecto/Herramientas/Router")
 RELEASE = Path.home() / "router-releases" / PINNED_SHA
 BACKUPS = Path.home() / "router-private-backups"
 VALID_STATUSES = ("live_health=passed", "live_chat=passed", "live_fallback=passed")
-SAFE_FALLBACK_DIAGNOSTICS = frozenset({"single_provider", "no_attempts", "first_provider_not_attempted", "no_second_attempt", "second_provider_failed", "unexpected_result"})
+SAFE_FALLBACK_DIAGNOSTICS = frozenset({"single_model", "no_attempts", "first_provider_not_attempted", "no_second_attempt", "second_provider_failed", "second_model_failed", "unexpected_result"})
 ENV_PATTERN = re.compile(r"(-?/[^\s()]+)\s+\(ignore_errors=(?:yes|no)\)")
 SAFE_USER = re.compile(r"[a-z_][a-z0-9_-]*")
 
@@ -76,6 +76,37 @@ def backup_sqlite(source: Path, target: Path) -> None:
         with sqlite3.connect(target) as clone:
             original.backup(clone)
     target.chmod(0o600)
+
+def fallback_plan(decisions):
+    """Prefer provider-wide 429 recovery; otherwise test model-specific recovery.
+
+    A 429 is provider-wide and MUST NOT retry sibling models on that provider.
+    One provider with two explicitly-free models can still recover from a
+    model-specific 500. This is not evidence of provider-wide quota fallback.
+    """
+    if len(decisions) < 2:
+        return None
+    first = decisions[0]
+    if any(item.provider != first.provider for item in decisions[1:]):
+        return ("provider", first.provider, first.model)
+    if any(item.provider == first.provider and item.model != first.model for item in decisions[1:]):
+        return ("model", first.provider, first.model)
+    return None
+
+
+def fallback_succeeded(result, scope: str, first_provider: str, first_model: str) -> bool:
+    attempted = [(item.provider, item.model) for item in result.attempts]
+    if not result.ok or not result.text or not attempted:
+        return False
+    if attempted[0] != (first_provider, first_model):
+        return False
+    if (result.provider, result.model) not in attempted:
+        return False
+    if scope == "provider":
+        return result.provider != first_provider
+    if scope == "model":
+        return result.provider == first_provider and result.model != first_model
+    return False
 
 
 def internal(work: Path) -> None:
@@ -129,8 +160,6 @@ def internal(work: Path) -> None:
             raise SmokeBlocked("health_failed")
         print("live_health=passed", flush=True)
         providers = api.router.registry.all()
-        if len(providers) < 2:
-            raise SmokeBlocked("insufficient_live_providers")
         # Fail closed before ANY real provider request unless every ranked
         # candidate is explicitly free and its endpoint is eligible.
         request = RouteRequest(task="Say hola in one short sentence.", decompose=False,
@@ -159,43 +188,49 @@ def internal(work: Path) -> None:
             raise SmokeBlocked("live_chat_empty")
         print("live_chat=passed", flush=True)
 
-        # Re-rank after the live chat: its health/cooldown observations may
-        # change candidate order. Inject quota failure into the actual first
-        # eligible provider of this separate fallback request.
+        # Re-rank after chat: a real completion can change cooldown eligibility.
+        # A provider-wide 429 requires another provider. If only one provider
+        # remains, verify model-specific 500 recovery using a second free model.
+        # Never describe model recovery as provider quota recovery.
         fallback_decisions = rank(api.router.registry.all(), request)
-        distinct = list(dict.fromkeys(item.provider for item in fallback_decisions))
-        if len(distinct) < 2:
-            print("live_fallback_diagnostic=single_provider", flush=True)
+        plan = fallback_plan(fallback_decisions)
+        if plan is None:
+            print("live_fallback_diagnostic=single_model", flush=True)
             raise SmokeBlocked("insufficient_fallback_candidates")
-        first = distinct[0]
+        scope, first_provider, first_model = plan
         real_complete = api.router.client.complete
-        def force_first_provider_failure(provider, model, req):
-            if provider.spec.id == first:
+        def force_first_failure(provider, model, req):
+            if provider.spec.id == first_provider and (
+                scope == "provider" or model == first_model
+            ):
                 fake_req = httpx.Request("POST", "https://invalid.example/")
-                fake_resp = httpx.Response(429, request=fake_req)
-                raise httpx.HTTPStatusError("injected_provider_quota", request=fake_req, response=fake_resp)
+                fake_resp = httpx.Response(429 if scope == "provider" else 500, request=fake_req)
+                raise httpx.HTTPStatusError("injected_fallback_failure", request=fake_req, response=fake_resp)
             return real_complete(provider, model, req)
-        api.router.client.complete = force_first_provider_failure
+        api.router.client.complete = force_first_failure
         try:
             result = api.router.route(request)
         finally:
             api.router.client.complete = real_complete
-        attempted = [item.provider for item in result.attempts]
-        if (not result.ok or not result.text or len(attempted) < 2
-                or attempted[0] != first or result.provider == first
-                or result.provider not in attempted):
+        attempted = [(item.provider, item.model) for item in result.attempts]
+        if not fallback_succeeded(result, scope, first_provider, first_model):
             if not attempted:
                 reason = "no_attempts"
-            elif attempted[0] != first:
+            elif attempted[0] != (first_provider, first_model):
                 reason = "first_provider_not_attempted"
-            elif len(set(attempted)) < 2:
+            elif not any(
+                provider != first_provider if scope == "provider"
+                else provider == first_provider and model != first_model
+                for provider, model in attempted
+            ):
                 reason = "no_second_attempt"
             elif not result.ok:
-                reason = "second_provider_failed"
+                reason = "second_provider_failed" if scope == "provider" else "second_model_failed"
             else:
                 reason = "unexpected_result"
             print("live_fallback_diagnostic=" + reason, flush=True)
             raise SmokeBlocked("live_fallback_failed")
+        print("live_fallback_scope=" + scope, flush=True)
         print("live_fallback=passed", flush=True)
 
 

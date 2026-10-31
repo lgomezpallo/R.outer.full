@@ -288,32 +288,36 @@ def inner_verify() -> None:
     print("postdeploy_offline_route=passed", flush=True)
 
 
-def effective_live_data_paths() -> tuple[str, str]:
-    """Read only the two effective data paths from the running Router process.
+def effective_data_paths_from_environ(raw: bytes, app: Path) -> tuple[str, str]:
+    """Select only live DB/catalog paths; never return provider credentials."""
+    selected: dict[bytes, Path] = {}
+    for entry in raw.split(b"\0"):
+        key, sep, value = entry.partition(b"=")
+        if sep and key in (b"ROUTER_DB_FILE", b"ROUTER_CATALOG_FILE") and value:
+            path = Path(os.fsdecode(value))
+            if not path.is_absolute():
+                path = app / path
+            selected[key] = path
+    if set(selected) != {b"ROUTER_DB_FILE", b"ROUTER_CATALOG_FILE"}:
+        raise PromoteBlocked("effective_data_paths_unavailable")
+    paths = (selected[b"ROUTER_DB_FILE"], selected[b"ROUTER_CATALOG_FILE"])
+    if any(path.is_symlink() or not path.is_file() for path in paths):
+        raise PromoteBlocked("effective_data_paths_unsafe")
+    return tuple(map(str, paths))
 
-    The systemd EnvironmentFiles alone may not contain variables supplied by
-    an existing drop-in or other service configuration. Never copy provider
-    credentials into the backup unit or print the process environment.
+
+def effective_live_data_paths() -> tuple[str, str]:
+    """Read effective data paths, not just EnvironmentFiles, from the live PID.
+
+    The isolated backup unit receives no provider credentials. No process
+    environment or path values are emitted into GitHub Actions logs.
     """
     try:
         pid = int(command("systemctl", "show", "router.service", "-p", "MainPID", "--value"))
         if pid <= 0:
             raise PromoteBlocked("effective_data_paths_unavailable")
         raw = (Path("/proc") / str(pid) / "environ").read_bytes()
-        selected: dict[bytes, Path] = {}
-        for entry in raw.split(b"\0"):
-            key, sep, value = entry.partition(b"=")
-            if sep and key in (b"ROUTER_DB_FILE", b"ROUTER_CATALOG_FILE") and value:
-                path = Path(os.fsdecode(value))
-                if not path.is_absolute():
-                    path = APP / path
-                selected[key] = path
-        if set(selected) != {b"ROUTER_DB_FILE", b"ROUTER_CATALOG_FILE"}:
-            raise PromoteBlocked("effective_data_paths_unavailable")
-        paths = (selected[b"ROUTER_DB_FILE"], selected[b"ROUTER_CATALOG_FILE"])
-        if any(path.is_symlink() or not path.is_file() for path in paths):
-            raise PromoteBlocked("effective_data_paths_unsafe")
-        return tuple(map(str, paths))
+        return effective_data_paths_from_environ(raw, APP)
     except (OSError, ValueError):
         raise PromoteBlocked("effective_data_paths_unavailable") from None
 

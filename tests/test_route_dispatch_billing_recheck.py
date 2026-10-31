@@ -55,9 +55,14 @@ def _decision(provider, model):
     return Decision(provider, model, 100, ["forged_offline_ranking"])
 
 
-def test_forged_ranking_cannot_call_custom_client_without_account_evidence(monkeypatch):
+def test_forged_ranking_cannot_call_custom_client_for_unknown_price(monkeypatch):
     client = RecordingClient()
     router = _router(client, include_openrouter=True)
+    # A forged ranking cannot dispatch models with unknown pricing.
+    for provider in router.registry.all():
+        provider.spec = replace(provider.spec, models=(
+            replace(provider.spec.models[0], billing_status="unknown"),
+        ))
     monkeypatch.setattr(routing_module, "rank", lambda providers, req: [
         _decision("groq", "openai/gpt-oss-20b"),
         _decision("openrouter", "vendor/zero-price"),

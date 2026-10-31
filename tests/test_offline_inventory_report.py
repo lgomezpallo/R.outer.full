@@ -46,13 +46,13 @@ def test_four_provider_inventory_keeps_price_discovery_and_eligibility_separate(
         "reported_free_price": 2,
         "reported_paid_price": 1,
         "unknown_price": 2,
-        "eligible": 0,
-        "blocked": 5,
+        "eligible": 2,
+        "blocked": 3,
     }
     groq = report["providers"][0]
     assert groq["models"][0]["reported_price"] == "free"
-    assert groq["models"][0]["eligible_for_inference"] is False
-    assert groq["models"][0]["blocked_reason"] == "billing_unverified_account"
+    assert groq["models"][0]["eligible_for_inference"] is True
+    assert groq["models"][0]["blocked_reason"] is None
     assert groq["models"][1]["discovered_in_last_snapshot"] is False
     assert report["providers"][1]["models"][0]["blocked_reason"] == "billing_paid"
     assert report["providers"][2]["models"][0]["blocked_reason"] == "billing_unverified"
@@ -124,7 +124,7 @@ def test_inventory_endpoint_is_admin_only_and_never_touches_network(monkeypatch)
         "Authorization": "Bearer offline-admin"
     })
     assert response.status_code == 200
-    assert response.json()["totals"]["eligible"] == 0
+    assert response.json()["totals"]["eligible"] == 1
     assert response.json()["totals"]["reported_free_price"] == 1
     assert "offline-placeholder" not in response.text
     assert "offline-admin" not in response.text

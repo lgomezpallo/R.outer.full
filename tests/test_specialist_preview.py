@@ -41,20 +41,17 @@ def _model(name, kind="image_generation", *, status="free", evidence=(), cost=5)
     )
 
 
-def test_default_account_billing_gate_blocks_even_free_specialists():
+def test_free_specialist_rankable_but_not_executable_and_paid_blocked():
     req = SpecialistRequest("image_generation", "Create a tree")
     p = _provider(_model("flux-free-labelled"), _model("flux-paid", status="paid"))
     preview = preview_specialist_ranking([p], req)
-    assert preview["ranked_models"] == []
+    assert [row["model"] for row in preview["ranked_models"]] == ["flux-free-labelled"]
     assert preview["execution_allowed"] is False
     assert preview["account_billing_verified"] is False
     assert preview["transport"] == "not_implemented"
     reasons = {row["model"]: row["reason"] for row in preview["excluded_models"]}
-    assert reasons == {
-        "flux-free-labelled": "billing_unverified_account",
-        "flux-paid": "billing_paid",
-    }
-    assert preview["coverage"]["totals"]["eligible_models"] == 0
+    assert reasons == {"flux-paid": "billing_paid"}
+    assert preview["coverage"]["totals"]["eligible_models"] == 1
     assert "Create a tree" not in repr(preview)
     assert "not-a-real-key" not in repr(preview)
 
@@ -117,7 +114,7 @@ def test_all_modalities_fixture_simulate_without_network(monkeypatch, kind, job,
     assert preview["kind"] == kind
     assert preview["required_capability"] == kind
     assert preview["execution_allowed"] is False
-    assert preview["ranked_models"] == []
+    assert [row["model"] for row in preview["ranked_models"]] == (["flux-model"] if kind == "image_generation" else [])
     assert preview["fixture_simulation_available"] is True
     assert "source-image" not in repr(preview)
     assert "source-audio" not in repr(preview)

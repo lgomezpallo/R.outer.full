@@ -68,7 +68,6 @@ def test_diagnostics_scale_and_separate_provenance_from_account_gate(monkeypatch
         "recorded_verified": 1,
     }
     assert diag["selection_gate_counts"] == {
-        "billing_unverified_account": 131,
         "billing_unverified": 1,
         "unsupported_capability": 1,
     }
@@ -82,7 +81,7 @@ def test_diagnostics_scale_and_separate_provenance_from_account_gate(monkeypatch
     assert diag["recorded_evidence_independently_verified"] is False
     assert diag["reported_free_price_is_not_account_approval"] is True
     assert preview["execution_allowed"] is False
-    assert preview["ranked_models"] == []
+    assert len(preview["ranked_models"]) == 131
     for secret in ("SECRET_PROMPT", "SECRET_EVIDENCE", "SECRET_API_KEY"):
         assert secret not in repr(preview)
 

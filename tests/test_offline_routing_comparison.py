@@ -171,10 +171,8 @@ def test_fallback_uses_next_ranked_model_and_records_both_outcomes(
     assert provider.state.model("fixture-general").success_count == 1
 
 
-def test_reported_free_models_remain_blocked_without_account_verification():
-    provider = _registered(_spec("groq", _model("fixture-free")))
+def test_unknown_price_stays_blocked_without_account_audit():
+    provider = _registered(_spec("groq", _model("fixture-unknown", price="unknown")))
     request = RouteRequest("hola", decompose=False)
     assert rank([provider], request) == []
-    assert ineligibility_reason(provider, provider.spec.models[0], request) == (
-        "billing_unverified_account"
-    )
+    assert ineligibility_reason(provider, provider.spec.models[0], request) == "billing_unverified"

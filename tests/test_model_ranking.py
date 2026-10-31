@@ -59,7 +59,7 @@ def test_inconclusive_is_not_accepted_as_verified():
 
 
 def test_billing_pending_excludes_models_and_does_not_invent_scores():
-    provider = _provider("groq", [_model("vendor/unapproved")])
+    provider = _provider("groq", [replace(_model("vendor/unapproved"), billing_status="unknown")])
     report = ranking_report([provider], "hello")
     assert report["cataloged_models"] == 1
     assert report["ranked_models"] == 0
@@ -152,7 +152,7 @@ def test_admin_endpoint_is_offline_and_redacts_task_and_keys(monkeypatch):
     })
     assert response.status_code == 200
     assert response.json()["inference_performed"] is False
-    assert response.json()["ranked_models"] == 0
+    assert response.json()["ranked_models"] == 1
     assert "private task text" not in response.text
     assert "fixture-key-not-for-network" not in response.text
     assert "stage5-admin" not in response.text

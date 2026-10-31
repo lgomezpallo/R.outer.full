@@ -1,10 +1,8 @@
 name: Promote frozen Router release with automatic rollback
 
 on:
-  # Production is reachable only after the owner merges this exact reviewed PR.
-  # A normal push, another PR, or a manual dispatch cannot promote.
-  pull_request:
-    types: [closed]
+  # Trigger only from a specifically authorized main merge; never PR synthetic refs.
+  push:
     branches: [main]
 
 permissions:
@@ -17,7 +15,7 @@ concurrency:
 jobs:
   tests:
     # Exact release PR merged by the repository owner; all other closes skip.
-    if: ${{ github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.number == 89 && github.event.pull_request.base.ref == 'main' && github.event.pull_request.head.repo.full_name == 'lgomezpallo/R.outer.full' && github.event.pull_request.head.ref == 'release/router-reviewed-oracle-promotion-20261031' && github.event.pull_request.merged_by.login == 'lgomezpallo' }}
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor == 'lgomezpallo' && github.event.before == 'b8391aaaa2e941d95643fd4778326e7263a2db47' && startsWith(github.event.head_commit.message, 'Router release main-ref promotion gate') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -52,7 +50,7 @@ jobs:
 
   oracle-promote:
     # Merge-gated, owner-authorized release PR only; offline and reversible.
-    if: ${{ github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.number == 89 && github.event.pull_request.base.ref == 'main' && github.event.pull_request.head.repo.full_name == 'lgomezpallo/R.outer.full' && github.event.pull_request.head.ref == 'release/router-reviewed-oracle-promotion-20261031' && github.event.pull_request.merged_by.login == 'lgomezpallo' }}
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor == 'lgomezpallo' && github.event.before == 'b8391aaaa2e941d95643fd4778326e7263a2db47' && startsWith(github.event.head_commit.message, 'Router release main-ref promotion gate') }}
     needs: tests
     runs-on: ubuntu-latest
     timeout-minutes: 12

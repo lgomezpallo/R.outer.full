@@ -32,6 +32,11 @@ def test_oracle_jobs_fail_closed_in_offline_freeze(filename, job):
         approved = "    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}"
         assert approved in job_header, "Oracle staging is not pinned to the candidate branch"
         assert job_header.count("    if: ") == 1
+    elif filename == "router-release-promote.yml":
+        approved = "    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.release_sha == '96cae21106abdd15cba19195374b116892c58008' }}"
+        assert approved in job_header, "Production promotion must be manual-only and pinned"
+        assert job_header.count("    if: ") == 1
+        assert "          SCRIPT_SHA: 96cae21106abdd15cba19195374b116892c58008" in source
     else:
         assert "    if: ${{ false }}" in job_header, f"{filename}: Oracle job is enabled"
     assert "ssh -i " in job_body, f"{filename}: review changed remote execution path"

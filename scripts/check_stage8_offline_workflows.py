@@ -43,7 +43,7 @@ EXPECTED_WORKFLOW_BLOBS: dict[str, str] = {
     "router-oracle-monitor.yml": "c7fc8ddb2501c33c772488d97bf6dbe216dbbb68",
     "router-release-stage.yml": "25adf54657c656cb8645cfa938472132428a2c30",
     "router-release-promote.yml": "a4466c539f732af051f04bbd982c89492eaa17eb",
-    "router-release-live-smoke.yml": "d29fda0152ca88293bf33347edede453faf7808d",
+    "router-release-live-smoke.yml": "bc458d71c1a57fbb8d33166580e59573dcb51779",
 }
 
 
@@ -146,10 +146,10 @@ def audit_workflows(sources: Mapping[str, str]) -> list[str]:
                     if f"    if: {approved}" not in source.split("  tests:", 1)[1].split("  oracle-promote:", 1)[0]:
                         problems.append(f"{filename}/tests: merge gate missing")
                 elif filename == "router-release-live-smoke.yml":
-                    approved = "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor == 'lgomezpallo' && github.event.before == '429ec271938e95159d256f94e9650bbfa012e750' && startsWith(github.event.head_commit.message, 'Router isolated free-model live smoke gate') }}"
+                    approved = "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor == 'lgomezpallo' && github.event.before == '1684ee0bcc896d88f7d3a0acaef091ff8ccc8075' && startsWith(github.event.head_commit.message, 'Router isolated free-model live smoke gate') }}"
                     if conditions != [approved]:
                         problems.append(f"{filename}/{job}: live smoke requires exact authorized main push")
-                    if "          RELEASE_SHA: dc3e64ea0e5b70ed0d93a64d272e14a261ef0c46" not in source:
+                    if "          RELEASE_SHA: 3377e3088c5249a0662aa05870eba18886d4f4e7" not in source:
                         problems.append(f"{filename}/{job}: frozen release SHA not pinned")
                     if "    environment: router-production" not in source:
                         problems.append(f"{filename}/{job}: protected environment missing")

@@ -42,12 +42,7 @@ def _specialization_penalty(model, required: frozenset[str]) -> int:
     return sum(1 for item in extras if item in SPECIALIZED_CAPABILITIES)
 
 def billing_ineligibility_reason(provider: RegisteredProvider, model) -> str | None:
-    """Pure billing gate shared by routing, probes, and provider audits.
-
-    Cloudflare Workers AI's per-model inventory does not attest account plan
-    or remaining free neurons. Until an account-level no-charge guarantee can
-    be verified, Cloudflare models must not generate inference requests.
-    """
+    """Reject models without explicitly verified free pricing and safe endpoints."""
     # A manually edited or legacy persisted catalog may contain duplicate
     # model IDs with contradictory prices. Discovery deduplicates its own
     # responses, but do not trust the persisted catalog to be canonical.
@@ -74,8 +69,8 @@ def billing_ineligibility_reason(provider: RegisteredProvider, model) -> str | N
     if provider.spec.id == "cloudflare":
         if model.id in CLOUDFLARE_PAID_ONLY or model.billing_status == "paid":
             return "billing_paid"
-        # A free allocation can become billable on Workers Paid accounts.
-        return "billing_unverified"
+        if model.billing_status != "free":
+            return "billing_unverified"
     return billing.account_billing_ineligibility_reason(provider.spec.id)
 
 

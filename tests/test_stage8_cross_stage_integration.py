@@ -24,7 +24,7 @@ GROQ_MODEL = "vendor/offline-general"
 OPENROUTER_MODEL = "vendor/offline-backup"
 
 
-def _catalog():
+def _catalog(*, free=True):
     models = {"groq": GROQ_MODEL, "openrouter": OPENROUTER_MODEL}
     specs = []
     for provider in BUILTINS:
@@ -36,7 +36,7 @@ def _catalog():
             model_class="standard",
             priority=50,
             strategic_cost=10,
-            billing_status="free",
+            billing_status="free" if free else "unknown",
         )
         specs.append(replace(provider, models=(model,)))
     return ProviderCatalog(tuple(specs))
@@ -55,16 +55,16 @@ class NoInferenceClient:
 
 
 @pytest.mark.strict_billing
-def test_full_offline_read_path_never_authorizes_unverified_accounts(tmp_path):
+def test_full_offline_read_path_never_authorizes_unknown_prices(tmp_path):
     client = NoInferenceClient()
     store = RouterStore(tmp_path / "router.db")
-    router = Router(client=client, store=store, catalog=_catalog())
+    router = Router(client=client, store=store, catalog=_catalog(free=False))
     for name in ("groq", "openrouter"):
         router.add_provider(name, "not-a-real-key", discover=False)
 
     inventory = inventory_report(router.registry.all())
     assert inventory["totals"]["cataloged"] == 2
-    assert inventory["totals"]["reported_free_price"] == 2
+    assert inventory["totals"]["reported_free_price"] == 0
     assert inventory["totals"]["eligible"] == 0
     assert inventory["totals"]["blocked"] == 2
     assert inventory["account_billing_verified"] is False
@@ -93,7 +93,7 @@ def test_full_offline_read_path_never_authorizes_unverified_accounts(tmp_path):
     # A direct transport invocation cannot bypass the ranking's denial.
     transport = ProviderClient()
     for provider in router.registry.all():
-        with pytest.raises(RuntimeError, match="inference_blocked:billing_unverified_account"):
+        with pytest.raises(RuntimeError, match="inference_blocked:billing_unverified"):
             transport.complete(provider, provider.spec.models[0].id, request)
 
 

@@ -77,7 +77,11 @@ def test_task_hints_never_authorize_unverified_account():
         ("tools", "Usá herramientas"),
         ("summarization", "Resumí este texto"),
     ):
-        assert rank([_provider(capability)], RouteRequest(task)) == []
+        provider = _provider(capability)
+        provider.spec = replace(provider.spec, models=tuple(
+            replace(model, billing_status="unknown") for model in provider.spec.models
+        ))
+        assert rank([provider], RouteRequest(task)) == []
 
 
 def test_quoted_json_request_is_not_ranking_instruction(monkeypatch):

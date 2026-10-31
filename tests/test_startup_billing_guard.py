@@ -33,20 +33,20 @@ CREDENTIAL_ENV = (
 )
 
 
-def _offline_provider():
+def _offline_provider(*, status="unknown"):
     spec = next(item for item in BUILTINS if item.id == "groq")
     model = ModelSpec(
-        "offline-model", frozenset({"chat"}), "standard", billing_status="free"
+        "offline-model", frozenset({"chat"}), "standard", billing_status=status
     )
     return RegisteredProvider(
         replace(spec, models=(model,)), "not-a-real-key", RuntimeState()
     )
 
 
-def _isolate_startup(monkeypatch):
+def _isolate_startup(monkeypatch, *, status="unknown"):
     for name in (*STARTUP_FLAGS, *CREDENTIAL_ENV):
         monkeypatch.delenv(name, raising=False)
-    provider = _offline_provider()
+    provider = _offline_provider(status=status)
     monkeypatch.setattr(api.router, "load_persisted_providers", lambda: 0)
     monkeypatch.setattr(api.router.registry, "all", lambda: [provider])
     return provider
@@ -84,7 +84,7 @@ def test_all_startup_flags_and_spoofed_selector_still_deny(monkeypatch):
         api.router, "test_provider",
         lambda *a, **kw: pytest.fail("provider inference test called"),
     )
-    assert billing.account_billing_ineligibility_reason("groq") == "billing_unverified_account"
+    assert billing.account_billing_ineligibility_reason("groq") is None
     api.load_environment_providers()
 
 
@@ -97,8 +97,8 @@ def test_startup_still_does_not_launch_when_no_flags_are_set(monkeypatch):
     api.load_environment_providers()
 
 
-def test_simulated_no_charge_account_only_schedules_offline_threads(monkeypatch):
-    _isolate_startup(monkeypatch)
+def test_explicitly_free_model_schedules_startup_check_with_mocked_thread(monkeypatch):
+    _isolate_startup(monkeypatch, status="free")
     monkeypatch.setattr(billing, "account_billing_ineligibility_reason", lambda _id: None)
     monkeypatch.setenv("ROUTER_STARTUP_ROUTING_SMOKE", "1")
     started = []

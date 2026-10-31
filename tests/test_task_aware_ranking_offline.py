@@ -54,7 +54,10 @@ def test_quoted_or_fenced_instructions_do_not_trigger_task_affinity(monkeypatch)
 
 def test_task_hint_does_not_bypass_unverified_account_or_require_code():
     provider = _provider()
-    # Production billing policy remains fail-closed even for the preferred specialist.
+    # Unknown-price models remain excluded despite code-task preference.
+    provider.spec = replace(provider.spec, models=tuple(
+        replace(model, billing_status="unknown") for model in provider.spec.models
+    ))
     assert rank([provider], RouteRequest("Escribí código en Python")) == []
     # A missing specialist does not make the hint a hard requirement.
     from router.task_requirements import analyze_task

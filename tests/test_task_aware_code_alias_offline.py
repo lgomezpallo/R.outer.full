@@ -88,7 +88,10 @@ def test_code_hint_does_not_bypass_hard_capability_or_billing(monkeypatch):
         declared=frozenset({"coding"}),
         evidence=(CapabilityEvidence("coding", "verified", "offline-fixture", STAMP),),
     )
-    # No verified account approval: production billing gate remains default deny.
+    # A task hint cannot authorize models with unknown pricing.
+    provider.spec = replace(provider.spec, models=tuple(
+        replace(model, billing_status="unknown") for model in provider.spec.models
+    ))
     assert rank([provider], RouteRequest(CODE_TASK)) == []
     # Even when simulated billing is allowed, missing mandatory vision stays blocked.
     monkeypatch.setattr(selector, "billing_ineligibility_reason", lambda *_: None)

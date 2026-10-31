@@ -62,11 +62,12 @@ def test_unsupported_image_capability_cannot_earn_bonus(monkeypatch):
     assert "advisory_task_bonus=0" in decisions[1].reasons
 
 
-def test_task_hints_never_authorize_unverified_billing():
-    assert rank(
-        [_provider("image_generation")],
-        RouteRequest("Generá una imagen de una ciudad"),
-    ) == []
+def test_task_hints_never_authorize_unknown_price():
+    provider = _provider("image_generation")
+    provider.spec = replace(provider.spec, models=tuple(
+        replace(model, billing_status="unknown") for model in provider.spec.models
+    ))
+    assert rank([provider], RouteRequest("Generá una imagen de una ciudad")) == []
 
 
 def test_image_only_model_cannot_override_explicit_chat_requirement(monkeypatch):

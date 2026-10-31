@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   tests:
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor == 'lgomezpallo' && github.event.before == '3377e3088c5249a0662aa05870eba18886d4f4e7' && startsWith(github.event.head_commit.message, 'Router isolated free-model live smoke gate') }}
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor == 'lgomezpallo' && github.event.before == 'bed145eb7513b6259dfb0d45e37ec3dadacc549f' && startsWith(github.event.head_commit.message, 'Router isolated free-model live smoke gate') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -46,7 +46,7 @@ jobs:
 
   oracle-live-smoke:
     # Exactly one reviewed main merge; short-lived isolated inference only.
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor == 'lgomezpallo' && github.event.before == '3377e3088c5249a0662aa05870eba18886d4f4e7' && startsWith(github.event.head_commit.message, 'Router isolated free-model live smoke gate') }}
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor == 'lgomezpallo' && github.event.before == 'bed145eb7513b6259dfb0d45e37ec3dadacc549f' && startsWith(github.event.head_commit.message, 'Router isolated free-model live smoke gate') }}
     needs: tests
     runs-on: ubuntu-latest
     timeout-minutes: 12

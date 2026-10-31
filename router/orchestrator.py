@@ -28,6 +28,10 @@ class Orchestrator:
         self.router = router
 
     def should_decompose(self, req: RouteRequest) -> bool:
+        # Planning/subtasks do not forward images; preserve multimodal input
+        # by routing the original request directly, even when decompose=True.
+        if req.images:
+            return False
         if req.decompose is not None:
             return req.decompose
         text = req.task.strip()
@@ -101,6 +105,15 @@ class Orchestrator:
         return "standard", 30
 
 
+    @staticmethod
+    def _cost_ceiling(req: RouteRequest, phase_budget: int | None) -> int | None:
+        """Never raise a caller's explicit strategic-cost ceiling."""
+        if req.max_strategic_cost is None:
+            return phase_budget
+        if phase_budget is None:
+            return req.max_strategic_cost
+        return min(req.max_strategic_cost, phase_budget)
+
     def _planning_request(self, req: RouteRequest) -> RouteRequest:
         schema = {
             "summary": "short summary",
@@ -127,12 +140,15 @@ class Orchestrator:
         )
         return RouteRequest(
             task=task,
-            required_capabilities=frozenset({"chat", "json", "reasoning"}),
+            context=req.context,
+            conversation=req.conversation,
+            requirements=req.requirements,
+            required_capabilities=req.required_capabilities | frozenset({"chat", "json", "reasoning"}),
             preferred_model_class="standard",
             timeout_s=req.timeout_s,
             application_name=req.application_name,
             decompose=False,
-            max_strategic_cost=30,
+            max_strategic_cost=self._cost_ceiling(req, 30),
         )
 
     def _verification_request(self, req: RouteRequest, results: list[dict]) -> RouteRequest:
@@ -140,15 +156,20 @@ class Orchestrator:
             "Check the partial results against the original task. "
             "Return OK or a concise list of concrete gaps or contradictions."
             + "\nOriginal task: " + req.task
+            + "\nRequirements: " + json.dumps(list(req.requirements), ensure_ascii=False)
             + "\nResults: " + json.dumps(results, ensure_ascii=False)
         )
         return RouteRequest(
             task=task,
-            required_capabilities=frozenset({"chat", "reasoning"}),
+            context=req.context,
+            conversation=req.conversation,
+            requirements=req.requirements,
+            required_capabilities=req.required_capabilities | frozenset({"chat", "reasoning"}),
             preferred_model_class="standard",
+            timeout_s=req.timeout_s,
             application_name=req.application_name,
             decompose=False,
-            max_strategic_cost=30,
+            max_strategic_cost=self._cost_ceiling(req, 30),
         )
 
     def _composition_request(self, req: RouteRequest, results: list[dict], verification: str) -> RouteRequest:
@@ -164,13 +185,14 @@ class Orchestrator:
         return RouteRequest(
             task=task,
             context=req.context,
+            conversation=req.conversation,
             requirements=req.requirements,
-            required_capabilities=frozenset({"chat", "reasoning"}),
+            required_capabilities=req.required_capabilities | frozenset({"chat", "reasoning"}),
             preferred_model_class="standard",
             timeout_s=req.timeout_s,
             application_name=req.application_name,
             decompose=False,
-            max_strategic_cost=30,
+            max_strategic_cost=self._cost_ceiling(req, 30),
         )
 
 
@@ -228,21 +250,31 @@ class Orchestrator:
                         "\nDependency results: " + json.dumps(dependency_context, ensure_ascii=False)
                         if dependency_context else ""
                     ),
+                    conversation=req.conversation,
                     requirements=req.requirements,
-                    required_capabilities=subtask.capabilities,
+                    required_capabilities=req.required_capabilities | subtask.capabilities,
                     preferred_model_class=model_class,
                     timeout_s=req.timeout_s,
                     application_name=req.application_name,
                     decompose=False,
-                    max_strategic_cost=max_cost,
+                    max_strategic_cost=self._cost_ceiling(req, max_cost),
                 )
                 result = self.router.route(subreq, phase=f"subtask:{subtask.role}")
-                # Preserve cheap-first routing, but do not reject capable
-                # models solely because the initial cost ceiling was too low.
+                # Relax only the *internal* cheap-first budget. An explicit
+                # caller ceiling remains an absolute upper bound on retries.
                 if not result.ok and result.error == "no_eligible_provider":
-                    from dataclasses import replace
-                    retry_req = replace(subreq, max_strategic_cost=None)
-                    result = self.router.route(retry_req, phase=f"subtask:{subtask.role}")
+                    retry_ceiling = req.max_strategic_cost
+                    if retry_ceiling is None or (
+                        subreq.max_strategic_cost is not None
+                        and retry_ceiling > subreq.max_strategic_cost
+                    ):
+                        from dataclasses import replace
+                        retry_req = replace(subreq, max_strategic_cost=retry_ceiling)
+                        # Keep the first routing decision/attempt trace: replacing
+                        # the response must not erase the failed cheap-first pass.
+                        all_attempts.extend(result.attempts)
+                        all_decisions.extend(result.decisions)
+                        result = self.router.route(retry_req, phase=f"subtask:{subtask.role}")
                 all_attempts.extend(result.attempts)
                 all_decisions.extend(result.decisions)
                 item = {

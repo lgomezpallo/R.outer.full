@@ -1,13 +1,17 @@
 from __future__ import annotations
+from dataclasses import replace
 import json
 from time import perf_counter
 from uuid import uuid4
 import httpx
+from .billing import offline_only
 from .catalog import ProviderCatalog
 from .client import ProviderClient
+from .fallback_policy import retry_after_seconds
 from .orchestrator import Orchestrator
+from .modality_contract import completion_transport_error
 from .registry import ProviderRegistry, RegisteredProvider
-from .selector import rank
+from .selector import billing_ineligibility_reason, effective_required_capabilities, ineligibility_reason, rank
 from .storage import RouterStore
 from .types import Attempt, ProviderCredential, RouteRequest, RouteResponse
 
@@ -26,6 +30,7 @@ class Router:
         self.store = store
         self.orchestrator = Orchestrator(self)
 
+
     def add_provider(
         self,
         name: str,
@@ -37,21 +42,30 @@ class Router:
         registered = self.registry.add(ProviderCredential(name, api_key))
         if persist and self.store is not None:
             self.store.save_credential(registered.spec.id, api_key)
-        if discover and registered.spec.discover_models and hasattr(self.client, "discover_models"):
+        if discover and not offline_only() and registered.spec.discover_models and (
+            hasattr(self.client, "discover_inventory") or hasattr(self.client, "discover_models")
+        ):
             try:
                 if hasattr(self.client, "discover_inventory"):
                     model_ids, billing_statuses = self.client.discover_inventory(registered)
+                    # An empty but successfully returned inventory revokes stale
+                    # discovery provenance and pricing; an exception does not.
+                    snapshot_received = True
+                    snapshot_source = "client_discover_inventory"
                 else:
                     model_ids = self.client.discover_models(registered)
+                    snapshot_source = "legacy_discover_models"
                     billing_statuses = {}
-                if model_ids:
+                    snapshot_received = bool(model_ids)
+                if snapshot_received:
                     registered.spec = self.catalog.merge_discovered_models(
-                        registered.spec.id, model_ids, billing_statuses
+                        registered.spec.id, model_ids, billing_statuses, source=snapshot_source
                     )
             except Exception:
                 pass
         self._hydrate_provider_metrics(registered)
         return registered
+
 
     def load_persisted_providers(self) -> int:
         if self.store is None:
@@ -64,6 +78,7 @@ class Router:
             except ValueError:
                 continue
         return loaded
+
 
     def _hydrate_provider_metrics(self, provider: RegisteredProvider) -> None:
         if self.store is None:
@@ -89,14 +104,20 @@ class Router:
             if not item:
                 continue
             state = provider.state.model(model.id)
-            samples = max(1, int(item["samples"]))
-            successes = max(0, min(samples, round(float(item["success_rate"]) * samples)))
-            state.success_count = successes
-            state.failure_count = samples - successes
-            state.ewma_latency_ms = float(item["latency_ms"])
+            state.success_count = int(item["success_count"])
+            state.failure_count = int(item["failure_count"])
+            # No successful completions means latency is unknown, not zero
+            # and not the duration of an HTTP error/timeout.
+            state.ewma_latency_ms = item["latency_ms"]
+
 
     def process(self, req: RouteRequest) -> RouteResponse:
+        # A specialist artifact must not trigger a chat-based planner first.
+        unsupported = completion_transport_error(req)
+        if unsupported is not None:
+            return RouteResponse(False, None, None, None, [], [], unsupported)
         return self.orchestrator.process(req)
+
 
     def _classify_failure(self, exc: Exception) -> tuple[bool, bool, str, int | None, float]:
         retryable = isinstance(exc, (httpx.TimeoutException, httpx.TransportError))
@@ -129,9 +150,29 @@ class Router:
             else:
                 error_type, cooldown = "invalid", 2 * 60.0
 
+            # A provider-supplied quota/service recovery window takes priority
+            # over the generic cooldown. Never immediately retry the same
+            # model when a 503 explicitly asks us to wait. The next ranked
+            # model can still be tried, subject to its independent billing gate.
+            if status in {429, 503}:
+                retry_after = retry_after_seconds(exc.response.headers.get("retry-after"))
+                if retry_after is not None and retry_after > 0:
+                    cooldown = max(cooldown, retry_after)
+                    retryable = False
+
         return retryable, provider_wide, error_type, error_code, cooldown
 
+
     def route(self, req: RouteRequest, phase: str = "execute") -> RouteResponse:
+        # This executor only returns chat text, not image/audio artifacts.
+        unsupported = completion_transport_error(req)
+        if unsupported is not None:
+            return RouteResponse(False, None, None, None, [], [], unsupported)
+        # Keep direct Python callers as safe as /route: an image cannot be
+        # silently dispatched to a text-only model or lose its modality on fallback.
+        required = effective_required_capabilities(req)
+        if required != req.required_capabilities:
+            req = replace(req, required_capabilities=required)
         decisions = rank(self.registry.all(), req)
         if not decisions:
             return RouteResponse(False, None, None, None, [], [], "no_eligible_provider")
@@ -145,8 +186,21 @@ class Router:
         for decision in decisions:
             if decision.provider in blocked_providers:
                 continue
-            provider = by_id[decision.provider]
+            # Ranking is advisory, not authorization. Recheck capability,
+            # cooldown and billing eligibility immediately before dispatch,
+            # including for injected clients that bypass the last-mile gate.
+            provider = by_id.get(decision.provider)
+            if provider is None:
+                continue
+            model_spec = next((m for m in provider.spec.models if m.id == decision.model), None)
+            if model_spec is None or ineligibility_reason(provider, model_spec, req) is not None:
+                continue
             for attempt_index in range(self.max_retries + 1):
+                # Recheck on every retry/fallback: catalog, capability evidence,
+                # cooldowns and account authorization may change after ranking.
+                model_spec = next((m for m in provider.spec.models if m.id == decision.model), None)
+                if model_spec is None or ineligibility_reason(provider, model_spec, req) is not None:
+                    break
                 started = perf_counter()
                 try:
                     text, raw = self.client.complete(provider, decision.model, req)
@@ -187,6 +241,24 @@ class Router:
                             error_code=error_code,
                         )
                     if retryable and attempt_index < self.max_retries and not provider_wide:
+                        # Each failed transport attempt is a reliability sample,
+                        # even when a later retry succeeds. Do not start cooldown
+                        # until retries are exhausted. Keep in-memory observations
+                        # consistent with request_metrics after a restart.
+                        provider.state.mark_failure(
+                            decision.model, error, 0.0,
+                            failure_kind=error_type, provider_wide=False,
+                        )
+                        # Persist each failed retry immediately. If the process
+                        # stops before its next attempt, request_metrics already
+                        # contains the failure; provider_runtime must not lag
+                        # behind the durable model observations after restart.
+                        if self.store is not None:
+                            self.store.save_provider_runtime(provider.spec.id, provider.state)
+                            self.store.save_model_runtime(
+                                provider.spec.id, decision.model,
+                                provider.state.model(decision.model),
+                            )
                         continue
                     provider.state.mark_failure(
                         decision.model,
@@ -202,14 +274,32 @@ class Router:
                         blocked_providers.add(decision.provider)
                     break
 
-        return RouteResponse(False, None, None, None, attempts, decisions, "all_attempts_failed")
+        return RouteResponse(
+            False, None, None, None, attempts, decisions,
+            "all_attempts_failed" if attempts else "no_eligible_provider",
+        )
+
 
     def verify_capability(self, provider_id: str, model_id: str, capability: str) -> dict:
         provider = next((item for item in self.registry.all() if item.spec.id == provider_id), None)
         if provider is None:
             raise ValueError("provider_not_registered")
-        if not any(model.id == model_id for model in provider.spec.models):
+        model_spec = next((model for model in provider.spec.models if model.id == model_id), None)
+        if model_spec is None:
             raise ValueError("model_not_cataloged")
+
+        # Active probes bypass normal ranking; enforce the same no-charge gate
+        # BEFORE making any inference request, including admin-triggered audits.
+        blocked = billing_ineligibility_reason(provider, model_spec)
+        if blocked is not None:
+            return {
+                "provider": provider_id,
+                "model": model_id,
+                "capability": capability,
+                "status": "inconclusive",
+                "latency_ms": 0,
+                "evidence": f"probe_blocked:{blocked}",
+            }
 
         started = perf_counter()
         if hasattr(self.client, "probe_capability"):
@@ -286,6 +376,7 @@ class Router:
             result["http_status"] = http_status
         return result
 
+
     def audit_provider_capabilities(self, provider_id: str, *, inconclusive_only: bool = False) -> dict:
         provider = next((item for item in self.registry.all() if item.spec.id == provider_id), None)
         if provider is None:
@@ -306,19 +397,22 @@ class Router:
         }
 
 
+
     def test_provider(self, provider_id: str) -> dict:
         provider = next((item for item in self.registry.all() if item.spec.id == provider_id), None)
         if provider is None:
             raise ValueError("provider_not_registered")
         candidates = [
             model for model in provider.spec.models
-            if "chat" in model.capabilities and "chat" not in model.unsupported_capabilities
+            if "chat" in model.capabilities
+            and "chat" not in model.unsupported_capabilities
+            and billing_ineligibility_reason(provider, model) is None
         ]
         if not candidates:
             return {
                 "provider": provider_id,
                 "status": "inconclusive",
-                "reason": "no_chat_model",
+                "reason": "no_billing_verified_chat_model",
                 "health_status": provider.state.health_status,
                 "checked": [],
             }
@@ -364,3 +458,4 @@ class Router:
             "success_rate": provider.state.success_rate,
             "checked": checked,
         }
+

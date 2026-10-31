@@ -1,0 +1,216 @@
+# Router — candidata de entrega offline para Gestión de Obras UTE
+
+> **Decisión vigente 30/10/2026 (prevalece sobre checkpoints históricos de abajo):** la auditoría de facturación por cuenta, plan y sobregiros ya NO es prerrequisito para desarrollo, CI, fusión ni preparación del despliegue. Solamente modelos con precio explícitamente `free` y endpoint permitido pueden ser elegibles; `paid` y `unknown` quedan excluidos. Al agotarse cuota, fallback a otro modelo gratuito o fallo cerrado. No se autoriza contratar servicios, cambiar planes, habilitar cobros ni garantizar que las cuentas nunca puedan facturar. El job `oracle-promote` sigue congelado: promover producción es una operación de alto riesgo independiente de esta decisión. El historial anterior conserva su fecha y no describe las reglas vigentes.
+
+Fecha de consolidación: 2026-10-28. **Sin autorización de despliegue, fusión ni tráfico de inferencia.**
+
+## Fuente única y conservación de cambios
+
+- PR de consolidación: **#87**, cuyo head original es `c5a0c67493ab0bdc2dfb23a96570583c48e8dcff`. La rama candidata continúa sobre ese commit.
+- La secuencia de PR **#45 a #87** es lineal: el `head_sha` de cada PR coincide con el `base_sha` del siguiente. Se comprobó mediante metadatos GitHub el 28/10. No hay que fusionar PRs apilados por separado.
+- `main` de comparación: `0f314bbb0e7154bbf1e322578d116f26b04d8ee4`. El head original de #87 estaba **204 commits por delante y 0 detrás**; el head de #45 es ancestro con **144 commits** de diferencia.
+- Referencia histórica de Oracle: `339898a6081061b41ad2557b600e06efbc1f00ef`. GitHub confirma que el head original de #87 está **212 commits por delante, 0 detrás**, con **97 archivos distintos** en la comparación: 18 `router/`, 66 `tests/`, 6 `scripts/`, 5 workflows, 1 documento y `pyproject.toml`. **Esto compara commits de GitHub, NO verifica qué hay actualmente en la VM.**
+- Esta candidata sólo incorpora correcciones de bloqueo para validar en modo offline y documentación; no amplía el catálogo ni agrega proveedores.
+- Mantener **#45 draft**, sin fusionar. PRs anteriores: conservar como historial y marcar redundantes sólo tras verificar que la candidata preserva los commits y pasa CI. No borrar ramas ni cerrar PRs antes de la verificación.
+
+## Modos y límites reales
+
+- `ROUTER_OFFLINE_ONLY=1` impide que el cliente HTTP emita inferencias/probes y consultas de inventario; suprime descubrimiento al agregar/cargar proveedores y las búsquedas RSS de contexto, y evita iniciar smokes activos al arrancar.
+- La política de `router/billing.py` ya no exige auditoría por cuenta. La selección y el transporte conservan bloqueo por **modelo** para `paid`/`unknown`, duplicados, destinos no permitidos y modelos Cloudflare explícitamente pagos. `free` no garantiza ausencia de cargos en la cuenta.
+- La bandera offline es una protección de aplicación, **no** un firewall de sistema ni una prueba formal de ausencia de todo tráfico posible. En una futura validación aislada, aplicar también una política de salida de red denegada. No ejecutar el servidor en Oracle durante esta fase.
+- El código permite inspeccionar salud, catálogo y diagnósticos offline. Con `ROUTER_OFFLINE_ONLY=1` el chat no genera respuestas externas; sin esa bandera sólo se consideran modelos `free` y endpoints aprobados. Ningún staging demuestra todavía inferencia real.
+- La consulta `/health` con `status: ok` sólo acredita disponibilidad HTTP, **no** inferencia habilitada ni cuentas verificadas.
+
+## Contrato mínimo de integración con G.O. (sin ejecutar aún)
+
+La aplicación Gestión de Obras UTE es independiente; la integración aquí es **contractual**, no está conectada ni validada extremo a extremo.
+
+- Autenticación: `Authorization: Bearer <token>`. Configurar `ROUTER_SERVICE_TOKEN` con secreto propio y restringir acceso. **Con `ROUTER_OFFLINE_ONLY=1`, la ausencia de credenciales válidas siempre devuelve HTTP 401**, incluso si no existen tokens de aplicación ni token de servicio; el antiguo acceso anónimo de desarrollo sólo subsiste fuera de ese modo. `GET /health` no requiere token y no debe exponerse públicamente sin control de red.
+- `GET /health` → JSON `{ "status": "ok", "providers": [...] }`. No garantiza que haya modelos elegibles.
+- `POST /route` → JSON de entrada, por ejemplo `{"task":"Resumir el parte diario","application_name":"gestion-obras-ute","required_capabilities":["chat"],"decompose":false}`. Respuesta HTTP 200: `ok`, `text`, `provider`, `model`, `error`, `attempts`, `decisions`, `orchestration`. En modo seguro sin cuentas autorizadas se espera `ok:false`, `error:"no_eligible_provider"`, sin intentos ni texto.
+- `POST /v1/chat/completions` acepta `model`, `messages`, `stream:false` y `task_type` opcional. No admite streaming. Sin proveedor elegible responde **HTTP 502**, no una respuesta ficticia.
+- `POST /diagnostics/model-ranking` y `GET /diagnostics/inventory` requieren token administrador; son diagnósticos locales, no habilitan uso real.
+- `images` en `/route`: sólo data URI PNG/JPEG/WebP, hasta 3, con validaciones de tamaño y firma; no implica que exista un modelo de visión autorizado. Adjuntos PDF/audio de G.O. no están soportados por este contrato de chat y requieren procesamiento propio de G.O. o trabajo posterior autorizado.
+- G.O. debe interpretar `ok:false` y HTTP 502 como **indisponibilidad segura**; no reenviar automáticamente a un proveedor externo ni generar respuestas falsas.
+
+## Checklist de release — estado
+
+- [x] Confirmar ancestro #45 y continuidad lineal #45–#87 en GitHub.
+- [x] Confirmar CI original #87: run `40660699273`, pytest y Docker build correctos (577 tests antes de esta consolidación).
+- [x] Documentar contrato HTTP y error fail-closed para G.O.
+- [x] Añadir modo offline explícito y prueba de integración HTTP sin inferencia.
+- [x] Validación anterior de la candidata: [CI #40676605797](https://github.com/lgomezpallo/R.outer.full/actions/runs/40676605797), SHA `68c2d7cf40257a49388728d5e3d7ee56fed0b64c`, **581 pytest aprobados, 4 advertencias y Docker build aprobado**. La revisión de aceptación agrega una prueba específica de ausencia total de tokens: **CI del nuevo head pendiente** hasta comprobar la ejecución correspondiente.
+- [x] Comparación GitHub del head `68c2d7c` frente a la referencia Oracle `339898a`: **222 commits por delante, 0 detrás**, según `compare_commits` el 28/10; no equivale a inspección de la VM. Se listaron cambios de código, scripts, tests y workflows. No se inspeccionaron datos reales ni se verificó migración sobre una copia de producción.
+- [ ] Revisar diff final del **head definitivo** respecto de `main` y Oracle, incluyendo datos y compatibilidad de esquema.
+- [ ] Verificar en una futura ventana autorizada el SHA y el estado real de Oracle, los procesos, rutas y volúmenes. No realizado.
+- [ ] Preparar y **verificar** backup íntegro de SQLite, catálogo, configuración y secretos en destino privado; no copiar claves a GitHub ni a logs.
+- [ ] Aprobar y ensayar rollback de código **y** datos en un entorno aislado. Restaurar un commit anterior no revierte migraciones SQLite.
+- [ ] Ejecutar smoke HTTP local en entorno aislado, con `ROUTER_OFFLINE_ONLY=1`, sin claves de proveedores y salida a Internet denegada.
+- [ ] Integración real G.O.↔Router y prueba extremo a extremo: **pendiente**.
+- [x] Auditoría de facturación por cuenta retirada como prerrequisito por decisión explícita del usuario. Se conservan bloqueos por modelo y no se afirma riesgo económico nulo.
+- [ ] Autorización explícita adicional para fusión, despliegue o tráfico real: **pendiente**.
+
+## Smoke tests propuestos, NO ejecutar en producción
+
+En un entorno local aislado y sin claves de proveedores, instalar dependencias previamente aprobadas, usar archivos de datos temporales y salida de red bloqueada. La prueba HTTP sólo habla con `127.0.0.1`. Los comandos siguientes son una **guía para una ejecución futura**, no evidencia de que se hayan corrido:
+
+```bash
+export ROUTER_OFFLINE_ONLY=1
+export ROUTER_SERVICE_TOKEN='TOKEN_LOCAL_DE_PRUEBA'
+RELEASE_TMP_DIR="$(mktemp -d /tmp/router-release-XXXXXX)"
+chmod 700 "$RELEASE_TMP_DIR"
+export ROUTER_DB_FILE="$RELEASE_TMP_DIR/router.db"
+export ROUTER_CATALOG_FILE="$RELEASE_TMP_DIR/router-catalog.json"
+# Borrar la carpeta de pruebas únicamente después de detener el servidor local.
+unset GROQ_API_KEY NVIDIA_API_KEY OPENROUTER_API_KEY CLOUDFLARE_API_TOKEN
+unset ROUTER_STARTUP_PROVIDER_TESTS ROUTER_STARTUP_CAPABILITY_PROFILE
+unset ROUTER_STARTUP_ROUTING_SMOKE ROUTER_STARTUP_ORCHESTRATION_SMOKE ROUTER_STARTUP_HETEROGENEOUS_SMOKE
+pytest -q tests/test_go_ute_offline_release_contract.py tests/test_account_billing_fail_closed.py
+# Con firewall/sandbox sin salida externa, iniciar uvicorn sólo en 127.0.0.1.
+# curl -fsS http://127.0.0.1:8010/health
+# curl -sS -H "Authorization: Bearer $ROUTER_SERVICE_TOKEN" -H "Content-Type: application/json" \
+#   -d '{"task":"hola","decompose":false,"application_name":"gestion-obras-ute"}' \
+#   http://127.0.0.1:8010/route
+# Esperado: ok=false, error=no_eligible_provider, attempts=[].
+```
+
+**Nunca usar `/providers/test`, `/capabilities/probe`, `/audit`, live-smoke ni workflows Oracle para validar esta candidata.** Los jobs remotos en la rama están deshabilitados, pero eso **no** altera los workflows actuales de `main`.
+
+## Backup y rollback — plan, no ejecución
+
+1. Antes de cualquier cambio autorizado, registrar SHA real de `main`, SHA desplegado y estado de servicio; inventariar rutas/volúmenes efectivos sin exponer secretos.
+2. Detener escrituras durante el backup o usar la API de backup consistente de SQLite (incluyendo WAL/SHM cuando corresponda). Guardar `router.db`, `router-catalog.json`, configuración systemd/env y manifiesto de versión en almacenamiento privado, con permisos restrictivos. Comprobar restauración sobre copia aislada.
+3. Construir imagen inmutable etiquetada por SHA y preservar la imagen previa. No modificar servicios ni datos reales durante el ensayo.
+4. Ante fallo: detener candidato, restaurar imagen/código previo y **restaurar snapshot compatible de base de datos** si hubo migración o cambios de esquema. Verificar salud y registros antes de volver a permitir tráfico.
+5. Ningún rollback garantiza deshacer cargos externos: por eso la habilitación de tráfico real requiere primero verificación económica por cuenta y autorización explícita.
+
+## Estados que no deben confundirse
+
+- **Código consolidado en rama:** sí, sujeto al nuevo CI.
+- **Pruebas offline originales y nuevas:** 581 pytest y Docker aprobados en CI #40676605797 para `68c2d7c`; la revisión posterior de aceptación requiere su propio CI antes de declararse validada.
+- **Integración con G.O.:** contrato documentado y test HTTP sintético; no integración operativa.
+- **Oracle en producción:** sin inspección ni cambios.
+- **Prueba extremo a extremo con IA real:** no ejecutada y no autorizada.
+- **Riesgo económico cero de cuentas externas:** no demostrado; tráfico real prohibido.
+
+
+## Actualización 28/10 — aceptación aislada y desbloqueo gradual (sin autorización de tráfico)
+
+**Criterio vigente:** no exigir verificar universalmente las cuatro cuentas para cerrar el código, el contrato de G.O. o la integración offline. El primer tráfico real sólo podrá autorizarse por **proveedor + cuenta + modelo concretos**, con evidencia actual del plan sin cobro, límites de cuota/sobregiro y autorización específica. Los demás seguirán bloqueados. Una aprobación de un modelo no autoriza sus hermanos ni el fallback hacia otro proveedor.
+
+**Inventario de candidatos en código, NO inventario vivo ni certificación de gratuidad:**
+
+| Proveedor | Modelos iniciales en `router/catalog.py` | Precio acreditado en el catálogo base | Habilitación real |
+| --- | --- | --- | --- |
+| Groq | `openai/gpt-oss-20b`, `openai/gpt-oss-120b`, `qwen/qwen3.8-27b`, `whisper-large-v3`, `whisper-large-v3-turbo` | Desconocido (5/5) | Bloqueada |
+| NVIDIA | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning`, `google/gemma-4-31b-it`, `moonshotai/kimi-k3` | Desconocido (3/3) | Bloqueada |
+| OpenRouter | `openrouter/free` | Desconocido (1/1); el nombre no acredita gratuidad | Bloqueada |
+| Cloudflare | Sin modelos predefinidos; se agregan desde inventario local/configuración | Desconocido | Bloqueada |
+
+Los modelos de este cuadro son **candidatos históricos de bootstrap**, no se afirma que sigan existiendo ni que tengan precio cero. El reporte `GET /diagnostics/inventory` puede mostrar más modelos si hay un catálogo local guardado; su marca `reported_free_price` no prueba una cuenta sin sobregiros. `router/capability_evidence.py` distingue declaraciones, inferencias por nombre y registros de evidencia, sin convertirlos en autorización económica.
+
+**Regla de selección:** preservar catálogo multimodelo, ranking por tarea y fallback, pero aplicar el filtro de costo y disponibilidad a **cada intento**. Si el modelo desaparece, su precio es ambiguo, la cuota gratuita se agota o la cuenta no está verificada, debe quedar fuera del ranking; jamás sustituirlo por uno pago o con costo incierto. El bloqueo actual de `account_billing_ineligibility_reason` sigue siendo global y explícito: **no hay todavía un mecanismo productivo de aprobación granular**, y no se lo habilitará basándose sólo en nombres, créditos de prueba o etiquetas free.
+
+**Aceptación CI añadida:** `.github/workflows/ci.yml` ejecuta, después del build, una prueba HTTP de la **imagen real** en `docker run --network none --read-only --cap-drop ALL`, sin claves de proveedores y con `ROUTER_OFFLINE_ONLY=1`. Comprueba autenticación, `/health`, `/route` fail-closed y `/v1/chat/completions` HTTP 502. Esto **no equivale a CI completamente desconectado**: checkout, instalación de dependencias y `docker build` aún pueden requerir Internet. Ninguna de estas pruebas realiza inferencia.
+
+**Secuencia de cierre:** (1) validar la nueva aceptación Docker en CI; (2) comparar configuración y SHA efectivos de Oracle mediante una futura inspección de solo lectura autorizada, sin copiar claves; (3) ensayar backup/restauración y rollback sobre copias aisladas; (4) integrar G.O. en modo seguro sin tráfico externo; (5) para una primera conversación real, verificar únicamente la cuenta y el modelo seleccionados, establecer controles de cuotas fail-closed y pedir autorización explícita de despliegue y prueba. Luego ampliar progresivamente el catálogo gratuito por evidencia, nunca por presunción.
+
+
+## Ensayo combinado de rollback sobre copias ficticias — 28/10, candidato posterior a `3330c02`
+
+La prueba `tests/test_candidate_code_data_rollback_offline.py` ensaya **código y datos juntos** sin utilizar Oracle ni scripts de promoción: crea un repositorio Git descartable con commits ficticios baseline/candidato, una BD con esquema real de `RouterStore`, una tabla de prueba y catálogo local; toma un snapshot SQLite consistente mientras está abierta una conexión WAL, simula una migración de esquema y nuevos registros, vuelve al commit baseline y restaura la BD y el catálogo desde la copia. Comprueba `integrity_check`, versión de esquema, columnas, métricas previas, exclusión de datos posteriores, contenido del catálogo y permisos privados. Un segundo test corrompe deliberadamente el backup y verifica rechazo antes de sustituir la BD existente.
+
+**Limitación:** es una prueba de recuperación de **copias sintéticas**. No demuestra que el estado efectivo de Oracle, su unidad systemd, claves, archivos o migraciones de producción sean compatibles. El rollback de un servicio real requiere parada de escrituras, inventario de rutas, backup privado verificado y autorización expresa. Los scripts `router_release_stage.py` / `router_release_promote.py` continúan fijados a `339898a` y NO deben ejecutarse para esta candidata; la promoción antigua exige inferencia real.
+
+**Evidencia CI:** la prueba se añadió en el commit `9cbec1ffb8ce5b311f19d538fc8db4c559a92c13`. Confirmar la ejecución GitHub Actions de este SHA antes de marcar el ensayo como aprobado. El CI usa red para dependencias y Docker build; sólo la aceptación del contenedor está aislada con `--network none`.
+
+**Checklist de entrega restante:** inspección de solo lectura de Oracle con autorización; backup/restauración de una copia representativa (sin exponer secretos); conexión G.O.↔Router en modo seguro; política de egress denegada y aceptación local; aprobación explícita para despliegue. La habilitación posterior de inferencia requiere verificar **solamente la cuenta y el modelo específicos** que se pretendan autorizar, con control de cuota y sin sobregiro. Los demás modelos y proveedores siguen fail-closed. No se exige comprobar las cuatro cuentas para cerrar código o pruebas offline.
+
+
+## Checkpoint de entrega 28/10/2026, 12:55 ART — revisión sin ampliar alcance
+
+**Fuente verificada:** PR #87 sigue `open/draft`, base `main`, head
+`2913a07ea0393d0f4f0c9cc53e19ac177efa8949`, sin fusionar.
+CI de ese commit: [run 40710951159](https://github.com/lgomezpallo/R.outer.full/actions/runs/40710951159)
+`success`: 593 pruebas pytest y build Docker; aceptación HTTP de contenedor con
+`--network none` aprobada. **No es CI completamente sin Internet**: instalación
+de dependencias y build Docker pueden descargar paquetes.
+
+**Trazabilidad de commits:** GitHub compara `a237544069a2d5590b93dec29bb30a958f0bb80f`
+(PR #45) con el head actual: 165 commits por delante, cero detrás. Comparación
+`339898a6081061b41ad2557b600e06efbc1f00ef...2913a07`: 233 por delante,
+cero detrás, 105 archivos reportados en la comparación. Son referencias de
+GitHub, **no un diagnóstico de la VM**. No cerrar ni borrar ramas de PR
+apilados sin comprobar su preservación y trazabilidad.
+
+**Compatibilidad contractual, no operativa:** se revisó `go_ute/router.py`
+de Gestión de Obras UTE en `main` commit
+`a13382fa8574d10bea1809a7a94ac1b9d1f6b4df`. Su cliente exige
+`GO_ROUTER_ENABLED=1`, token, URL loopback `127.0.0.1:8010`, y
+envía `/route` con `task`, `conversation`,
+`required_capabilities=["chat"]` y `application_name="go-ute"`.
+Su `probe_contract()` envía exclusivamente cuerpos inválidos y espera
+401 sin token / 422 con token. Las pruebas de Router cubren ese contrato
+con dobles y HTTP local; **no existe prueba G.O.↔Router real ni servicio
+nuevo desplegado**.
+
+### Puertas de salida (mantener bloqueadas)
+
+- [x] Candidata única #87 con #45 como ancestro y CI de head aprobado.
+- [x] Aceptación Docker aislada de red; simulación de backup SQLite/WAL,
+  esquema, catálogo y rollback con datos ficticios.
+- [x] Contrato actual de G.O. cotejado con código de su repositorio.
+- [ ] Inventario de solo lectura de Oracle: SHA efectivo, unit systemd,
+  rutas de BD/catálogo, presencia de configuración de proveedor previamente
+  funcional **sin imprimir ni copiar valores secretos**.
+- [ ] Restauración representativa en un entorno autorizado, sin escrituras
+  sobre producción; no extrapolar ensayos sintéticos a la VM.
+- [ ] Procedimiento específico de promoción de la candidata: los scripts
+  `router_release_stage.py` y `router_release_promote.py` siguen fijados
+  a `339898a`, y `promote.py` exige chat real. **No ejecutarlos ni
+  habilitar sus workflows para esta candidata.**
+- [ ] Aceptación de integración real G.O.↔Router con salida de red denegada,
+  autenticación y errores fail-closed, previa autorización de despliegue.
+- [ ] Decisión explícita sobre el requisito de CI *completamente offline*:
+  actualmente sólo pytest y aceptación Docker están protegidos frente a
+  inferencias externas; checkout, pip y build no están aislados.
+- [ ] Aprobación explícita de cualquier despliegue o fusión.
+- [ ] Para una conversación real posterior: evidencia **por cuenta y modelo
+  concretos** de gratuidad sin cargos ni sobregiros, cuota y límite seguro,
+  y autorización específica. Los demás proveedores/modelos siguen bloqueados.
+  No es necesario verificar universalmente cuatro cuentas para aprobar el
+  código o la integración offline.
+
+**Decisión de este checkpoint:** código candidato probado offline y listo
+para revisión; **no apto todavía para despliegue ni inferencia real**.
+No se ejecutaron comandos en Oracle, no se tocó G.O./IAchat/Prisma, no hubo
+tráfico a proveedores ni cambios de facturación. El próximo paso útil es
+diagnóstico Oracle de solo lectura y contraste de configuración, no otro PR.
+
+
+## Checkpoint 29/10/2026 — reconciliación Oracle integrada en PR #87
+
+El HEAD de Oracle observado es fa54b3781e52. El snapshot cifrado previo ([run 40853340673](https://github.com/lgomezpallo/R.outer.full/actions/runs/40853340673)) preservó 6 cambios tracked y 27 untracked. No se repitió el respaldo ni se modificó Oracle.
+
+Los cuatro conflictos tracked de router/api.py, router/client.py, router/router.py y router/storage.py quedaron resueltos en una copia aislada y se incorporaron a la **única candidata** mediante [commit 365f62d](https://github.com/lgomezpallo/R.outer.full/commit/365f62d67bc75e06a59276b9b51005e1b87154c2), con lista blanca de fuentes Python, control de patrones de secretos y compilación sintáctica. Los 27 archivos untracked permanecen cifrados y fuera del repositorio. La integración añadió principalmente separadores en blanco; una ruta duplicada de diagnósticos se eliminó en [474200e](https://github.com/lgomezpallo/R.outer.full/commit/474200e1ad4ece5874a7918b3b51afdfab789a7e).
+
+**Validación posterior al merge:** [CI 40862618569](https://github.com/lgomezpallo/R.outer.full/actions/runs/40862618569) terminó con 594 pruebas pytest aprobadas, build Docker y aceptación HTTP aislada con red deshabilitada. No equivale a build totalmente offline porque pip y Docker build pueden descargar dependencias. El [workflow de reconciliación 40862610152](https://github.com/lgomezpallo/R.outer.full/actions/runs/40862610152) detectó la integración previa y no volvió a recuperar el snapshot; el workflow quedó limitado a lectura.
+
+**Puertas aún cerradas:** no se fusionó a main ni se desplegó; no se tocaron Oracle, G.O., IAchat o Prisma; no hubo inferencias ni cambios de facturación. Pendientes: integración real G.O.-Router en entorno aislado, prueba de rollback específica, CI totalmente desconectado y autorización explícita de despliegue. Para tráfico de inferencia real se requiere evidencia de gratuidad sin sobregiro de la cuenta/modelo seleccionado y autorización separada. No ejecutar scripts de promoción fijados al SHA histórico 339898a.
+
+**Siguiente hito P0:** validación integrada G.O.-Router y plan de promoción/rollback de la candidata ya reconciliada, sin tocar producción.
+
+
+## Checkpoint 29/10/2026 — inventario Oracle efectivo y bloqueo de backup corregido en código
+
+**Evidencia remota de solo lectura:** [GitHub Actions run 40877913247](https://github.com/lgomezpallo/R.outer.full/actions/runs/40877913247) terminó exitosamente. La consulta SSH **no hizo fetch, no escribió archivos en Oracle, no reinició servicios ni llamó a proveedores**. El workflow temporal de inventario se eliminó luego de obtener el diagnóstico para conservar el inventario cerrado de workflows de CI; el historial de la ejecución permanece disponible.
+
+- Oracle HEAD: `fa54b3781e52de5f8d1e0c64ae12fba390721fe0`; **6 tracked modificados y 27 untracked**. El servicio `router.service` está activo, con directorio de trabajo y Python virtual esperados.
+- La **BD activa** se encuentra en la ubicación de datos `/home/ubuntu/Proyecto/Datos/Router/router.db`, no en la BD secundaria que también existe dentro del checkout.
+- El **catálogo activo** apunta a **otra ubicación privada**; no está en las dos rutas convencionales que el script de staging inspeccionaba. No se registró su ruta ni su contenido en los logs.
+- El servicio tiene token y credenciales presentes de Groq, NVIDIA, Cloudflare y OpenRouter; esto **no acredita precio cero, plan, cuota ni ausencia de facturación**. `ROUTER_OFFLINE_ONLY` no está habilitado en el proceso actual. No se realizó ninguna inferencia.
+- **Defecto bloqueante identificado:** el staging histórico respaldaba sólo las rutas convencionales, pudiendo omitir el catálogo efectivo. Se modificó `scripts/router_release_stage.py` para leer exclusivamente las ubicaciones efectivas de BD y catálogo del proceso en ejecución, conservar ambos archivos en el snapshot privado y **fallar cerrado** si no puede verificarlos. No publica valores de configuración ni secretos. Se añadieron pruebas sintéticas para comprobar conservación y rechazo de catálogo ausente.
+
+**Importante:** el script de staging todavía conserva el PIN histórico `339898a`; el arreglo del respaldo **no autoriza ejecutarlo ni prepara por sí solo la promoción de #87**. El CI de los commits de esta corrección debe aprobar antes de declararla validada. El respaldo cifrado original de 33 cambios permanece en el run 40853340673. La candidata no está desplegada y no se ha modificado producción.
+
+**Siguiente bloqueo P0:** verificar CI del arreglo, preparar staging y rollback específicos del SHA candidato (sin inferencia y sin cambiar producción), y sólo después solicitar autorización expresa de despliegue. El CI todavía no acredita instalación y build Docker completamente offline.

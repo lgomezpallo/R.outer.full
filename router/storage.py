@@ -26,10 +26,12 @@ class RouterStore:
         self.master_key = master_key or os.getenv("ROUTER_MASTER_KEY", "")
         self._init_db()
 
+
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
         return conn
+
 
     def _init_db(self) -> None:
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
@@ -81,7 +83,14 @@ class RouterStore:
                     last_failure_kind TEXT,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
-                CREATE TABLE IF NOT EXISTS audit_budget (\n                    provider_id TEXT NOT NULL, day_utc TEXT NOT NULL, used INTEGER NOT NULL DEFAULT 0,\n                    PRIMARY KEY (provider_id,day_utc)\n                );\n                CREATE TABLE IF NOT EXISTS app_tokens (
+                CREATE TABLE IF NOT EXISTS audit_budget (\n                    provider_id TEXT NOT NULL, day_utc TEXT NOT NULL, used INTEGER NOT NULL DEFAULT 0,\n                    PRIMARY KEY (provider_id,day_utc)\n                );\n                CREATE TABLE IF NOT EXISTS audit_model_claims (
+                    provider_id TEXT NOT NULL,
+                    model_id TEXT NOT NULL,
+                    capability TEXT NOT NULL,
+                    claimed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (provider_id, model_id, capability)
+                );
+                CREATE TABLE IF NOT EXISTS app_tokens (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL UNIQUE,
                     token_hash TEXT NOT NULL UNIQUE,
@@ -98,6 +107,7 @@ class RouterStore:
             if "last_failure_kind" not in columns:
                 conn.execute("ALTER TABLE provider_runtime ADD COLUMN last_failure_kind TEXT")
 
+
     def _key_bytes(self) -> bytes:
         if not self.master_key:
             raise RuntimeError("router_master_key_required")
@@ -113,6 +123,7 @@ class RouterStore:
             raise RuntimeError("invalid_router_master_key")
         return key
 
+
     @property
     def can_persist_secrets(self) -> bool:
         try:
@@ -120,6 +131,7 @@ class RouterStore:
             return AESGCM is not None
         except RuntimeError:
             return False
+
 
     def save_credential(self, provider_id: str, api_key: str) -> None:
         if AESGCM is None:
@@ -148,6 +160,7 @@ class RouterStore:
                 ),
             )
 
+
     def load_credentials(self) -> list[PersistedCredential]:
         if not self.can_persist_secrets:
             return []
@@ -168,6 +181,7 @@ class RouterStore:
                 continue
             credentials.append(PersistedCredential(row["provider_id"], plaintext.decode("utf-8")))
         return credentials
+
 
     def record_metric(
         self,
@@ -196,6 +210,7 @@ class RouterStore:
                     attempt_number, latency_ms, 1 if success else 0, error_type, error_code,
                 ),
             )
+
 
     def recent_request_traces(self, limit: int = 30, application_name: str | None = None) -> list[dict]:
         """Recent per-request attempt traces without prompts, responses or credentials."""
@@ -231,6 +246,7 @@ class RouterStore:
                 "request_id": rid, "application_name": row["application_name"],
                 "created_at": row["created_at"], "attempts": [],
                 "total_provider_latency_ms": 0, "fallback": False,
+                "provider_fallback": False, "model_fallback": False,
             })
             trace["attempts"].append({
                 "provider": row["provider_id"], "model": row["model_id"],
@@ -240,29 +256,60 @@ class RouterStore:
             })
             trace["total_provider_latency_ms"] += int(row["latency_ms"])
         for trace in traces.values():
-            trace["fallback"] = len({a["provider"] for a in trace["attempts"]}) > 1
+            # A fallback may stay on the same provider while changing models.
+            # Preserve the broad flag for consumers and expose both dimensions
+            # independently; repeated attempts of the *same* model are retries.
+            attempts = trace["attempts"]
+            providers = {a["provider"] for a in attempts}
+            models_by_provider: dict[str | None, set[str | None]] = {}
+            for attempt in attempts:
+                models_by_provider.setdefault(attempt["provider"], set()).add(attempt["model"])
+            trace["provider_fallback"] = len(providers) > 1
+            trace["model_fallback"] = any(len(models) > 1 for models in models_by_provider.values())
+            trace["fallback"] = trace["provider_fallback"] or trace["model_fallback"]
         return [traces[row["request_id"]] for row in ids]
 
-    def recent_model_stats(self, limit: int = 2000) -> dict[tuple[str,str], dict[str,float]]:
+
+    def recent_model_stats(self, limit: int = 2000) -> dict[tuple[str, str], dict]:
+        """Rebuild per-model routing observations without treating probes as answers.
+
+        Keep the most recent N *routing attempts*, not N arbitrary diagnostics.
+        Latency is the chronological success-only EWMA used by RuntimeState.
+        A failed request has no successful completion latency.
+        """
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT provider_id,model_id,success,latency_ms
+                SELECT provider_id, model_id, success, latency_ms
                 FROM request_metrics
                 WHERE provider_id IS NOT NULL AND model_id IS NOT NULL
+                  AND (phase IN ('direct', 'execute', 'plan', 'verify', 'compose')
+                       OR phase LIKE 'subtask:%')
                 ORDER BY id DESC LIMIT ?
                 """,
-                (limit,),
+                (max(1, min(int(limit), 10000)),),
             ).fetchall()
-        buckets: dict[tuple[str,str], list[sqlite3.Row]] = {}
+        buckets: dict[tuple[str, str], list[sqlite3.Row]] = {}
         for row in rows:
             buckets.setdefault((row["provider_id"], row["model_id"]), []).append(row)
-        result: dict[tuple[str,str], dict[str,float]] = {}
+        result: dict[tuple[str, str], dict] = {}
         for key, items in buckets.items():
-            success_rate = sum(int(x["success"]) for x in items) / len(items)
-            latency = sum(int(x["latency_ms"]) for x in items) / len(items)
-            result[key] = {"success_rate": success_rate, "latency_ms": latency, "samples": float(len(items))}
+            successes = sum(int(item["success"]) for item in items)
+            latency = None
+            # Rows arrive newest first; EWMA must replay oldest to newest.
+            for item in reversed(items):
+                if int(item["success"]):
+                    measured = float(item["latency_ms"])
+                    latency = measured if latency is None else latency * 0.7 + measured * 0.3
+            result[key] = {
+                "success_count": successes,
+                "failure_count": len(items) - successes,
+                "success_rate": successes / len(items),
+                "latency_ms": latency,
+                "samples": float(len(items)),
+            }
         return result
+
 
     def reserve_audit_budget(self, provider_id: str, daily_limit: int) -> tuple[bool, int]:
         """Atomically reserve one external probe for the current UTC day."""
@@ -285,6 +332,60 @@ class RouterStore:
             ).fetchone()[0]
         return updated, used
 
+
+    def reserve_audit_model(
+        self, provider_id: str, model_id: str, capability: str, daily_limit: int
+    ) -> tuple[str, int]:
+        """Atomically claim one model/capability and one internal daily slot.
+
+        A claim is durable across days and processes: after a crash or an
+        ambiguous probe result, retrying automatically could spend again.
+        This method grants no external inference or billing authorization.
+        """
+        from datetime import datetime, timezone
+        today = datetime.now(timezone.utc).date().isoformat()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "INSERT OR IGNORE INTO audit_budget(provider_id, day_utc, used) VALUES (?, ?, 0)",
+                (provider_id, today),
+            )
+            used = int(conn.execute(
+                "SELECT used FROM audit_budget WHERE provider_id=? AND day_utc=?",
+                (provider_id, today),
+            ).fetchone()[0])
+            if conn.execute(
+                "SELECT 1 FROM audit_model_claims WHERE provider_id=? AND model_id=? AND capability=?",
+                (provider_id, model_id, capability),
+            ).fetchone() is not None:
+                return "already_claimed", used
+            if used >= max(0, int(daily_limit)):
+                return "budget_exhausted", used
+            conn.execute(
+                "INSERT INTO audit_model_claims(provider_id, model_id, capability) VALUES (?, ?, ?)",
+                (provider_id, model_id, capability),
+            )
+            conn.execute(
+                "UPDATE audit_budget SET used=used+1 WHERE provider_id=? AND day_utc=?",
+                (provider_id, today),
+            )
+            return "reserved", used + 1
+
+
+    def audit_claimed_models(self, provider_id: str, capability: str) -> set[str]:
+        """Read durable audit claims without reserving slots or calling providers.
+
+        A claimed model remains unavailable for automatic re-audit even when
+        evidence is missing after a failed or interrupted attempt.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT model_id FROM audit_model_claims WHERE provider_id=? AND capability=?",
+                (provider_id, capability),
+            ).fetchall()
+        return {row["model_id"] for row in rows}
+
+
     def audit_budget_used(self) -> dict[str, int]:
         from datetime import datetime, timezone
         today = datetime.now(timezone.utc).date().isoformat()
@@ -292,13 +393,21 @@ class RouterStore:
             rows = conn.execute("SELECT provider_id,used FROM audit_budget WHERE day_utc=?", (today,)).fetchall()
         return {row["provider_id"]: row["used"] for row in rows}
 
+
     def model_performance_report(self, limit: int = 2000) -> list[dict]:
-        """Recent execution statistics, not a measure of answer correctness."""
+        """Routing-attempt reliability and successful-completion latency.
+
+        Failed attempt durations are useful for troubleshooting, but must not
+        inflate the latency reported for successful model completions.
+        Probe and audit phases are excluded, just as in recent_model_stats.
+        """
         with self._connect() as conn:
             rows = conn.execute(
                 """SELECT provider_id, model_id, success, latency_ms, error_type
                    FROM request_metrics
                    WHERE provider_id IS NOT NULL AND model_id IS NOT NULL
+                     AND (phase IN ('direct', 'execute', 'plan', 'verify', 'compose')
+                          OR phase LIKE 'subtask:%')
                    ORDER BY id DESC LIMIT ?""",
                 (max(1, min(int(limit), 10000)),),
             ).fetchall()
@@ -307,12 +416,15 @@ class RouterStore:
             key = (row["provider_id"], row["model_id"])
             entry = groups.setdefault(key, {
                 "provider": key[0], "model": key[1], "attempts": 0,
-                "successful_requests": 0, "total_latency_ms": 0, "errors": {},
+                "successful_requests": 0, "total_latency_ms": 0,
+                "successful_latency_ms": 0, "errors": {},
             })
             entry["attempts"] += 1
-            entry["successful_requests"] += int(row["success"])
             entry["total_latency_ms"] += int(row["latency_ms"])
-            if not row["success"]:
+            if row["success"]:
+                entry["successful_requests"] += 1
+                entry["successful_latency_ms"] += int(row["latency_ms"])
+            else:
                 kind = row["error_type"] or "unknown"
                 entry["errors"][kind] = entry["errors"].get(kind, 0) + 1
         output = []
@@ -322,10 +434,159 @@ class RouterStore:
                 "provider": entry["provider"], "model": entry["model"],
                 "attempts": n, "successful_requests": entry["successful_requests"],
                 "success_rate": round(entry["successful_requests"] / n, 4),
-                "avg_latency_ms": round(entry["total_latency_ms"] / n),
+                # None means no successful completion was observed.
+                "avg_latency_ms": (
+                    round(entry["successful_latency_ms"] / entry["successful_requests"])
+                    if entry["successful_requests"] else None
+                ),
+                "latency_samples": entry["successful_requests"],
+                "latency_scope": "successful_completions_only",
+                "avg_attempt_duration_ms": round(entry["total_latency_ms"] / n),
                 "errors": entry["errors"],
             })
         return sorted(output, key=lambda item: (-item["attempts"], item["provider"], item["model"]))
+
+
+
+    def routing_fallback_report(self, limit: int = 200) -> dict:
+        """Read-only request-level retry/fallback outcomes from local SQLite.
+
+        Select recent *request IDs*, then all their stored routing attempts,
+        so a multi-attempt request is not truncated at the sampling boundary.
+        Probe/audit phases are excluded. In-flight requests may be incomplete
+        at snapshot time; these are observations, not quality or billing proof.
+        """
+        bounded = max(1, min(int(limit), 500))
+        routing_phase = """(phase IN ('direct', 'execute', 'plan', 'verify', 'compose')
+                            OR phase LIKE 'subtask:%')"""
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""WITH recent AS (
+                        SELECT request_id FROM request_metrics
+                        WHERE {routing_phase}
+                        GROUP BY request_id ORDER BY MAX(id) DESC LIMIT ?
+                    )
+                    SELECT m.request_id, m.provider_id, m.model_id, m.success
+                    FROM request_metrics AS m
+                    JOIN recent AS r ON r.request_id = m.request_id
+                    WHERE (m.phase IN ('direct', 'execute', 'plan', 'verify', 'compose')
+                           OR m.phase LIKE 'subtask:%')
+                    ORDER BY m.id ASC""",
+                (bounded,),
+            ).fetchall()
+        requests: dict[str, list[tuple[str | None, str | None, bool]]] = {}
+        for row in rows:
+            requests.setdefault(row["request_id"], []).append(
+                (row["provider_id"], row["model_id"], bool(row["success"]))
+            )
+        attempts = sum(len(items) for items in requests.values())
+        successes = sum(sum(1 for item in items if item[2]) for items in requests.values())
+        request_successes = sum(1 for items in requests.values() if items[-1][2])
+        # A retry/fallback is a *transition after a failed attempt*, not
+        # merely the presence of repeated or distinct models somewhere in
+        # the request. In particular A -> B -> A is not a same-model retry.
+        # Keep the existing model-fallback key inclusive of provider changes
+        # for backwards compatibility; expose narrower categories separately.
+        transitions = {
+            request_id: [
+                (previous, current)
+                for previous, current in zip(items, items[1:])
+                if not previous[2]
+            ]
+            for request_id, items in requests.items()
+        }
+        def same_model_retry(previous, current):
+            return previous[:2] == current[:2]
+
+        def model_fallback(previous, current):
+            return previous[:2] != current[:2]
+
+        def provider_fallback(previous, current):
+            return previous[0] != current[0]
+
+        retry_requests = sum(
+            any(same_model_retry(before, after) for before, after in pairs)
+            for pairs in transitions.values()
+        )
+        model_fallbacks = sum(
+            any(model_fallback(before, after) for before, after in pairs)
+            for pairs in transitions.values()
+        )
+        provider_fallbacks = sum(
+            any(provider_fallback(before, after) for before, after in pairs)
+            for pairs in transitions.values()
+        )
+        same_provider_model_switches = sum(
+            any(before[0] == after[0] and before[1] != after[1] for before, after in pairs)
+            for pairs in transitions.values()
+        )
+        provider_only_switches = sum(
+            any(before[0] != after[0] and before[1] == after[1] for before, after in pairs)
+            for pairs in transitions.values()
+        )
+        retry_transitions = sum(
+            same_model_retry(before, after)
+            for pairs in transitions.values() for before, after in pairs
+        )
+        recovered = sum(
+            1 for items in requests.values()
+            if items[-1][2] and any(not item[2] for item in items[:-1])
+        )
+        count = len(requests)
+        return {
+            "sampled_requests": count,
+            "attempts": attempts,
+            "successful_attempts": successes,
+            "successful_requests": request_successes,
+            "failed_requests": count - request_successes,
+            "requests_with_same_model_retry": retry_requests,
+            "requests_with_model_fallback": model_fallbacks,
+            "requests_with_provider_fallback": provider_fallbacks,
+            "requests_with_same_provider_model_switch": same_provider_model_switches,
+            "requests_with_provider_only_fallback": provider_only_switches,
+            "same_model_retry_transitions": retry_transitions,
+            "requests_recovered_after_failure": recovered,
+            "attempt_success_rate": round(successes / attempts, 4) if attempts else None,
+            "request_success_rate": round(request_successes / count, 4) if count else None,
+            "observation_scope": "recent_routing_request_ids_only",
+            "snapshot_caveat": "in_flight_requests_may_be_incomplete",
+            "quality_measured": False,
+            "billing_verified": False,
+        }
+
+
+    def provider_routing_report(self, limit: int = 2000) -> list[dict]:
+        """Provider totals over exactly the same routing attempts as model reports.
+
+        Do not use provider_runtime counters for these totals: those counters
+        also reflect active health checks and are not a routing-only sample.
+        This report never changes cooldowns, health, or persisted state.
+        """
+        groups: dict[str, dict] = {}
+        for model in self.model_performance_report(limit=limit):
+            provider_id = model["provider"]
+            row = groups.setdefault(provider_id, {
+                "provider": provider_id,
+                "attempts": 0,
+                "successful_requests": 0,
+                "failed_attempts": 0,
+                "models_observed": 0,
+                "errors": {},
+            })
+            row["attempts"] += model["attempts"]
+            row["successful_requests"] += model["successful_requests"]
+            row["failed_attempts"] += model["attempts"] - model["successful_requests"]
+            row["models_observed"] += 1
+            for error_type, count in model["errors"].items():
+                row["errors"][error_type] = row["errors"].get(error_type, 0) + count
+
+        for row in groups.values():
+            row["success_rate"] = round(
+                row["successful_requests"] / row["attempts"], 4
+            )
+            row["observation_scope"] = "routing_attempts_only"
+        return sorted(groups.values(), key=lambda row: row["provider"])
+
 
     def create_app_token(self, name: str) -> str:
         token = "rtr_" + secrets.token_urlsafe(32)
@@ -337,6 +598,7 @@ class RouterStore:
                 (name, digest, preview),
             )
         return token
+
 
     def verify_app_token(self, token: str) -> str | None:
         digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
@@ -353,12 +615,14 @@ class RouterStore:
                 return str(row["name"])
         return None
 
+
     def list_app_tokens(self) -> list[dict]:
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT name,preview,active,last_used_at,created_at FROM app_tokens ORDER BY id"
             ).fetchall()
         return [dict(row) for row in rows]
+
 
 
     def save_model_runtime(self, provider_id: str, model_id: str, state) -> None:
@@ -373,6 +637,7 @@ class RouterStore:
                 (provider_id, model_id, state.cooldown_until, state.cooldown_strikes, state.last_error),
             )
 
+
     def load_model_runtime(self, provider_id: str) -> dict[str, dict]:
         with self._connect() as conn:
             rows = conn.execute(
@@ -380,6 +645,7 @@ class RouterStore:
                 (provider_id,),
             ).fetchall()
         return {row["model_id"]: dict(row) for row in rows}
+
 
     def save_provider_runtime(self, provider_id: str, state) -> None:
         health_value = None if state.health_ok is None else (1 if state.health_ok else 0)
@@ -414,6 +680,7 @@ class RouterStore:
                 ),
             )
 
+
     def load_provider_runtime(self, provider_id: str) -> dict | None:
         with self._connect() as conn:
             row = conn.execute(
@@ -429,3 +696,4 @@ class RouterStore:
         if result["health_ok"] is not None:
             result["health_ok"] = bool(result["health_ok"])
         return result
+

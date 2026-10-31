@@ -1,4 +1,7 @@
 """Coverage accounting: cataloged does not mean eligible or actually exercised."""
+import pytest
+
+pytestmark = pytest.mark.usefixtures("allow_offline_selector_fixture")
 from time import time
 
 from fastapi.testclient import TestClient

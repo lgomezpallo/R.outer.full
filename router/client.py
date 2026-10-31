@@ -1,24 +1,62 @@
 from __future__ import annotations
 import json
 import httpx
+from .billing import CLOUDFLARE_PAID_ONLY, offline_only
+from .modality_contract import completion_transport_error
 from .registry import RegisteredProvider
 from .types import RouteRequest
 
-CLOUDFLARE_PAID_ONLY = frozenset({
-    "@cf/moonshotai/kimi-k2.6",
-    "@cf/moonshotai/kimi-k2.7-code",
-    "@cf/zai-org/glm-5.2",
-    "@cf/zai-org/glm-5.3",
-    "@cf/zai-org/glm-5.3-flash",
-    "@cf/deepseek-ai/deepseek-v4-flash-0731",
-    "@cf/deepseek-ai/deepseek-v4-pro-0813",
-})
 
 def _is_cloudflare_workers_ai(base_url: str) -> bool:
     return base_url.startswith("https://api.cloudflare.com/client/v4/accounts/") and base_url.rstrip("/").endswith("/ai")
 
+
 class ProviderClient:
+    @staticmethod
+    def _require_billing_eligible(provider: RegisteredProvider, model: str) -> None:
+        """Last-mile guard: never send inference for an unapproved model.
+
+        Covers direct client calls and probes, not just Router's ranking.
+        Free-model eligibility does not guarantee account-level billing outcomes.
+        """
+        if offline_only():
+            raise RuntimeError("inference_blocked:offline_only")
+        from .billing import billing_endpoint_ineligibility_reason
+        from .selector import billing_ineligibility_reason
+
+        # Independent transport guard: even an alternate ranking implementation
+        # or a mocked selector cannot authorize a foreign billing destination.
+        endpoint_block = billing_endpoint_ineligibility_reason(
+            provider.spec.id, provider.spec.base_url, provider.spec.protocol
+        )
+        if endpoint_block is not None:
+            raise RuntimeError(f"inference_blocked:{endpoint_block}")
+
+        matches = [item for item in provider.spec.models if item.id == model]
+        if not matches:
+            raise RuntimeError("inference_blocked:billing_unverified_model")
+        # Independently reject ambiguous persisted catalogs, even if a custom
+        # selector or ranking implementation incorrectly picks the free row.
+        if len(matches) != 1:
+            raise RuntimeError("inference_blocked:billing_ambiguous_model")
+        model_spec = matches[0]
+        # Independently enforce the per-model price even if the selector is replaced.
+        if model_spec.billing_status != "free":
+            reason = "billing_paid" if model_spec.billing_status == "paid" else "billing_unverified"
+            raise RuntimeError(f"inference_blocked:{reason}")
+        if provider.spec.id == "cloudflare" and model in CLOUDFLARE_PAID_ONLY:
+            raise RuntimeError("inference_blocked:billing_paid")
+        reason = billing_ineligibility_reason(provider, model_spec)
+        if reason is not None:
+            raise RuntimeError(f"inference_blocked:{reason}")
+
+
     def complete(self, provider: RegisteredProvider, model: str, req: RouteRequest) -> tuple[str, dict]:
+        # Independent last-mile check: do not post specialist jobs to /chat/completions.
+        unsupported = completion_transport_error(req)
+        if unsupported is not None:
+            raise RuntimeError(unsupported)
+        self._require_billing_eligible(provider, model)
         protocol = provider.spec.protocol
         if protocol == "openai-compatible":
             return self._openai_compatible(provider, model, req)
@@ -28,44 +66,62 @@ class ProviderClient:
             return self._gemini(provider, model, req)
         raise RuntimeError(f"unsupported_protocol:{protocol}")
 
+
     def discover_models(self, provider: RegisteredProvider, timeout_s: float = 12.0) -> list[str]:
         """Compatibility interface: list every discovered model, including paid ones."""
         ids, _ = self.discover_inventory(provider, timeout_s)
         return ids
 
+
     def discover_inventory(
         self, provider: RegisteredProvider, timeout_s: float = 12.0
     ) -> tuple[list[str], dict[str, str]]:
         """Inventory plus explicit OpenRouter billing classification (no inference of free)."""
+        if offline_only():
+            raise RuntimeError("inventory_blocked:offline_only")
         if provider.spec.protocol != "openai-compatible":
             return [], {}
+        # Discovery sends the configured API key too. Check its destination
+        # independently of routing so catalog refresh cannot leak credentials
+        # to an arbitrary URL supplied by a mutable provider configuration.
+        from .billing import billing_endpoint_ineligibility_reason
+        endpoint_block = billing_endpoint_ineligibility_reason(
+            provider.spec.id, provider.spec.base_url, provider.spec.protocol
+        )
+        if endpoint_block is not None:
+            raise RuntimeError(f"inventory_blocked:{endpoint_block}")
         base = provider.spec.base_url.rstrip("/")
         if _is_cloudflare_workers_ai(base):
+            # Inventory is not billing authorization. Include even known paid
+            # models for honest diagnostics, but never infer a free account plan.
             result: list[str] = []
-            with httpx.Client(timeout=timeout_s, follow_redirects=False) as client:
-                for page in range(1, 6):
+            billing: dict[str, str] = {}
+            with httpx.Client(timeout=timeout_s, follow_redirects=False, trust_env=False) as client:
+                for page in range(1, 51):
                     response = client.get(
                         base + f"/models/search?hide_experimental=true&include_deprecated=false&per_page=100&page={page}",
                         headers={"Authorization": f"Bearer {provider.api_key}", "Accept": "application/json"},
                     )
                     response.raise_for_status()
                     payload = response.json()
-                    source = payload.get("result", []) if isinstance(payload, dict) else []
+                    if not isinstance(payload, dict) or payload.get("success") is False:
+                        raise ValueError("cloudflare_inventory_invalid_response")
+                    source = payload.get("result")
                     if not isinstance(source, list):
-                        break
+                        raise ValueError("cloudflare_inventory_invalid_result")
                     for item in source:
                         model_id = item.get("name") if isinstance(item, dict) else None
-                        if (
-                            isinstance(model_id, str)
-                            and model_id.startswith("@cf/")
-                            and model_id not in CLOUDFLARE_PAID_ONLY
-                        ):
+                        if isinstance(model_id, str) and model_id.startswith("@cf/") and len(model_id) <= 200:
                             result.append(model_id)
+                            billing[model_id] = "paid" if model_id in CLOUDFLARE_PAID_ONLY else "unknown"
                     if len(source) < 100:
                         break
-            return list(dict.fromkeys(result)), {}
+                else:
+                    # Never persist a partial inventory as a complete snapshot.
+                    raise RuntimeError("cloudflare_inventory_pagination_limit")
+            return list(dict.fromkeys(result)), billing
 
-        with httpx.Client(timeout=timeout_s, follow_redirects=False) as client:
+        with httpx.Client(timeout=timeout_s, follow_redirects=False, trust_env=False) as client:
             response = client.get(
                 base + "/models",
                 headers={"Authorization": f"Bearer {provider.api_key}", "Accept": "application/json"},
@@ -82,7 +138,13 @@ class ProviderClient:
         is_openrouter = base == "https://openrouter.ai/api/v1"
         # NVIDIA /models is inventory, not proof of free billing.
         # Routing authorization is enforced independently in selector.py.
-        for item in source[:2000]:
+        # Never silently truncate a provider inventory: a duplicate paid row
+        # beyond the old 2,000-item slice could be ignored after a free row,
+        # incorrectly classifying that model as free. Process the whole bounded
+        # snapshot or reject it without returning partial billing evidence.
+        if len(source) > 10_000:
+            raise ValueError("provider_inventory_too_large")
+        for item in source:
             model_id = item if isinstance(item, str) else item.get("id") if isinstance(item, dict) else None
             if not isinstance(model_id, str) or not model_id.strip() or len(model_id) > 200:
                 continue
@@ -94,8 +156,14 @@ class ProviderClient:
                 prompt_price = pricing.get("prompt")
                 completion_price = pricing.get("completion")
                 status = "unknown"
+                # Fail closed when OpenRouter adds an unfamiliar pricing field:
+                # even zero token prices cannot authorize an unexamined fee.
+                known_pricing_fields = {
+                    "prompt", "completion", "request", "image", "web_search",
+                    "internal_reasoning", "input_cache_read", "input_cache_write",
+                }
                 try:
-                    if prompt_price is not None and completion_price is not None:
+                    if set(pricing).issubset(known_pricing_fields) and prompt_price is not None and completion_price is not None:
                         from decimal import Decimal, InvalidOperation
                         prompt = Decimal(str(prompt_price))
                         completion = Decimal(str(completion_price))
@@ -104,7 +172,13 @@ class ProviderClient:
                             # a zero token price alone does not mean a free request.
                             charges = []
                             for key in ("request", "image", "web_search", "internal_reasoning", "input_cache_read", "input_cache_write"):
-                                if pricing.get(key) is not None:
+                                # An explicitly present null is not a zero
+                                # price: it is an unverified potential charge.
+                                # Missing fields mean no advertised surcharge,
+                                # but present fields require numeric evidence.
+                                if key in pricing:
+                                    if pricing[key] is None:
+                                        raise InvalidOperation
                                     charge = Decimal(str(pricing[key]))
                                     if not charge.is_finite() or charge < 0:
                                         raise InvalidOperation
@@ -112,11 +186,21 @@ class ProviderClient:
                             status = "free" if prompt == 0 and completion == 0 and all(c == 0 for c in charges) else "paid"
                 except (InvalidOperation, ValueError, TypeError):
                     pass
-                billing[model_id] = status
+                # A provider inventory can contain duplicate IDs with conflicting
+                # pricing records. Never let a later free row overwrite an
+                # earlier paid/unknown row (or vice versa). The most restrictive
+                # observation wins regardless of API ordering.
+                severity = {"free": 0, "unknown": 1, "paid": 2}
+                previous = billing.get(model_id)
+                if previous is None or severity[status] > severity[previous]:
+                    billing[model_id] = status
             result.append(model_id)
         return list(dict.fromkeys(result)), billing
 
+
     def probe_capability(self, provider: RegisteredProvider, model: str, capability: str) -> dict:
+        # Non-chat probes issue HTTP requests directly; enforce before any POST.
+        self._require_billing_eligible(provider, model)
         base = provider.spec.base_url.rstrip("/")
         if capability in {"chat", "json"}:
             task = "Reply with exactly ROUTER_OK" if capability == "chat" else 'Return exactly {"router_ok":true}'
@@ -185,7 +269,7 @@ class ProviderClient:
                     "max_tokens": 128,
                 }
                 path = "/v1/chat/completions" if _is_cloudflare_workers_ai(base) else "/chat/completions"
-                with httpx.Client(timeout=30, follow_redirects=False) as client:
+                with httpx.Client(timeout=30, follow_redirects=False, trust_env=False) as client:
                     response = client.post(base + path, headers={**headers, "Content-Type": "application/json"}, json=payload)
                 if not (200 <= response.status_code < 300):
                     return self._probe_http_result(response, "active_tools_probe")
@@ -229,7 +313,7 @@ class ProviderClient:
                 ]
                 payload = {"model": model, "messages": [{"role": "user", "content": content}], "max_tokens": 12}
                 path = "/v1/chat/completions" if _is_cloudflare_workers_ai(base) else "/chat/completions"
-                with httpx.Client(timeout=30, follow_redirects=False) as client:
+                with httpx.Client(timeout=30, follow_redirects=False, trust_env=False) as client:
                     response = client.post(base + path, headers={**headers, "Content-Type": "application/json"}, json=payload)
                 return self._probe_http_result(response, "active_vision_probe")
 
@@ -252,7 +336,7 @@ class ProviderClient:
                     else:
                         voice = "alloy"
                     payload = {"model": model, "input": "Hello", "voice": voice, "response_format": "wav"}
-                with httpx.Client(timeout=45, follow_redirects=False) as client:
+                with httpx.Client(timeout=45, follow_redirects=False, trust_env=False) as client:
                     response = client.post(url, headers={**headers, "Content-Type": "application/json"}, json=payload)
                 return self._probe_http_result(response, "active_speech_probe")
 
@@ -264,7 +348,7 @@ class ProviderClient:
                         "audio": base64.b64encode(wav).decode("ascii"),
                         "task": "transcribe",
                     }
-                    with httpx.Client(timeout=45, follow_redirects=False) as client:
+                    with httpx.Client(timeout=45, follow_redirects=False, trust_env=False) as client:
                         response = client.post(
                             base + "/run/" + model,
                             headers={**headers, "Content-Type": "application/json"},
@@ -273,7 +357,7 @@ class ProviderClient:
                 else:
                     files = {"file": ("probe.wav", wav, "audio/wav")}
                     data = {"model": model, "response_format": "json"}
-                    with httpx.Client(timeout=45, follow_redirects=False) as client:
+                    with httpx.Client(timeout=45, follow_redirects=False, trust_env=False) as client:
                         response = client.post(base + "/audio/transcriptions", headers=headers, files=files, data=data)
                 return self._probe_http_result(response, "active_transcription_probe")
 
@@ -281,7 +365,7 @@ class ProviderClient:
                 if _is_cloudflare_workers_ai(base):
                     url = base + "/run/" + model
                     prompt = "A red circle on a white background"
-                    with httpx.Client(timeout=60, follow_redirects=False) as client:
+                    with httpx.Client(timeout=60, follow_redirects=False, trust_env=False) as client:
                         if any(token in model.lower() for token in ("flux-2-dev", "flux-2-klein")):
                             response = client.post(
                                 url,
@@ -297,7 +381,7 @@ class ProviderClient:
                 else:
                     url = base + "/images/generations"
                     payload = {"model": model, "prompt": "A red circle on a white background", "n": 1}
-                    with httpx.Client(timeout=60, follow_redirects=False) as client:
+                    with httpx.Client(timeout=60, follow_redirects=False, trust_env=False) as client:
                         response = client.post(url, headers={**headers, "Content-Type": "application/json"}, json=payload)
                 return self._probe_http_result(response, "active_image_generation_probe")
 
@@ -311,13 +395,13 @@ class ProviderClient:
                         "prompt": (None, prompt),
                         "input_image_0": ("probe.png", pixel, "image/png"),
                     }
-                    with httpx.Client(timeout=60, follow_redirects=False) as client:
+                    with httpx.Client(timeout=60, follow_redirects=False, trust_env=False) as client:
                         response = client.post(url, headers=headers, files=files)
                 else:
                     url = base + "/images/edits"
                     files = {"image": ("probe.png", pixel, "image/png")}
                     data = {"model": model, "prompt": prompt}
-                    with httpx.Client(timeout=60, follow_redirects=False) as client:
+                    with httpx.Client(timeout=60, follow_redirects=False, trust_env=False) as client:
                         response = client.post(url, headers=headers, files=files, data=data)
                 return self._probe_http_result(response, "active_image_editing_probe")
 
@@ -327,6 +411,7 @@ class ProviderClient:
                 return self._probe_http_result(exc.response, "active_probe_http_error")
             return {"status": "inconclusive", "evidence": f"probe_network_error:{type(exc).__name__}"}
 
+
     def _probe_http_result(self, response: httpx.Response, evidence: str) -> dict:
         if 200 <= response.status_code < 300:
             status = "verified"
@@ -335,6 +420,7 @@ class ProviderClient:
         else:
             status = "inconclusive"
         return {"status": status, "evidence": evidence, "http_status": response.status_code}
+
 
     def _silence_wav(self) -> bytes:
         import struct
@@ -347,6 +433,7 @@ class ProviderClient:
             + b"data" + struct.pack("<I", len(data))
         )
         return header + data
+
 
     def _messages(self, req: RouteRequest) -> list[dict]:
         messages: list[dict] = []
@@ -364,11 +451,13 @@ class ProviderClient:
             messages.append({"role": "user", "content": user})
         return messages
 
+
     def _openai_compatible(self, provider: RegisteredProvider, model: str, req: RouteRequest) -> tuple[str, dict]:
+        self._require_billing_eligible(provider, model)
         payload = {"model": model, "messages": self._messages(req), "temperature": 0.2}
         base = provider.spec.base_url.rstrip("/")
         chat_path = "/v1/chat/completions" if _is_cloudflare_workers_ai(base) else "/chat/completions"
-        with httpx.Client(timeout=req.timeout_s, follow_redirects=False) as client:
+        with httpx.Client(timeout=req.timeout_s, follow_redirects=False, trust_env=False) as client:
             response = client.post(
                 base + chat_path,
                 headers={"Authorization": f"Bearer {provider.api_key}", "Content-Type": "application/json"},
@@ -381,7 +470,9 @@ class ProviderClient:
             raise RuntimeError("empty_provider_response")
         return text, data
 
+
     def _anthropic(self, provider: RegisteredProvider, model: str, req: RouteRequest) -> tuple[str, dict]:
+        self._require_billing_eligible(provider, model)
         if req.images:
             content = [{"type": "text", "text": req.task}]
             content.extend({
@@ -398,7 +489,7 @@ class ProviderClient:
             "anthropic-version": "2023-06-01",
             "content-type": "application/json",
         }
-        with httpx.Client(timeout=req.timeout_s, follow_redirects=False) as client:
+        with httpx.Client(timeout=req.timeout_s, follow_redirects=False, trust_env=False) as client:
             response = client.post(provider.spec.base_url.rstrip("/") + "/v1/messages", headers=headers, json=payload)
             response.raise_for_status()
             data = response.json()
@@ -408,7 +499,9 @@ class ProviderClient:
             raise RuntimeError("empty_provider_response")
         return text, data
 
+
     def _gemini(self, provider: RegisteredProvider, model: str, req: RouteRequest) -> tuple[str, dict]:
+        self._require_billing_eligible(provider, model)
         url = provider.spec.base_url.rstrip("/") + f"/models/{model}:generateContent"
         parts = [{"text": req.task}]
         if req.images:
@@ -417,7 +510,7 @@ class ProviderClient:
                                 "data": source.split(",", 1)[1]}
             } for source in req.images)
         payload = {"contents": [{"parts": parts}]}
-        with httpx.Client(timeout=req.timeout_s, follow_redirects=False) as client:
+        with httpx.Client(timeout=req.timeout_s, follow_redirects=False, trust_env=False) as client:
             response = client.post(url, params={"key": provider.api_key}, json=payload)
             response.raise_for_status()
             data = response.json()
@@ -427,6 +520,7 @@ class ProviderClient:
         if not text.strip():
             raise RuntimeError("empty_provider_response")
         return text, data
+
 
 # Backward compatible name used by existing tests.
 OpenAICompatibleClient = ProviderClient

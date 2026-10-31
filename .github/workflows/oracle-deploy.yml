@@ -34,6 +34,9 @@ jobs:
       - run: pytest
 
   deploy:
+    # Stage 8 offline freeze: never connect to Oracle or run live inference.
+    # Re-enabling requires a separately reviewed, explicitly authorized change.
+    if: ${{ false }}
     needs: tests
     runs-on: ubuntu-latest
     timeout-minutes: 15

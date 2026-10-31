@@ -1,5 +1,10 @@
 """NVIDIA discovery inventory must not silently expand the billable routing set."""
 import httpx
+import pytest
+
+from router import billing
+
+pytestmark = pytest.mark.strict_billing
 
 from router.billing import NVIDIA_ROUTING_ALLOWLIST
 from router.catalog import ProviderCatalog, ProviderSpec
@@ -55,31 +60,32 @@ def test_nvidia_discovers_130_unknown_models_without_approving_billing(monkeypat
     registered.spec = catalog.merge_discovered_models("nvidia", discovered)
     report = model_coverage([registered], RouteRequest("hola"))
     assert report["totals"]["cataloged_models"] == 132
-    assert report["totals"]["eligible_models"] == 2
-    assert report["totals"]["excluded_models"] == 130
-    assert report["providers"][0]["excluded_by_reason"] == {"billing_unverified": 130}
-    assert len(rank([registered], RouteRequest("hola"))) == 2
-    assert all(dec.model in NVIDIA_ROUTING_ALLOWLIST for dec in rank([registered], RouteRequest("hola")))
+    assert report["totals"]["eligible_models"] == 0
+    assert report["totals"]["excluded_models"] == 132
+    assert report["providers"][0]["excluded_by_reason"] == {"billing_unverified": 132}
+    assert rank([registered], RouteRequest("hola")) == []
 
     # A restarted catalog still distinguishes inventory from approved routing.
     loaded = ProviderCatalog(providers=(spec,), storage_path=path)
     registered.spec = loaded.get("nvidia")
     assert len(registered.spec.models) == 132
-    assert model_coverage([registered], RouteRequest("hola"))["totals"]["eligible_models"] == 2
+    assert model_coverage([registered], RouteRequest("hola"))["totals"]["eligible_models"] == 0
 
     # Capability verification does not certify a model's price or authorize billing.
     loaded.record_capability("nvidia", unknown[0], "chat", "verified", "synthetic_test")
     registered.spec = loaded.get("nvidia")
-    assert model_coverage([registered], RouteRequest("hola"))["totals"]["eligible_models"] == 2
+    assert model_coverage([registered], RouteRequest("hola"))["totals"]["eligible_models"] == 0
 
 
-def test_route_never_attempts_new_nvidia_model_without_billing_approval():
+def test_route_never_attempts_new_nvidia_model_without_billing_approval(monkeypatch):
+    # Price and account guarantees are simulated for the historical fallback test.
+    monkeypatch.setattr(billing, "account_billing_ineligibility_reason", lambda _: None)
     from router.catalog import ModelSpec
     spec = ProviderSpec(
         "nvidia", ("nvidia",), NVIDIA_BASE,
         models=(
             ModelSpec("vendor/unknown-chat", frozenset({"chat"}), "strong", 1000, 1),
-            ModelSpec("moonshotai/kimi-k3", frozenset({"chat"}), "standard", 50, 35),
+            ModelSpec("moonshotai/kimi-k3", frozenset({"chat"}), "standard", 50, 35, billing_status="free"),
         ),
     )
 

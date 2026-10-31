@@ -3,12 +3,18 @@
 
 Only a private snapshot, a detached Git worktree and an unprivileged loopback
 sidecar are created. This program NEVER switches router.service or edits router.db.
+The current free-model-only policy removes account-audit prerequisites, but
+staging remains isolated and cannot authorize production inference.
 """
 from __future__ import annotations
 
+import getpass
+import hashlib
+import importlib.util
 import json
 import os
 import re
+import shlex
 import shutil
 import socket
 import sqlite3
@@ -18,10 +24,18 @@ import tarfile
 import tempfile
 import time
 import urllib.request
+import uuid
 from pathlib import Path
 
-PINNED_SHA = "339898a6081061b41ad2557b600e06efbc1f00ef"
-RELEASE_BRANCH = "release/router-baseline-20261025"
+RELEASE_BRANCH = "feat/offline-cooldown-restart-consistency-20261028"
+
+
+def candidate_pin() -> str:
+    """Require an explicit immutable candidate SHA; never silently stage the old baseline."""
+    sha = os.environ.get("ROUTER_RELEASE_SHA", "")
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise StageBlocked("candidate_sha_required")
+    return sha
 APP = Path("/home/ubuntu/Proyecto/Herramientas/Router")
 DATA = Path("/home/ubuntu/Proyecto/Datos/Router")
 SIDECAR_PORT = 18010
@@ -60,6 +74,35 @@ def sqlite_snapshot(source: Path, destination: Path) -> bool:
     return True
 
 
+def effective_service_data_paths(raw: bytes, app: Path) -> dict[str, Path]:
+    """Select only Router data locations; never log or retain credential values."""
+    wanted = {b"ROUTER_DB_FILE": "db", b"ROUTER_CATALOG_FILE": "catalog"}
+    selected: dict[str, Path] = {}
+    for item in raw.split(b"\0"):
+        key, sep, value = item.partition(b"=")
+        if not sep or key not in wanted or not value:
+            continue
+        path = Path(os.fsdecode(value))
+        if not path.is_absolute():
+            path = app / path
+        selected[wanted[key]] = path
+    if set(selected) != {"db", "catalog"}:
+        raise StageBlocked("effective_data_paths_unverified")
+    return selected
+
+
+def service_data_paths() -> dict[str, Path]:
+    """Read the running service's effective paths, not SSH runner env files."""
+    try:
+        pid = int(command("systemctl", "show", "router.service", "-p", "MainPID", "--value"))
+        if pid <= 0:
+            raise StageBlocked("service_pid_unavailable")
+        raw = (Path("/proc") / str(pid) / "environ").read_bytes()
+    except (ValueError, OSError, subprocess.CalledProcessError):
+        raise StageBlocked("effective_data_paths_unavailable") from None
+    return effective_service_data_paths(raw, APP)
+
+
 def health(port: int) -> bool:
     try:
         with urllib.request.urlopen(
@@ -75,7 +118,7 @@ def port_free(port: int) -> bool:
         return sock.connect_ex(("127.0.0.1", port)) != 0
 
 
-def backup_checkout(app: Path, snapshot: Path, base: str) -> dict[str, int]:
+def backup_checkout(app: Path, snapshot: Path, base: str, active: dict[str, Path] | None = None) -> dict[str, int]:
     command("git", "rev-parse", "HEAD", cwd=app, output=snapshot / "oracle-head.txt")
     command("git", "status", "--porcelain=v1", "-z", cwd=app, output=snapshot / "status.bin")
     command("git", "diff", "--binary", "HEAD", "--", cwd=app, output=snapshot / "uncommitted.patch")
@@ -103,58 +146,327 @@ def backup_checkout(app: Path, snapshot: Path, base: str) -> dict[str, int]:
     ):
         if source.is_file() and not source.is_symlink():
             shutil.copy2(source, snapshot / label)
+    if active is not None:
+        db = active["db"]
+        if not sqlite_snapshot(db, snapshot / "effective-router.db"):
+            raise StageBlocked("effective_database_missing")
+        catalog = active["catalog"]
+        if catalog.is_symlink() or not catalog.is_file():
+            raise StageBlocked("effective_catalog_missing_or_unsafe")
+        shutil.copyfile(catalog, snapshot / "effective-catalog.json")
+        (snapshot / "effective-catalog.json").chmod(0o600)
+        print("effective_data_snapshot=created", flush=True)
     for item in snapshot.iterdir():
         if item.is_file():
             item.chmod(0o600)
     return {"untracked": len(names)}
 
 
-def isolated_sidecar(release: Path, python: Path, snapshot: Path) -> bool:
+def isolated_sidecar(release: Path, python: Path, snapshot: Path, label: str) -> bool:
+    """Run a disposable, OS-network-isolated service on the sidecar port.
+
+    This never edits router.service. Each invocation uses a fresh private DB,
+    no provider credentials and a transient systemd unit restricted to loopback.
+    """
     if not port_free(SIDECAR_PORT):
         raise StageBlocked("sidecar_port_busy")
-    env = dict(os.environ)
-    # Do not use live databases, provider credentials or a production catalog.
-    for key in tuple(env):
-        if key.endswith("_API_KEY") or key.endswith("_TOKEN") or key in (
-            "ROUTER_MASTER_KEY", "ROUTER_SERVICE_TOKEN", "ROUTER_IACHAT_TOKEN"
-        ):
-            env.pop(key, None)
+    # Exercise both code versions against a *copy of the effective live-data
+    # snapshot*, never a new empty DB. Recreate the copy for baseline rollback
+    # so candidate migrations cannot contaminate the restored baseline.
+    source_db = snapshot / "effective-router.db"
+    source_catalog = snapshot / "effective-catalog.json"
+    sidecar_db = snapshot / f"sidecar-{label}.db"
+    sidecar_catalog = snapshot / f"sidecar-{label}-catalog.json"
+    for source, destination in ((source_db, sidecar_db),
+                                (source_catalog, sidecar_catalog)):
+        if source.is_symlink() or not source.is_file() or destination.exists() or destination.is_symlink():
+            raise StageBlocked("sidecar_snapshot_unsafe")
+        shutil.copyfile(source, destination)
+        destination.chmod(0o600)
+    with sqlite3.connect(sidecar_db) as restored:
+        if restored.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+            raise StageBlocked("sidecar_snapshot_integrity_failed")
+    env = {key: os.environ[key] for key in ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "TZ")
+           if key in os.environ}
     env.update({
         "PYTHONPATH": str(release),
+        "ROUTER_OFFLINE_ONLY": "1",
         "PYTHONDONTWRITEBYTECODE": "1",
-        "ROUTER_DB_FILE": str(snapshot / "sidecar.db"),
-        "ROUTER_CATALOG_FILE": str(snapshot / "sidecar-catalog.json"),
+        "ROUTER_DB_FILE": str(sidecar_db),
+        "ROUTER_CATALOG_FILE": str(sidecar_catalog),
         "ROUTER_STARTUP_PROVIDER_TESTS": "0",
         "ROUTER_STARTUP_ROUTING_SMOKE": "0",
         "ROUTER_STARTUP_CAPABILITY_PROFILE": "0",
         "ROUTER_STARTUP_ORCHESTRATION_SMOKE": "0",
         "ROUTER_STARTUP_HETEROGENEOUS_SMOKE": "0",
     })
-    with (snapshot / "sidecar.log").open("wb") as log:
-        process = subprocess.Popen(
-            [str(python), "-m", "uvicorn", "router.api:app", "--host", "127.0.0.1",
-             "--port", str(SIDECAR_PORT)],
-            cwd=release, env=env, stdout=log, stderr=subprocess.STDOUT,
-            start_new_session=True,
+    unit = "router-stage-sidecar-" + uuid.uuid4().hex[:12]
+    args = [
+        "sudo", "-n", "systemd-run", "--quiet", "--collect",
+        "--unit=" + unit,
+        "--property=User=" + getpass.getuser(),
+        "--property=WorkingDirectory=" + str(release),
+        "--property=NoNewPrivileges=yes",
+        "--property=IPAddressDeny=any",
+        "--property=IPAddressAllow=localhost",
+        "--property=ProtectSystem=strict",
+        "--property=ReadWritePaths=" + str(snapshot),
+        "--property=PrivateTmp=yes",
+    ]
+    args.extend("--setenv=" + key + "=" + value for key, value in env.items())
+    args += [str(python), "-m", "uvicorn", "router.api:app", "--host", "127.0.0.1",
+             "--port", str(SIDECAR_PORT)]
+    subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                   check=True, timeout=15)
+    try:
+        for _ in range(30):
+            if health(SIDECAR_PORT):
+                return True
+            if subprocess.run(["systemctl", "is-active", "--quiet", unit],
+                              stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL).returncode != 0:
+                return False
+            time.sleep(1)
+        return False
+    finally:
+        subprocess.run(["sudo", "-n", "systemctl", "stop", unit],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       timeout=15)
+        for _ in range(15):
+            if port_free(SIDECAR_PORT):
+                break
+            time.sleep(0.2)
+        else:
+            raise StageBlocked("sidecar_not_stopped")
+
+
+
+def classify_live_app_dir(raw_exec: str) -> str:
+    """Report only a fixed provenance category, never a service path or secret."""
+    try:
+        match = re.search(r"argv\[\]=(.*?)\s+;\s+ignore_errors=", raw_exec)
+        if match is None:
+            return "unparseable"
+        args = shlex.split(match.group(1))
+        if args.count("--app-dir") != 1:
+            return "absent_or_ambiguous"
+        index = args.index("--app-dir") + 1
+        if index >= len(args):
+            return "missing_value"
+        supplied = Path(args[index])
+        root = supplied if supplied.is_absolute() else APP / supplied
+        resolved_root = root.resolve(strict=True)
+        resolved_app = APP.resolve(strict=True)
+        if resolved_root == resolved_app:
+            return "checkout_alias"
+        expected = resolved_app / "router" / "api.py"
+        actual = resolved_root / "router" / "api.py"
+        same_module = expected.is_file() and actual.is_file() and expected.samefile(actual)
+        if resolved_root.is_relative_to(resolved_app):
+            return "checkout_child"
+        if resolved_app.is_relative_to(resolved_root):
+            return "ancestor_same_module" if same_module else "ancestor_unverified_module"
+        if same_module:
+            return "external_same_module"
+        if (resolved_root.is_dir() and expected.is_file()
+                and not (resolved_root / "router").exists()
+                and not (resolved_root / "router.py").exists()):
+            return "external_inert_root"
+        if (resolved_root / "router").exists() or (resolved_root / "router.py").exists():
+            return "external_shadow_router"
+        return "external_unverified_module"
+    except (OSError, ValueError, IndexError, RuntimeError):
+        return "unavailable"
+
+
+
+def external_router_history(raw_exec: str, candidate_sha: str) -> str:
+    """Classify a different live import checkout without exposing any paths.
+
+    A clean checkout at a commit already contained in the candidate can be
+    preserved/reconciled. This is read-only: never reset or modify that tree.
+    """
+    try:
+        match = re.search(r"argv\[\]=(.*?)\s+;\s+ignore_errors=", raw_exec)
+        if match is None:
+            return "exec_unparseable"
+        args = shlex.split(match.group(1))
+        if args.count("--app-dir") != 1:
+            return "app_dir_unavailable"
+        value = args[args.index("--app-dir") + 1]
+        root = (Path(value) if Path(value).is_absolute() else APP / value).resolve(strict=True)
+        if not (root / "router" / "api.py").is_file():
+            return "not_router_package"
+        git_root = Path(command("git", "-C", str(root), "rev-parse", "--show-toplevel")).resolve(strict=True)
+        if git_root != root:
+            return "nested_git_root"
+        dirty = subprocess.check_output(
+            ["git", "-C", str(root), "status", "--porcelain=v1", "-z"],
+            stderr=subprocess.DEVNULL,
         )
-        try:
-            for _ in range(30):
-                if process.poll() is not None:
-                    return False
-                if health(SIDECAR_PORT):
-                    return True
-                time.sleep(1)
-            return False
-        finally:
-            process.terminate()
+        if dirty:
+            return "external_checkout_dirty"
+        external_sha = command("git", "-C", str(root), "rev-parse", "HEAD")
+        if not re.fullmatch(r"[0-9a-f]{40}", external_sha):
+            return "external_commit_invalid"
+        known = subprocess.run(
+            ["git", "-C", str(APP), "cat-file", "-e", external_sha + "^{commit}"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        if known.returncode:
+            return "external_history_unknown"
+        ancestor = subprocess.run(
+            ["git", "-C", str(APP), "merge-base", "--is-ancestor", external_sha, candidate_sha],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        return "clean_known_ancestor" if ancestor.returncode == 0 else "not_candidate_ancestor"
+    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+        return "external_history_unverified"
+
+
+
+
+def classify_existing_override(path: Path) -> str:
+    """Read only, emit a fixed category; never expose drop-in contents."""
+    try:
+        if subprocess.run(["sudo", "-n", "test", "-L", str(path)],
+                          stdout=subprocess.DEVNULL,
+                          stderr=subprocess.DEVNULL).returncode == 0:
+            return "symlink_unsafe"
+        raw = subprocess.check_output(
+            ["sudo", "-n", "cat", str(path)],
+            stderr=subprocess.DEVNULL, timeout=10,
+        )
+        if not raw or len(raw) > 65536:
+            return "empty_or_oversized"
+        content = raw.decode("utf-8", errors="replace")
+        if ("[Service]" in content and "ROUTER_OFFLINE_ONLY=1" in content
+                and "IPAddressDeny=any" in content
+                and "IPAddressAllow=localhost" in content
+                and "ExecStart=" in content):
+            return "previous_offline_router_release"
+        if "[Service]" in content and "ExecStart=" in content:
+            return "custom_service_exec_override"
+        return "other_service_override"
+    except (OSError, subprocess.SubprocessError):
+        return "unreadable"
+
+
+
+def preflight_promotion_layout(promote_module: object) -> None:
+    """Read-only rehearsal of promotion's actual systemd compatibility gates.
+
+    Do not inspect or print EnvironmentFile contents or secrets. This prevents
+    a green isolated rollback from masking a production switch that cannot
+    parse the live unit, while leaving the service entirely untouched.
+    """
+    if command("systemctl", "show", "router.service", "-p", "WorkingDirectory",
+               "--value") != str(APP):
+        raise StageBlocked("promotion_service_workdir_unsupported")
+    user = command("systemctl", "show", "router.service", "-p", "User", "--value")
+    if not promote_module.SAFE_USER.fullmatch(user) or user != getpass.getuser():
+        raise StageBlocked("promotion_service_user_unsupported")
+    try:
+        promote_module.environment_files(command(
+            "systemctl", "show", "router.service", "-p", "EnvironmentFiles", "--value"))
+    except promote_module.PromoteBlocked:
+        raise StageBlocked("promotion_service_environment_unsupported") from None
+    inline = command("systemctl", "show", "router.service", "-p", "Environment", "--value")
+    if re.search(r"(?:KEY|TOKEN|PASSWORD|SECRET|CREDENTIAL)", inline, re.I):
+        raise StageBlocked("promotion_inline_secrets_unsupported")
+    raw_exec = command("systemctl", "show", "router.service", "-p", "ExecStart", "--value")
+    provenance = classify_live_app_dir(raw_exec)
+    print("production_app_dir_provenance=" + provenance, flush=True)
+    if provenance == "external_shadow_router":
+        print("external_router_history=" + external_router_history(raw_exec, candidate_pin()), flush=True)
+    try:
+        parsed_argv = promote_module.original_argv(raw_exec)
+        promote_module.candidate_argv(parsed_argv)
+    except promote_module.PromoteBlocked as error:
+        # Both are fixed internal reason codes, never service command values.
+        if str(error) == "service_app_dir_unsupported":
+            print("production_app_dir_provenance=" + classify_live_app_dir(raw_exec), flush=True)
+        if str(error) in ("service_app_dir_unsupported", "candidate_app_dir_unavailable"):
+            raise StageBlocked("promotion_" + str(error)) from None
+        # Emit a *category only*: never echo executable paths, flags, tokens,
+        # environment values or the raw systemd record to Actions logs.
+        match = re.search(r"argv\[\]=(.*?)\s+;\s+ignore_errors=", raw_exec)
+        if match is None:
+            reason = "promotion_exec_record_format"
+        else:
             try:
-                process.wait(timeout=8)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=5)
+                args = shlex.split(match.group(1))
+            except ValueError:
+                args = []
+            if not args:
+                reason = "promotion_exec_unparseable"
+            elif not str(Path(args[0])).startswith(str(APP / ".venv/bin/")):
+                reason = "promotion_exec_interpreter"
+            elif "router.api:app" not in args:
+                reason = "promotion_exec_application"
+            elif "--reload" in args:
+                reason = "promotion_exec_reload"
+            elif "--app-dir" in args:
+                reason = "promotion_exec_appdir_value"
+            elif "--host" not in args or args.index("--host") + 1 >= len(args) or args[args.index("--host") + 1] != "127.0.0.1":
+                reason = "promotion_exec_host"
+            elif "--port" not in args or args.index("--port") + 1 >= len(args) or args[args.index("--port") + 1] != "8010":
+                reason = "promotion_exec_port"
+            elif any(not re.fullmatch(r"[-a-zA-Z0-9_./:=]+", x) for x in args):
+                reason = "promotion_exec_argument_syntax"
+            else:
+                reason = "promotion_exec_other"
+        raise StageBlocked(reason) from None
+    if not promote_module.dropin_precedence_safe():
+        raise StageBlocked("promotion_service_dropin_order_unsupported")
+    override = subprocess.run(
+        ["sudo", "-n", "test", "-e", str(promote_module.OVERRIDE)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    if override.returncode == 0:
+        print("existing_override_kind=" + classify_existing_override(promote_module.OVERRIDE),
+              flush=True)
+        raise StageBlocked("promotion_override_already_present")
+    if override.returncode != 1:
+        raise StageBlocked("promotion_override_check_unavailable")
+    print("production_switch_preflight=passed", flush=True)
+
+
+
+def live_baseline_root(pin: str, snapshot: Path) -> Path:
+    """Preserve the actual external import checkout before rollback rehearsal."""
+    raw = command("systemctl", "show", "router.service", "-p", "ExecStart", "--value")
+    if classify_live_app_dir(raw) != "external_shadow_router":
+        return APP
+    if external_router_history(raw, pin) != "clean_known_ancestor":
+        raise StageBlocked("external_live_source_not_preserved")
+    match = re.search(r"argv\[\]=(.*?)\s+;\s+ignore_errors=", raw)
+    if match is None:
+        raise StageBlocked("external_live_source_unparseable")
+    args = shlex.split(match.group(1))
+    root_arg = args[args.index("--app-dir") + 1]
+    root = (Path(root_arg) if Path(root_arg).is_absolute() else APP / root_arg).resolve(strict=True)
+    command("git", "-C", str(root), "rev-parse", "HEAD",
+            output=snapshot / "external-live-head.txt")
+    bundle = snapshot / "external-live-source.bundle"
+    command("git", "-C", str(root), "bundle", "create", str(bundle), "HEAD")
+    if not bundle.is_file() or bundle.stat().st_size == 0:
+        raise StageBlocked("external_live_source_backup_failed")
+    verified = subprocess.run(
+        ["git", "-C", str(root), "bundle", "verify", str(bundle)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20,
+    )
+    if verified.returncode:
+        raise StageBlocked("external_live_source_bundle_invalid")
+    for file in (snapshot / "external-live-head.txt", bundle):
+        file.chmod(0o600)
+    print("external_live_source_backup=created", flush=True)
+    return root
+
 
 
 def stage() -> None:
+    pin = candidate_pin()
     os.umask(0o077)
     if not APP.is_dir() or APP.is_symlink():
         raise StageBlocked("missing_or_unsafe_checkout")
@@ -175,45 +487,127 @@ def stage() -> None:
     original_head = command("git", "rev-parse", "HEAD", cwd=APP)
     command("git", "fetch", "--quiet", "origin", f"refs/heads/{RELEASE_BRANCH}", cwd=APP)
     fetched = command("git", "rev-parse", "FETCH_HEAD", cwd=APP)
-    if fetched != PINNED_SHA:
+    if fetched != pin:
         raise StageBlocked("frozen_release_sha_mismatch")
-    base = command("git", "merge-base", original_head, PINNED_SHA, cwd=APP)
-    counts = backup_checkout(APP, snapshot, base)
+    base = command("git", "merge-base", original_head, pin, cwd=APP)
+    counts = backup_checkout(APP, snapshot, base, active=service_data_paths())
     print("private_snapshot=created", flush=True)
     print(f"private_untracked_preserved={counts['untracked']}", flush=True)
-    release = release_root / PINNED_SHA
+    release = release_root / pin
     if release.exists():
-        if release.is_symlink() or command("git", "rev-parse", "HEAD", cwd=release) != PINNED_SHA:
+        if release.is_symlink() or command("git", "rev-parse", "HEAD", cwd=release) != pin:
             raise StageBlocked("existing_release_not_pinned")
     else:
-        command("git", "worktree", "add", "--detach", str(release), PINNED_SHA, cwd=APP)
+        command("git", "worktree", "add", "--detach", str(release), pin, cwd=APP)
     print("frozen_release_worktree=staged", flush=True)
-    env = dict(os.environ)
-    env.update({
+    # The tests assert the normal billing-denial reason, so do NOT set
+    # ROUTER_OFFLINE_ONLY for pytest: it changes the expected error codes.
+    # Instead, run the entire suite in a transient OS-level network sandbox,
+    # with no provider credentials and no access to non-loopback IP addresses.
+    env = {
         "PYTHONPATH": str(release),
         "PYTHONDONTWRITEBYTECODE": "1",
         "ROUTER_PYTHON": str(python),
         "ROUTER_DB_FILE": str(snapshot / "pytest.db"),
         "ROUTER_CATALOG_FILE": str(snapshot / "pytest-catalog.json"),
-    })
+        "HOME": str(Path.home()),
+    }
+    unit = "router-stage-pytest-" + uuid.uuid4().hex[:12]
+    sandbox = [
+        "sudo", "-n", "systemd-run", "--quiet", "--pipe", "--wait", "--collect",
+        "--unit=" + unit,
+        "--property=User=" + getpass.getuser(),
+        "--property=WorkingDirectory=" + str(release),
+        "--property=NoNewPrivileges=yes",
+        "--property=IPAddressDeny=any",
+        "--property=IPAddressAllow=localhost",
+        "--property=ProtectSystem=strict",
+        "--property=ReadWritePaths=" + str(snapshot),
+        "--property=PrivateTmp=yes",
+    ]
+    sandbox.extend("--setenv=" + key + "=" + value for key, value in env.items())
+    sandbox += [str(python), "-m", "pytest", "-q", "-p", "no:cacheprovider"]
     with (snapshot / "pytest.log").open("wb") as log:
         result = subprocess.run(
-            [str(python), "-m", "pytest", "-q", "-p", "no:cacheprovider"],
-            cwd=release, env=env, stdout=log, stderr=subprocess.STDOUT,
+            sandbox, cwd=release, stdout=log, stderr=subprocess.STDOUT,
             timeout=180,
         )
     print(f"staged_pytest={'passed' if result.returncode == 0 else 'failed'}", flush=True)
     if result.returncode:
+        # Only expose public test identifiers; private assertion text stays on Oracle.
+        pattern = re.compile(r"^(?:FAILED|ERROR) (tests/[A-Za-z0-9_./\[\]-]+(?:::[A-Za-z0-9_./\[\]-]+)*)")
+        cases = []
+        for line in (snapshot / "pytest.log").read_text(errors="replace").splitlines():
+            match = pattern.match(line)
+            if match:
+                cases.append(match.group(1))
+        print(f"staged_pytest_failure_count={len(cases)}", flush=True)
+        for case in cases[:12]:
+            print(f"staged_pytest_case={case}", flush=True)
         raise StageBlocked("staged_pytest_failed")
-    passed = isolated_sidecar(release, python, snapshot)
-    print(f"isolated_health={'passed' if passed else 'failed'}", flush=True)
-    if not passed:
-        raise StageBlocked("isolated_health_failed")
+    # Rehearse baseline -> pinned candidate -> baseline on one disposable port.
+    # Verify the *original* private data snapshot remains byte-for-byte intact
+    # across each simulated migration and restoration.
+    # This is a real process rollback rehearsal, NOT a production unit switch.
+    originals = (snapshot / "effective-router.db", snapshot / "effective-catalog.json")
+    def digest(path: Path) -> str:
+        with path.open("rb") as stream:
+            return hashlib.file_digest(stream, "sha256").hexdigest()
+    original_digests = tuple(digest(path) for path in originals)
+    # Rehearse the EXACT candidate promotion data isolation helper against
+    # private effective-data snapshots. This validates the code that prevents
+    # a failed production switch from migrating the original live database.
+    for source, name in zip(originals, ("predeploy-router.db", "predeploy-catalog.json")):
+        target = snapshot / name
+        if target.exists() or target.is_symlink():
+            raise StageBlocked("promotion_rehearsal_snapshot_exists")
+        shutil.copyfile(source, target)
+        target.chmod(0o600)
+    promotion_sources = (snapshot / "predeploy-router.db", snapshot / "predeploy-catalog.json")
+    promotion_source_digests = tuple(digest(path) for path in promotion_sources)
+    promote_path = release / "scripts/router_release_promote.py"
+    spec = importlib.util.spec_from_file_location("router_candidate_promote_rehearsal", promote_path)
+    if spec is None or spec.loader is None:
+        raise StageBlocked("promotion_rehearsal_module_unavailable")
+    try:
+        promote_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(promote_module)
+        candidate_db, candidate_catalog = promote_module.prepare_candidate_data(snapshot)
+    except Exception:
+        # Never emit candidate tracebacks or private snapshot paths to CI logs.
+        raise StageBlocked("promotion_data_rehearsal_failed") from None
+    if (not candidate_db.is_file() or not candidate_catalog.is_file()
+            or tuple(digest(path) for path in originals) != original_digests
+            or tuple(digest(path) for path in promotion_sources) != promotion_source_digests):
+        raise StageBlocked("promotion_rehearsal_data_not_isolated")
+    print("isolated_promotion_data_rehearsal=passed", flush=True)
+    preflight_block = None
+    try:
+        preflight_promotion_layout(promote_module)
+    except StageBlocked as error:
+        # Keep rehearsing the isolated process rollback, but never mark the
+        # candidate promotable while its real systemd layout is unsupported.
+        preflight_block = str(error)
+        print("production_switch_preflight=blocked", flush=True)
+    baseline = live_baseline_root(pin, snapshot)
+    for source, label in ((baseline, "baseline-before"), (release, "candidate"),
+                          (baseline, "baseline-restored")):
+        passed = isolated_sidecar(source, python, snapshot, label)
+        print(f"sidecar_{label.replace('-', '_')}={'passed' if passed else 'failed'}",
+              flush=True)
+        if tuple(digest(path) for path in originals) != original_digests:
+            raise StageBlocked("effective_snapshot_changed")
+        if not passed:
+            raise StageBlocked("sidecar_" + label.replace("-", "_") + "_failed")
+    print("isolated_health=passed", flush=True)
+    print("isolated_process_rollback_rehearsal=passed", flush=True)
     if command("git", "rev-parse", "HEAD", cwd=APP) != original_head:
         raise StageBlocked("production_head_changed")
     if command("systemctl", "is-active", "router.service") != "active" or not health(8010):
         raise StageBlocked("production_health_changed")
     print("production_service_unchanged=yes", flush=True)
+    if preflight_block is not None:
+        raise StageBlocked(preflight_block)
     print("live_chat_and_fallback=not_yet_tested", flush=True)
     print("release_status=STAGED_NOT_DEPLOYED", flush=True)
 

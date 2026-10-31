@@ -15,7 +15,12 @@ dev = ["pytest>=8,<9"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = ["strict_billing: use production account-level default-deny rather than simulated offline billing"]
 
+
+[tool.setuptools.packages.find]
+include = ["router*"]
+exclude = ["wheelhouse*", "tests*"]
 
 [tool.setuptools.package-data]
 router = ["static/*"]

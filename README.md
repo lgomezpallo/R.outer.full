@@ -10,7 +10,7 @@ Las aplicaciones no conocen Groq, OpenRouter, NVIDIA, Mistral, Cerebras, SambaNo
 
 ## Criterio de costo
 
-Para este proyecto los proveedores se consideran de costo monetario cero. El costo que optimiza Router es estratégico: rareza, importancia, reemplazabilidad y conveniencia de reservar un recurso.
+**Política vigente:** sólo son elegibles modelos marcados explícitamente `free`, con endpoint permitido. Los modelos `paid` o `unknown` se excluyen en selección y transporte; ante agotamiento de cuota se intenta otro gratuito o se falla sin respuesta. La auditoría de facturación por cuenta no es un prerrequisito de desarrollo, CI o fusión. La marca `free` no garantiza ausencia de cargos en una cuenta. No contratar servicios ni habilitar pagos. El costo estratégico de selección (rareza, reemplazabilidad) es distinto del riesgo de cobro.
 
 Entre candidatos saludables y suficientes, usa primero el menos valioso. Los modelos fuertes/escasos quedan para tareas que realmente los necesiten.
 
@@ -35,7 +35,7 @@ El catálogo ya reconoce Groq, OpenRouter, NVIDIA NIM, Mistral, Cerebras y Samba
 
 Variables de entorno reconocidas: GROQ_API_KEY, OPENROUTER_API_KEY, NVIDIA_API_KEY, MISTRAL_API_KEY, CEREBRAS_API_KEY y SAMBANOVA_API_KEY.
 
-Al cargar una clave, Router intenta consultar /models y enriquecer el catálogo. Una falla de descubrimiento no impide usar los modelos bootstrap.
+Fuera del modo offline, cargar una clave puede consultar /models para enriquecer el catálogo; eso no autoriza inferencia ni acredita gratuidad. Para validación sin tráfico externo, configurar `ROUTER_OFFLINE_ONLY=1`, no aportar claves de proveedores y aislar la salida de red.
 
 ## Ejecutar
 
@@ -64,4 +64,4 @@ POST /route acepta task, context, requirements, capacidades, decompose opcional 
 
 ## Estado
 
-La v2 busca ser una base usable, no una demo: CI, tests, Docker, catálogo, orquestación, persistencia, métricas, fallback y compatibilidad HTTP están en el repositorio.
+La candidata de PR #87 requiere CI y staging aislado satisfactorios antes de fusionar o promover. `oracle-promote` permanece deshabilitado; ninguna validación offline acredita un despliegue productivo. La falta de auditoría económica por cuenta ya no bloquea integrar código. No se garantiza ausencia de cargos. Ver [checklist y contrato de release](docs/RELEASE_CANDIDATE_GO_UTE_OFFLINE.md).

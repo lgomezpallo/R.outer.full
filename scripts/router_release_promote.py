@@ -23,17 +23,23 @@ import urllib.request
 import uuid
 from pathlib import Path
 
-PINNED_SHA = "339898a6081061b41ad2557b600e06efbc1f00ef"
+PINNED_SHA = os.environ.get("ROUTER_RELEASE_SHA", "")
 APP = Path("/home/ubuntu/Proyecto/Herramientas/Router")
 RELEASE = Path.home() / "router-releases" / PINNED_SHA
 BACKUPS = Path.home() / "router-private-backups"
-OVERRIDE = Path("/etc/systemd/system/router.service.d/99-router-frozen-release.conf")
+OVERRIDE = Path("/etc/systemd/system/router.service.d/zzzz-router-frozen-release.conf")
 ENV_PATTERN = re.compile(r"(-?/[^\s()]+)\s+\(ignore_errors=(?:yes|no)\)")
 SAFE_USER = re.compile(r"[a-z_][a-z0-9_-]*")
 
 
 class PromoteBlocked(Exception):
     pass
+
+
+def candidate_pin() -> str:
+    if not re.fullmatch(r"[0-9a-f]{40}", PINNED_SHA):
+        raise PromoteBlocked("candidate_sha_required")
+    return PINNED_SHA
 
 
 def command(*args: str) -> str:
@@ -71,6 +77,69 @@ def environment_files(raw: str) -> list[str]:
     return paths
 
 
+def clean_known_external_checkout(root: Path) -> bool:
+    """Accept only a clean, tracked Router checkout in candidate ancestry."""
+    if not re.fullmatch(r"[0-9a-f]{40}", PINNED_SHA):
+        return False
+    if (root.is_symlink() or (root / "router").is_symlink()
+            or (root / "router" / "api.py").is_symlink()):
+        return False
+    try:
+        def git(*args: str) -> bytes:
+            return subprocess.check_output(
+                ["git", "-C", str(root), *args],
+                stderr=subprocess.DEVNULL, timeout=12,
+            ).strip()
+
+        if Path(os.fsdecode(git("rev-parse", "--show-toplevel"))).resolve() != root:
+            return False
+        if git("status", "--porcelain=v1", "--untracked-files=all", "-z"):
+            return False
+        if git("ls-files", "--error-unmatch", "router/api.py") != b"router/api.py":
+            return False
+        head = os.fsdecode(git("rev-parse", "HEAD"))
+        if not re.fullmatch(r"[0-9a-f]{40}", head):
+            return False
+        return subprocess.run(
+            ["git", "-C", str(APP), "merge-base", "--is-ancestor", head, PINNED_SHA],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=12,
+        ).returncode == 0
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
+
+
+def verified_external_app_dir(original: Path) -> Path:
+    """Map an external uvicorn import root only when it cannot shadow Router.
+
+    An external root with a different Router package is never silently
+    replaced: that may be the actual running production implementation.
+    The only allowed external roots are aliases of this checkout or inert
+    directories with no router module/package at their top level.
+    """
+    try:
+        root = original.resolve(strict=True)
+        checkout = APP.resolve(strict=True)
+        if not root.is_dir():
+            raise PromoteBlocked("service_app_dir_unsupported")
+        if root == checkout:
+            return Path(".")
+        if root.is_relative_to(checkout):
+            return root.relative_to(checkout)
+        expected = checkout / "router" / "api.py"
+        if not expected.is_file():
+            raise PromoteBlocked("service_app_dir_unsupported")
+        actual = root / "router" / "api.py"
+        if actual.is_file() and actual.samefile(expected):
+            return Path(".")
+        if actual.is_file() and clean_known_external_checkout(root):
+            return Path(".")
+        if (root / "router").exists() or (root / "router.py").exists():
+            raise PromoteBlocked("service_app_dir_unsupported")
+        return Path(".")
+    except (OSError, RuntimeError, ValueError):
+        raise PromoteBlocked("service_app_dir_unsupported") from None
+
+
 def original_argv(raw: str) -> list[str]:
     match = re.search(r"argv\[\]=(.*?)\s+;\s+ignore_errors=", raw)
     if not match:
@@ -80,8 +149,20 @@ def original_argv(raw: str) -> list[str]:
         raise PromoteBlocked("service_exec_layout_unsupported")
     if not str(Path(argv[0])).startswith(str(APP / ".venv/bin/")):
         raise PromoteBlocked("service_interpreter_unsupported")
-    if "router.api:app" not in argv or "--app-dir" in argv or "--reload" in argv:
+    if "router.api:app" not in argv or "--reload" in argv or argv.count("--app-dir") > 1:
         raise PromoteBlocked("service_exec_layout_unsupported")
+    if "--app-dir" in argv:
+        pos = argv.index("--app-dir")
+        if pos + 1 >= len(argv):
+            raise PromoteBlocked("service_app_dir_unsupported")
+        original_dir = Path(argv[pos + 1])
+        # Allow only the current checkout or a child of it. Relative paths
+        # resolve from the verified service WorkingDirectory (APP).
+        if original_dir.is_absolute():
+            if not original_dir.is_relative_to(APP):
+                verified_external_app_dir(original_dir)
+        elif ".." in original_dir.parts:
+            raise PromoteBlocked("service_app_dir_unsupported")
     try:
         if argv[argv.index("--host") + 1] != "127.0.0.1":
             raise PromoteBlocked("service_host_unsupported")
@@ -90,6 +171,40 @@ def original_argv(raw: str) -> list[str]:
     except (ValueError, IndexError):
         raise PromoteBlocked("service_exec_layout_unsupported") from None
     return argv
+
+
+def candidate_argv(argv: list[str]) -> list[str]:
+    """Replace an existing uvicorn --app-dir instead of duplicating the flag."""
+    if "--app-dir" not in argv:
+        new_argv = argv + ["--app-dir", str(RELEASE)]
+    else:
+        new_argv = argv.copy()
+        index = new_argv.index("--app-dir") + 1
+        current = Path(new_argv[index])
+        if current.is_absolute() and not current.is_relative_to(APP):
+            suffix = verified_external_app_dir(current)
+        else:
+            suffix = current.relative_to(APP) if current.is_absolute() else current
+        candidate_dir = RELEASE / suffix
+        # Reject missing, symlinked or escaped import roots before the switch.
+        if (not candidate_dir.is_dir() or candidate_dir.is_symlink()
+                or not candidate_dir.resolve().is_relative_to(RELEASE.resolve())):
+            raise PromoteBlocked("candidate_app_dir_unavailable")
+        new_argv[index] = str(candidate_dir)
+    return new_argv
+
+
+
+def dropin_precedence_safe() -> bool:
+    """A new late drop-in must not collide with or precede an existing one."""
+    try:
+        raw = command("systemctl", "show", "router.service", "-p",
+                      "DropInPaths", "--value")
+        paths = raw.split()
+        return all(Path(item).name < OVERRIDE.name for item in paths)
+    except (OSError, subprocess.SubprocessError):
+        return False
+
 
 
 def private_dir(path: Path) -> None:
@@ -118,35 +233,59 @@ def inner_backup(work: Path) -> None:
     catalog = Path(os.getenv("ROUTER_CATALOG_FILE", "router-catalog.json"))
     if not catalog.is_absolute():
         catalog = APP / catalog
-    if catalog.exists():
-        if catalog.is_symlink() or not catalog.is_file():
-            raise PromoteBlocked("catalog_path_unsafe")
-        shutil.copyfile(catalog, work / "predeploy-catalog.json")
-        (work / "predeploy-catalog.json").chmod(0o600)
+    if catalog.is_symlink() or not catalog.is_file():
+        raise PromoteBlocked("catalog_path_unsafe_or_missing")
+    shutil.copyfile(catalog, work / "predeploy-catalog.json")
+    (work / "predeploy-catalog.json").chmod(0o600)
     print("production_data_snapshot=passed", flush=True)
 
 
+def prepare_candidate_data(work: Path) -> tuple[Path, Path]:
+    """Run the candidate on private snapshots, never the live Router DB/catalog.
+
+    Rolling back the systemd drop-in then restores the original code AND data
+    paths, without trying to overwrite an active WAL-mode database. Candidate
+    writes remain quarantined until a separately approved data migration.
+    """
+    sources = (work / "predeploy-router.db", work / "predeploy-catalog.json")
+    targets = (work / "candidate-router.db", work / "candidate-catalog.json")
+    for source, target in zip(sources, targets):
+        if (source.is_symlink() or not source.is_file()
+                or target.exists() or target.is_symlink()):
+            raise PromoteBlocked("candidate_data_snapshot_unavailable")
+        shutil.copyfile(source, target)
+        target.chmod(0o600)
+    with sqlite3.connect(targets[0]) as db:
+        if db.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+            raise PromoteBlocked("candidate_database_integrity_failed")
+    print("candidate_data_isolated=passed", flush=True)
+    return targets
+
+
 def inner_verify() -> None:
+    """Assert a fail-closed G.O. request; never send a real chat completion."""
     token = os.getenv("ROUTER_SERVICE_TOKEN") or os.getenv("ROUTER_IACHAT_TOKEN")
     headers = {"Content-Type": "application/json"}
     if token:
         headers["Authorization"] = "Bearer " + token
     payload = json.dumps({
-        "model": "router-ia-auto",
-        "messages": [{"role": "user", "content": "Reply with a short greeting in Spanish."}],
-        "stream": False,
+        "task": "Offline release gate for G.O.",
+        "conversation": [{"role": "user", "content": "health check only"}],
+        "required_capabilities": ["chat"],
+        "application_name": "go-ute",
     }).encode()
-    req = urllib.request.Request("http://127.0.0.1:8010/v1/chat/completions",
+    req = urllib.request.Request("http://127.0.0.1:8010/route",
                                  data=payload, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=75) as response:
+        with urllib.request.urlopen(req, timeout=12) as response:
             body = json.load(response)
-            answer = body.get("choices", [{}])[0].get("message", {}).get("content")
-            if response.status != 200 or not isinstance(answer, str) or not answer.strip():
-                raise PromoteBlocked("postdeploy_chat_failed")
+            if (response.status != 200 or body.get("ok") is not False
+                    or body.get("error") != "no_eligible_provider"
+                    or body.get("text") is not None or body.get("attempts") != []):
+                raise PromoteBlocked("postdeploy_offline_route_failed")
     except (OSError, ValueError, KeyError):
-        raise PromoteBlocked("postdeploy_chat_failed") from None
-    print("postdeploy_chat=passed", flush=True)
+        raise PromoteBlocked("postdeploy_offline_route_failed") from None
+    print("postdeploy_offline_route=passed", flush=True)
 
 
 def private_unit(script: Path, work: Path, user: str, envfiles: list[str], mode: str) -> None:
@@ -164,7 +303,7 @@ def private_unit(script: Path, work: Path, user: str, envfiles: list[str], mode:
                 result = subprocess.run(args, stdout=log, stderr=subprocess.STDOUT, timeout=130)
             except subprocess.TimeoutExpired:
                 raise PromoteBlocked("private_unit_timeout") from None
-        expected = "production_data_snapshot=passed" if mode == "backup" else "postdeploy_chat=passed"
+        expected = "production_data_snapshot=passed" if mode == "backup" else "postdeploy_offline_route=passed"
         if result.returncode != 0 or expected not in (work / ("private-" + mode + ".log")).read_text(errors="replace"):
             raise PromoteBlocked("private_" + mode + "_failed")
         print(expected, flush=True)
@@ -180,7 +319,11 @@ def pinned_process() -> bool:
             return False
         argv = (Path("/proc") / str(pid) / "cmdline").read_bytes().split(b"\0")
         text = [item.decode(errors="replace") for item in argv if item]
-        return "--app-dir" in text and text[text.index("--app-dir") + 1] == str(RELEASE)
+        if "--app-dir" not in text or text[text.index("--app-dir") + 1] != str(RELEASE):
+            return False
+        environment = (Path("/proc") / str(pid) / "environ").read_bytes().split(b"\0")
+        required = {b"ROUTER_OFFLINE_ONLY=1"}
+        return required.issubset(set(environment))
     except (ValueError, IndexError, OSError):
         return False
 
@@ -196,6 +339,7 @@ def rollback() -> bool:
 
 
 def promote(script: Path) -> None:
+    candidate_pin()
     if command("git", "-C", str(RELEASE), "rev-parse", "HEAD") != PINNED_SHA:
         raise PromoteBlocked("release_pin_mismatch")
     if not wait_health():
@@ -211,6 +355,8 @@ def promote(script: Path) -> None:
     if re.search(r"(?:KEY|TOKEN|PASSWORD|SECRET|CREDENTIAL)", inline, re.I):
         raise PromoteBlocked("inline_secret_environment_unsupported")
     argv = original_argv(command("systemctl", "show", "router.service", "-p", "ExecStart", "--value"))
+    if not dropin_precedence_safe():
+        raise PromoteBlocked("service_dropin_order_unsupported")
     if subprocess.run(["sudo", "-n", "test", "-e", str(OVERRIDE)],
                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
         raise PromoteBlocked("existing_release_override")
@@ -222,9 +368,16 @@ def promote(script: Path) -> None:
                        stderr=subprocess.DEVNULL, check=True)
     (work / "original-unit.txt").chmod(0o600)
     private_unit(script, work, user, envfiles, "backup")
+    candidate_db, candidate_catalog = prepare_candidate_data(work)
     # Retain WorkingDirectory, EnvironmentFiles and the exact existing CLI flags.
-    new_argv = argv + ["--app-dir", str(RELEASE)]
-    content = "[Service]\nExecStart=\nExecStart=" + " ".join(new_argv) + "\n"
+    # The executable's environment overrides the original live-data paths.
+    # On rollback, removing this drop-in restores the untouched live DB/catalog.
+    new_argv = candidate_argv(argv)
+    content = ("[Service]\nIPAddressDeny=any\nIPAddressAllow=localhost\n"
+               "ExecStart=\nExecStart=/usr/bin/env ROUTER_OFFLINE_ONLY=1 "
+               + "ROUTER_DB_FILE=" + str(candidate_db) + " "
+               + "ROUTER_CATALOG_FILE=" + str(candidate_catalog) + " "
+               + " ".join(new_argv) + "\n")
     staged = work / "release-override.conf"
     staged.write_text(content)
     staged.chmod(0o600)

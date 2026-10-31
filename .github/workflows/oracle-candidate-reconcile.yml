@@ -1,0 +1,87 @@
+name: Router Oracle isolated reconciliation from encrypted snapshot
+
+on:
+  push:
+    branches: [feat/offline-cooldown-restart-consistency-20261028]
+    paths:
+      - .github/workflows/oracle-candidate-reconcile.yml
+      - scripts/oracle_snapshot_bridge.py
+      - scripts/oracle_method_three_way.py
+      - scripts/oracle_symbol_merge.py
+      - scripts/check_stage8_offline_workflows.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: router-oracle-candidate-snapshot
+  cancel-in-progress: false
+
+jobs:
+  preserve-and-reconcile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Detect already integrated Oracle tracked source
+        id: merged
+        shell: bash
+        run: |
+          if git merge-base --is-ancestor 365f62d67bc75e06a59276b9b51005e1b87154c2 HEAD; then
+            echo 'already=true' >> "$GITHUB_OUTPUT"
+            echo 'oracle_tracked_merge=already_committed'
+          else
+            echo 'already=false' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Recover previously encrypted Oracle snapshot without contacting Oracle
+        if: steps.merged.outputs.already != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SSH_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$SSH_KEY" || { echo "::error::Missing existing SSH recovery key"; exit 1; }
+          umask 077
+          mkdir -p "$RUNNER_TEMP/oracle-encrypted"
+          gh run download 40853340673 -R "$GITHUB_REPOSITORY" \
+            -n oracle-local-encrypted-40853340673 \
+            -D "$RUNNER_TEMP/oracle-encrypted"
+          SNAP_PASS="$( { printf 'router-oracle-snapshot-v1\n'; printf '%s\n' "$SSH_KEY"; } | sha256sum | cut -d' ' -f1)"
+          export SNAP_PASS
+          python3 - "$RUNNER_TEMP/oracle-encrypted" <<'PY'
+          import hashlib, hmac, os, pathlib, sys
+          directory = pathlib.Path(sys.argv[1])
+          ciphertext = directory / 'oracle-local-changes.enc'
+          macfile = directory / 'oracle-local-changes.enc.hmac'
+          expected = macfile.read_text().strip()
+          actual = hmac.new(bytes.fromhex(os.environ['SNAP_PASS']), ciphertext.read_bytes(), hashlib.sha256).hexdigest()
+          if not hmac.compare_digest(expected, actual):
+              raise SystemExit('encrypted snapshot integrity verification failed')
+          print('oracle_snapshot_hmac=verified')
+          PY
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 250000 \
+            -pass env:SNAP_PASS \
+            -in "$RUNNER_TEMP/oracle-encrypted/oracle-local-changes.enc" \
+            -out "$RUNNER_TEMP/oracle-snapshot-for-reconcile.tar"
+          unset SNAP_PASS SSH_KEY
+          echo 'oracle_snapshot=reused_prior_encrypted_backup'
+          echo 'oracle_ssh_connection=no'
+          echo 'oracle_production_modified=no'
+      - name: Reconcile tracked changes in runner-only disposable worktrees
+        if: steps.merged.outputs.already != 'true'
+        shell: bash
+        env:
+          ROUTER_RECONCILE_PATCH_PATH: ${{ runner.temp }}/oracle-merged.patch
+        run: |
+          set -euo pipefail
+          python3 scripts/oracle_snapshot_bridge.py reconcile \
+            "$RUNNER_TEMP/oracle-snapshot-for-reconcile.tar" "$GITHUB_SHA"
+      - name: Erase decrypted and encrypted runner copies
+        if: ${{ always() }}
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/oracle-merged.patch" "$RUNNER_TEMP/oracle-snapshot-for-reconcile.tar" "$RUNNER_TEMP/oracle-encrypted/oracle-local-changes.enc" "$RUNNER_TEMP/oracle-encrypted/oracle-local-changes.enc.hmac"

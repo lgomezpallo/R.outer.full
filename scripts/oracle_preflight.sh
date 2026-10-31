@@ -10,8 +10,12 @@ printf 'service_workdir: '
 systemctl show router -p WorkingDirectory --value
 printf 'service_user: '
 systemctl show router -p User --value
-printf 'service_exec: '
-systemctl show router -p ExecStart --value
+# ExecStart may include inline credentials. Never print its raw value.
+exec_line="$(systemctl show router -p ExecStart --value)"
+printf 'service_exec_layout: '
+if [[ "$exec_line" == *"router.api:app"* ]]; then echo router_api; else echo unknown; fi
+printf 'service_loopback_bind_hint: '
+if [[ "$exec_line" == *"--host 127.0.0.1"* ]]; then echo yes; else echo unknown; fi
 printf 'router_health_status: '
 curl -fsS --max-time 5 http://127.0.0.1:8010/health | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status", "unknown"))'
 printf 'application_directory: '

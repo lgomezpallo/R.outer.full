@@ -11,6 +11,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from .billing import offline_only
 from .catalog import ModelSpec, ProviderCatalog, ProviderSpec
 from .router import Router
 from .security import validate_provider_base_url
@@ -30,6 +31,7 @@ def router_ui():
     if index.exists():
         return FileResponse(index)
     return {"name": "Router IA", "status": "ok"}
+
 catalog = ProviderCatalog(storage_path=os.getenv("ROUTER_CATALOG_FILE") or "router-catalog.json")
 store = RouterStore(path=os.getenv("ROUTER_DB_FILE", "router.db"), master_key=os.getenv("ROUTER_MASTER_KEY"))
 router = Router(max_retries=int(os.getenv("ROUTER_MAX_RETRIES", "1")), catalog=catalog, store=store)
@@ -47,9 +49,12 @@ def require_auth(authorization: str | None = Header(default=None)) -> str:
         app_name = store.verify_app_token(supplied)
         if app_name:
             return app_name
-    if not expected and not store.list_app_tokens():
+    # Safe-mode release must never silently accept unauthenticated G.O. traffic.
+    # Keep the legacy development fallback only outside offline-only mode.
+    if not offline_only() and not expected and not store.list_app_tokens():
         return "development"
     raise HTTPException(401, "unauthorized")
+
 
 def require_admin(authorization: str | None = Header(default=None)) -> None:
     expected = os.getenv("ROUTER_SERVICE_TOKEN", "").strip()
@@ -57,6 +62,7 @@ def require_admin(authorization: str | None = Header(default=None)) -> None:
     supplied = authorization[len(prefix):] if authorization and authorization.startswith(prefix) else ""
     if not expected or not supplied or not secrets.compare_digest(supplied, expected):
         raise HTTPException(401, "admin_token_required")
+
 
 class TokenInput(BaseModel):
     name: str = Field(min_length=1, max_length=80)
@@ -124,6 +130,22 @@ class RouteInput(BaseModel):
     decompose: bool | None = None
     max_subtasks: int = Field(default=12, ge=1, le=50)
 
+def _startup_has_eligible_inference() -> bool:
+    """Only explicit free-model eligibility can schedule opt-in startup checks.
+
+    This is not an account-billing guarantee. Offline mode independently blocks
+    startup inference, and the transport rechecks each model before dispatch.
+    """
+    from .selector import billing_ineligibility_reason
+
+    return any(
+        billing_ineligibility_reason(provider, model) is None
+        for provider in router.registry.all()
+        for model in provider.spec.models
+    )
+
+
+
 @app.on_event("startup")
 def load_environment_providers() -> None:
     router.load_persisted_providers()
@@ -161,7 +183,25 @@ def load_environment_providers() -> None:
             except ValueError:
                 pass
 
-    if os.getenv("ROUTER_STARTUP_PROVIDER_TESTS", "").strip() == "1":
+    # Startup diagnostics remain opt-in. Offline mode always suppresses them;
+    # outside offline mode only explicitly free models can be selected.
+    active_startup_flags = (
+        "ROUTER_STARTUP_PROVIDER_TESTS",
+        "ROUTER_STARTUP_CAPABILITY_PROFILE",
+        "ROUTER_STARTUP_ROUTING_SMOKE",
+        "ROUTER_STARTUP_ORCHESTRATION_SMOKE",
+        "ROUTER_STARTUP_HETEROGENEOUS_SMOKE",
+    )
+    requested_active_checks = any(
+        os.getenv(flag, "").strip() == "1" for flag in active_startup_flags
+    )
+    startup_inference_allowed = (
+        _startup_has_eligible_inference() if requested_active_checks and not offline_only() else False
+    )
+    if requested_active_checks and not startup_inference_allowed:
+        print("ROUTER_STARTUP_ACTIVE_CHECKS_SKIPPED reason=no_billing_eligible_model", flush=True)
+
+    if startup_inference_allowed and os.getenv("ROUTER_STARTUP_PROVIDER_TESTS", "").strip() == "1":
         for item in router.registry.all():
             provider_id = item.spec.id
             print(f"ROUTER_PROVIDER_DISCOVERY provider={provider_id} models={len(item.spec.models)}")
@@ -182,14 +222,15 @@ def load_environment_providers() -> None:
                     f"error={type(exc).__name__}"
                 )
 
-    if os.getenv("ROUTER_STARTUP_CAPABILITY_PROFILE", "").strip() == "1":
+    if startup_inference_allowed and os.getenv("ROUTER_STARTUP_CAPABILITY_PROFILE", "").strip() == "1":
         threading.Thread(target=_startup_capability_profile, daemon=True).start()
-    if os.getenv("ROUTER_STARTUP_ROUTING_SMOKE", "").strip() == "1":
+    if startup_inference_allowed and os.getenv("ROUTER_STARTUP_ROUTING_SMOKE", "").strip() == "1":
         threading.Thread(target=_startup_routing_smoke, daemon=True).start()
-    if os.getenv("ROUTER_STARTUP_ORCHESTRATION_SMOKE", "").strip() == "1":
+    if startup_inference_allowed and os.getenv("ROUTER_STARTUP_ORCHESTRATION_SMOKE", "").strip() == "1":
         threading.Thread(target=_startup_orchestration_smoke, daemon=True).start()
-    if os.getenv("ROUTER_STARTUP_HETEROGENEOUS_SMOKE", "").strip() == "1":
+    if startup_inference_allowed and os.getenv("ROUTER_STARTUP_HETEROGENEOUS_SMOKE", "").strip() == "1":
         threading.Thread(target=_startup_heterogeneous_smoke, daemon=True).start()
+
 
 def _startup_heterogeneous_smoke() -> None:
     if os.getenv("ROUTER_STARTUP_HETEROGENEOUS_SMOKE", "").strip() != "1":
@@ -237,6 +278,7 @@ def _startup_heterogeneous_smoke() -> None:
             flush=True,
         )
 
+
 def _startup_orchestration_smoke() -> None:
     if os.getenv("ROUTER_STARTUP_ORCHESTRATION_SMOKE", "").strip() != "1":
         return
@@ -277,6 +319,7 @@ def _startup_orchestration_smoke() -> None:
             f"ok=False error={type(exc).__name__}",
             flush=True,
         )
+
 
 def _startup_routing_smoke() -> None:
     if os.getenv("ROUTER_STARTUP_ROUTING_SMOKE", "").strip() != "1":
@@ -336,12 +379,18 @@ def _startup_routing_smoke() -> None:
                 flush=True,
             )
 
+
 def _startup_capability_profile() -> None:
     if os.getenv("ROUTER_STARTUP_CAPABILITY_PROFILE", "").strip() != "1":
         return
+    from .selector import billing_ineligibility_reason
     for item in router.registry.all():
         for capability in ("json", "reasoning", "code", "summarization", "document", "tools", "long_context", "vision", "transcription", "speech", "image_generation", "image_editing"):
-            candidates = [m for m in item.spec.models if ("chat" in m.capabilities if capability in {"json","reasoning","code","summarization","document","tools","long_context"} else capability in m.capabilities)]
+            candidates = [
+                m for m in item.spec.models
+                if ("chat" in m.capabilities if capability in {"json","reasoning","code","summarization","document","tools","long_context"} else capability in m.capabilities)
+                and billing_ineligibility_reason(item, m) is None
+            ]
             verified = None
             checked = 0
             print(f"ROUTER_CAPABILITY_CANDIDATES provider={item.spec.id} capability={capability} candidates={len(candidates)}", flush=True)
@@ -364,9 +413,11 @@ def _startup_capability_profile() -> None:
             print(f"ROUTER_CAPABILITY_PROFILE provider={item.spec.id} capability={capability} candidates={len(candidates)} checked={checked} verified={verified or '-'}", flush=True)
 
 
+
 @app.get("/catalog")
 def catalog():
     return {"providers": router.catalog.snapshot()}
+
 
 @app.post("/catalog/providers", dependencies=[Depends(require_admin)])
 def catalog_provider(payload: CatalogProviderInput):
@@ -392,6 +443,7 @@ def catalog_provider(payload: CatalogProviderInput):
     router.catalog.put(provider)
     return {"provider": provider.id, "cataloged": True}
 
+
 @app.get("/health")
 def health():
     providers = []
@@ -415,6 +467,67 @@ def health():
         })
     return {"status": "ok", "providers": providers}
 
+
+@app.get("/diagnostics/inventory", dependencies=[Depends(require_admin)])
+def diagnostics_inventory():
+    """Offline snapshot only: no model discovery, probes, or inference."""
+    from .inventory import inventory_report
+    return inventory_report(router.registry.all())
+
+
+
+@app.get("/diagnostics/capabilities", dependencies=[Depends(require_admin)])
+def diagnostics_capabilities():
+    """Read-only evidence matrix; never triggers a probe or inference."""
+    from .capability_evidence import capability_report
+    return capability_report(router.registry.all())
+
+
+
+class TaskRequirementsInput(BaseModel):
+    task: str = Field(min_length=1, max_length=100000)
+    requirements: list[str] = Field(default_factory=list, max_length=100)
+    required_capabilities: list[str] = Field(default_factory=lambda: ["chat"], max_length=30)
+    images_present: bool = False
+
+
+@app.post("/diagnostics/task-requirements", dependencies=[Depends(require_admin)])
+def diagnostics_task_requirements(payload: TaskRequirementsInput):
+    """Offline interpretation only: no model ranking, inference, or provider calls."""
+    from .task_requirements import analyze_task
+    return analyze_task(
+        payload.task,
+        requirements=tuple(payload.requirements),
+        required_capabilities=frozenset(payload.required_capabilities),
+        images_present=payload.images_present,
+    )
+
+
+
+class RankingPreviewInput(TaskRequirementsInput):
+    max_strategic_cost: int | None = None
+    limit: int = Field(default=100, ge=1, le=500)
+
+
+@app.post("/diagnostics/model-ranking", dependencies=[Depends(require_admin)])
+def diagnostics_model_ranking(payload: RankingPreviewInput):
+    """Read-only ranking: no model inference, discovery, probes or billing access."""
+    from .ranking_diagnostics import ranking_report
+    try:
+        return ranking_report(
+            router.registry.all(),
+            payload.task,
+            requirements=tuple(payload.requirements),
+            required_capabilities=frozenset(payload.required_capabilities),
+            images_present=payload.images_present,
+            max_strategic_cost=payload.max_strategic_cost,
+            limit=payload.limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+
 @app.get("/diagnostics/model-coverage", dependencies=[Depends(require_admin)])
 def diagnostics_model_coverage(capability: str = "chat", max_strategic_cost: int | None = None):
     """Read-only model counts; does not probe providers or spend API credits."""
@@ -435,10 +548,33 @@ def diagnostics_model_coverage(capability: str = "chat", max_strategic_cost: int
     )
 
 
+
 @app.get("/performance")
 def performance():
     """Operational measurements only; API success does not prove answer quality."""
     return {"metrics": store.model_performance_report(), "quality_measured": False}
+
+
+
+@app.get("/diagnostics/routing-fallback", dependencies=[Depends(require_admin)])
+def diagnostics_routing_fallback(limit: int = 200):
+    """Local request-level retry and fallback outcomes, without provider calls."""
+    return store.routing_fallback_report(limit=limit)
+
+
+@app.get("/diagnostics/provider-performance", dependencies=[Depends(require_admin)])
+def diagnostics_provider_performance(limit: int = 2000):
+    """Offline SQLite aggregation, excluding probes and audits.
+
+    Provider health/cooldown counters are deliberately not conflated with
+    routing-only observations. No provider APIs or billing endpoints are used.
+    """
+    return {
+        "providers": store.provider_routing_report(limit=limit),
+        "observation_scope": "routing_attempts_only",
+        "quality_measured": False,
+    }
+
 
 @app.get("/diagnostics/requests", dependencies=[Depends(require_admin)])
 def recent_request_traces(limit: int = 30, application_name: str | None = None):
@@ -448,13 +584,16 @@ def recent_request_traces(limit: int = 30, application_name: str | None = None):
         "timing_scope": "provider_attempts_only",
     }
 
+
 @app.post("/tokens", dependencies=[Depends(require_admin)])
 def create_token(payload: TokenInput):
     return {"name": payload.name, "token": store.create_app_token(payload.name)}
 
+
 @app.get("/tokens", dependencies=[Depends(require_admin)])
 def list_tokens():
     return {"tokens": store.list_app_tokens()}
+
 
 @app.post("/providers", dependencies=[Depends(require_admin)])
 def add_provider(payload: ProviderInput):
@@ -473,12 +612,14 @@ def add_provider(payload: ProviderInput):
         "credential_persisted": store.can_persist_secrets,
     }
 
+
 @app.post("/providers/test", dependencies=[Depends(require_admin)])
 def test_provider(payload: ProviderTestInput):
     try:
         return router.test_provider(payload.provider)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+
 
 @app.post("/capabilities/probe", dependencies=[Depends(require_admin)])
 def probe_capability(payload: CapabilityProbeInput):
@@ -487,40 +628,95 @@ def probe_capability(payload: CapabilityProbeInput):
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
+
+def _chat_audit_candidates(provider):
+    """Exact eligible pending set for /audit/step (no calls or reservations).
+
+    Untested evidence in /audit/progress is intentionally broader: legacy
+    records, non-chat models and billing-blocked routes are not candidates.
+    """
+    from .catalog import infer_discovered_capabilities
+    from .selector import billing_ineligibility_reason
+
+    return [
+        model for model in provider.spec.models
+        if "chat" in model.capabilities
+        and "chat" in infer_discovered_capabilities(model.id)
+        and not any(record.capability == "chat" for record in model.evidence)
+        and billing_ineligibility_reason(provider, model) is None
+    ]
+
+
+
 @app.get("/audit/progress")
 def audit_progress():
     """Read-only progress; inspecting it never invokes any model."""
+    from .capability_evidence import _dimension
+
     counts = {}
+    pending_candidates = {}
+    orphaned_claims = {}
     for provider in router.registry.all():
         if provider.spec.id not in AUDIT_DAILY_LIMITS:
             continue
         models = provider.spec.models
-        verified = sum(1 for m in models if any(e.status == "verified" and e.evidence != "migrated_from_v1" for e in m.evidence))
-        inconclusive = sum(1 for m in models if any(e.status == "inconclusive" for e in m.evidence))
-        untouched = sum(1 for m in models if not any(e.evidence != "migrated_from_v1" for e in m.evidence))
+        # Claims survive failures and restarts; an unverified claimed model
+        # must not be advertised as available for another external probe.
+        claimed = store.audit_claimed_models(provider.spec.id, "chat")
+        # A retired model may later reappear with the same ID. Its durable
+        # claim must survive catalog refreshes and remain visible in diagnostics.
+        catalog_ids = {model.id for model in models}
+        orphaned_claims[provider.spec.id] = len(claimed - catalog_ids)
+        pending_candidates[provider.spec.id] = sum(
+            model.id not in claimed for model in _chat_audit_candidates(provider)
+        )
+        # These are CHAT audit counters, not evidence from unrelated
+        # capabilities. Use the same evidence policy as model ranking:
+        # legacy/incomplete records do not verify a capability, and a
+        # verified+unsupported contradiction must never count as verified.
+        statuses = [_dimension(model, ("chat",))["status"] for model in models]
         counts[provider.spec.id] = {
             "total_routes": len(models),
-            "verified_routes": verified,
-            "inconclusive_routes": inconclusive,
-            "untested_routes": untouched,
+            "verified_routes": statuses.count("recorded_verified"),
+            "inconclusive_routes": statuses.count("recorded_inconclusive"),
+            "untested_routes": sum(status in {
+                "unknown", "declared_only", "inferred_from_name_only",
+                "legacy_or_incomplete_evidence",
+            } for status in statuses),
+            "unsupported_or_conflicting_routes": sum(status in {
+                "recorded_unsupported", "conflicting_records",
+            } for status in statuses),
         }
     used = store.audit_budget_used()
     return {
         "platforms": counts,
+        # Unlike untested_routes, this is exactly the currently actionable
+        # candidate set for /audit/step, subject to remaining daily budget.
+        "eligible_pending_chat_audit_candidates": pending_candidates,
+        # Diagnostic only: claims absent from today's catalog are retained,
+        # not deleted or silently made eligible on model reintroduction.
+        "retired_or_missing_chat_audit_claims": orphaned_claims,
+        # Snapshot only: a concurrent audit can consume the remaining slots.
+        # An internal daily budget is NOT permission for external inference.
+        "budget_limited_pending_chat_candidates": {
+            p: min(count, max(0, AUDIT_DAILY_LIMITS[p] - used.get(p, 0)))
+            for p, count in pending_candidates.items()
+        },
         "daily_budget": {p: {"limit": limit, "used": used.get(p, 0)}
                          for p, limit in AUDIT_DAILY_LIMITS.items()},
-        "note": "Verificación por capacidad, no garantía de calidad. El presupuesto diario se reinicia a las 00:00 UTC.",
+        "note": "Verificación por capacidad, no garantía de calidad. Límites internos, no cuotas oficiales de proveedores. Esta instantánea no es atómica, puede cambiar por concurrencia y no habilita inferencia. Las reservas por modelo persisten, incluso si el catálogo retira un modelo, y no se vuelven a ofrecer como pendientes. El presupuesto diario se reinicia a las 00:00 UTC.",
     }
+
 
 @app.get("/audit/budget", dependencies=[Depends(require_admin)])
 def audit_budget():
     used = store.audit_budget_used()
     return {"limits": AUDIT_DAILY_LIMITS, "used": used, "note": "Límites internos conservadores, no cuotas oficiales del proveedor."}
 
+
 @app.post("/audit/step", dependencies=[Depends(require_admin)])
 def audit_step(payload: AuditStepInput):
     """Bounded, opt-in probes. Never retry a model already tested for chat."""
-    from .catalog import infer_discovered_capabilities
     provider_id = payload.provider.strip().lower()
     limit = AUDIT_DAILY_LIMITS.get(provider_id)
     if limit is None:
@@ -528,25 +724,36 @@ def audit_step(payload: AuditStepInput):
     provider = next((p for p in router.registry.all() if p.spec.id == provider_id), None)
     if provider is None:
         raise HTTPException(400, "provider_not_registered")
-    candidates = [
-        m for m in provider.spec.models
-        if "chat" in m.capabilities
-        and "chat" in infer_discovered_capabilities(m.id)
-        and not any(e.capability == "chat" for e in m.evidence)
-    ]
+    candidates = _chat_audit_candidates(provider)
     candidates.sort(key=lambda m: (len(m.capabilities - {"chat", "json", "fast"}), m.strategic_cost, m.id))
     results = []
+    skipped_claimed = 0
+    # Include claims beyond max_calls: stopping early must not advertise
+    # already-reserved models as pending just because they were not visited.
+    claimed_or_attempted = store.audit_claimed_models(provider_id, "chat")
     used = store.audit_budget_used().get(provider_id, 0)
-    for model in candidates[:payload.max_calls]:
-        permitted, used = store.reserve_audit_budget(provider_id, limit)
-        if not permitted:
+    # The candidate list is a snapshot: concurrent requests can see the same
+    # model before either records evidence. Claim model + daily slot together.
+    for model in candidates:
+        if len(results) >= payload.max_calls:
             break
+        outcome, used = store.reserve_audit_model(provider_id, model.id, "chat", limit)
+        if outcome == "already_claimed":
+            skipped_claimed += 1
+            claimed_or_attempted.add(model.id)
+            continue
+        if outcome == "budget_exhausted":
+            break
+        claimed_or_attempted.add(model.id)
         results.append(router.verify_capability(provider_id, model.id, "chat"))
     return {
-        "provider": provider_id, "results": results, "pending_chat": len(candidates)-len(results),
+        "provider": provider_id, "results": results,
+        "pending_chat": sum(model.id not in claimed_or_attempted for model in candidates),
+        "skipped_claimed": skipped_claimed,
         "daily_limit": limit, "used_today": used,
-        "note": "Una reserva corresponde a una prueba de texto; otros tipos de prueba se agregarán por separado.",
+        "note": "Reservas internas atomicas por modelo y dia. Las reclamaciones persisten ante fallos para evitar reintentos automaticos; no autorizan inferencia ni facturacion.",
     }
+
 
 @app.post("/capabilities/audit", dependencies=[Depends(require_admin)])
 def audit_capabilities(payload: CapabilityAuditInput):
@@ -558,11 +765,13 @@ def audit_capabilities(payload: CapabilityAuditInput):
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
+
 def _enriched_context(task: str, context: str) -> str:
     base = with_temporal_context(context)
-    if needs_current_search(task):
+    if not offline_only() and needs_current_search(task):
         base += "\n" + search_context(task)
     return base
+
 
 
 _IMAGE_URL = re.compile(r"^data:image/(png|jpeg|webp);base64,([A-Za-z0-9+/]+={0,2})$")
@@ -590,6 +799,7 @@ def _validated_images(images: list[str]) -> tuple[str, ...]:
             raise HTTPException(422, "image_signature_invalid")
         result.append(source)
     return tuple(result)
+
 
 
 @app.post("/route")
@@ -623,6 +833,7 @@ def route(payload: RouteInput, app_identity: str = Depends(require_auth)):
         "decisions": [d.__dict__ for d in result.decisions],
         "orchestration": (result.raw or {}).get("orchestration"),
     }
+
 
 
 @app.post("/v1/chat/completions")
@@ -666,3 +877,4 @@ def openai_chat(payload: OpenAIChatInput, app_identity: str = Depends(require_au
         "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
         "router": {"provider": result.provider, "model": result.model},
     }
+

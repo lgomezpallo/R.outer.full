@@ -54,3 +54,42 @@ def test_reject_invalid_image_bytes_and_formats(monkeypatch):
             json={"task": "Describe", "images": [value]},
         )
         assert response.status_code == 422
+
+
+def test_iachat_five_image_contract_preserves_vision_and_bounds(monkeypatch):
+    """Match IAchat's five-image limit without contacting a provider."""
+    monkeypatch.setenv("ROUTER_SERVICE_TOKEN", "synthetic-token")
+    module.router = Router()
+    received = []
+
+    def capture(request):
+        received.append(request)
+        return RouteResponse(ok=False, text=None, provider=None, model=None,
+                             attempts=[], decisions=[], error="no_eligible_provider")
+
+    monkeypatch.setattr(module.router, "process", capture)
+    client = TestClient(module.app)
+    payload = {
+        "task": "Compará estas cinco fotos",
+        "images": [IMAGE] * 5,
+        "required_capabilities": ["chat", "vision"],
+        "decompose": False,
+        "application_name": "iachat",
+    }
+    response = client.post("/route",
+                           headers={"Authorization": "Bearer synthetic-token"},
+                           json=payload)
+    assert response.status_code == 200
+    assert response.json()["error"] == "no_eligible_provider"
+    assert len(received) == 1
+    assert received[0].images == (IMAGE,) * 5
+    assert {"chat", "vision"} <= received[0].required_capabilities
+    assert received[0].decompose is False
+    assert all(IMAGE not in field for field in (received[0].task, received[0].context))
+
+    payload["images"] = [IMAGE] * 6
+    rejected = client.post("/route",
+                           headers={"Authorization": "Bearer synthetic-token"},
+                           json=payload)
+    assert rejected.status_code == 422
+    assert len(received) == 1

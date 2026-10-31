@@ -42,7 +42,7 @@ EXPECTED_WORKFLOW_BLOBS: dict[str, str] = {
     "oracle-deploy.yml": "5dc10c0fbba1198a14e2ee65321c10d79ecb3545",
     "router-oracle-monitor.yml": "c7fc8ddb2501c33c772488d97bf6dbe216dbbb68",
     "router-release-stage.yml": "25adf54657c656cb8645cfa938472132428a2c30",
-    "router-release-promote.yml": "0e875abfc094456bde24607b0251f0505ef16c60",
+    "router-release-promote.yml": "bd67e6d114617eb51337f4bc7fb82792f3b01c7c",
     "router-release-live-smoke.yml": "e95e4775c95b397d69a00d0290dc56f838178648",
 }
 
@@ -114,6 +114,8 @@ def audit_workflows(sources: Mapping[str, str]) -> list[str]:
             expected_triggers = {"push", "pull_request"}
         elif filename in {"oracle-candidate-reconcile.yml", "oracle-ssh-readonly-access.yml", "router-release-stage.yml"}:
             expected_triggers = {"push", "workflow_dispatch"}
+        elif filename == "router-release-promote.yml":
+            expected_triggers = {"pull_request"}
         else:
             expected_triggers = {"workflow_dispatch"}
         if set(trigger_map) != expected_triggers:
@@ -131,6 +133,18 @@ def audit_workflows(sources: Mapping[str, str]) -> list[str]:
                     approved = "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}"
                     if conditions != [approved]:
                         problems.append(f"{filename}/{job}: unauthorized stage condition")
+                elif filename == "router-release-promote.yml":
+                    approved = "${{ github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.number == 89 && github.event.pull_request.base.ref == 'main' && github.event.pull_request.head.repo.full_name == 'lgomezpallo/R.outer.full' && github.event.pull_request.head.ref == 'release/router-reviewed-oracle-promotion-20261031' && github.event.pull_request.merged_by.login == 'lgomezpallo' }}"
+                    if conditions != [approved]:
+                        problems.append(f"{filename}/{job}: promotion must be PR89-owner-merge-only")
+                    if "          SCRIPT_SHA: 96cae21106abdd15cba19195374b116892c58008" not in source:
+                        problems.append(f"{filename}/{job}: promotion script SHA is not pinned")
+                    if "  pull_request:\n    types: [closed]\n    branches: [main]" not in source:
+                        problems.append(f"{filename}/{job}: missing exact merge-only trigger")
+                    if "    environment: router-production" not in source:
+                        problems.append(f"{filename}/{job}: missing production environment gate")
+                    if f"    if: {approved}" not in source.split("  tests:", 1)[1].split("  oracle-promote:", 1)[0]:
+                        problems.append(f"{filename}/tests: merge gate missing")
                 elif conditions != ["${{ false }}"]:
                     problems.append(f"{filename}/{job}: remote job is not unconditionally disabled")
             elif (filename == "oracle-candidate-reconcile.yml" and job == "preserve-and-reconcile") or (filename == "oracle-ssh-readonly-access.yml" and job == "ssh-readonly"):
@@ -155,7 +169,7 @@ def main() -> int:
         for error in errors:
             print(f"STAGE8_POLICY_FAIL {error}")
         return 1
-    print("STAGE8_POLICY_OK: 9 reviewed workflows; authorized staging only; promotion and live inference disabled")
+    print("STAGE8_POLICY_OK: 9 reviewed workflows; promotion PR89-owner-merge-only at pinned SHA; live inference disabled")
     return 0
 
 

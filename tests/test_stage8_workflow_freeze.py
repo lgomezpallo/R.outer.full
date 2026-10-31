@@ -32,6 +32,13 @@ def test_oracle_jobs_fail_closed_in_offline_freeze(filename, job):
         approved = "    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}"
         assert approved in job_header, "Oracle staging is not pinned to the candidate branch"
         assert job_header.count("    if: ") == 1
+    elif filename == "router-release-promote.yml":
+        approved = "    if: ${{ github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.number == 89 && github.event.pull_request.base.ref == 'main' && github.event.pull_request.head.repo.full_name == 'lgomezpallo/R.outer.full' && github.event.pull_request.head.ref == 'release/router-reviewed-oracle-promotion-20261031' && github.event.pull_request.merged_by.login == 'lgomezpallo' }}"
+        assert approved in job_header, "Production promotion must require PR89 merged by owner"
+        assert job_header.count("    if: ") == 1
+        assert "          SCRIPT_SHA: 96cae21106abdd15cba19195374b116892c58008" in source
+        assert "    environment: router-production" in job_body
+        assert approved in source.split("  tests:", 1)[1].split("  oracle-promote:", 1)[0]
     else:
         assert "    if: ${{ false }}" in job_header, f"{filename}: Oracle job is enabled"
     assert "ssh -i " in job_body, f"{filename}: review changed remote execution path"
@@ -42,12 +49,17 @@ def test_oracle_workflows_have_no_automatic_triggers(filename):
     source = (WORKFLOWS / filename).read_text(encoding="utf-8")
     assert source.count("\non:\n") == 1
     triggers = source.split("\non:\n", 1)[1].split("\npermissions:", 1)[0]
-    assert "  workflow_dispatch:" in triggers
-    if filename == "router-release-stage.yml":
+    if filename != "router-release-promote.yml":
+        assert "  workflow_dispatch:" in triggers
+    if filename == "router-release-promote.yml":
+        assert "  pull_request:\n    types: [closed]\n    branches: [main]" in triggers
+        assert "  workflow_dispatch:" not in triggers
+    elif filename == "router-release-stage.yml":
         assert "  push:\n    branches: [main]\n    paths:\n      - .github/workflows/router-release-stage.yml\n" in triggers
     else:
         assert "  push:" not in triggers
-    assert "  pull_request:" not in triggers
+    if filename != "router-release-promote.yml":
+        assert "  pull_request:" not in triggers
     assert "  schedule:" not in triggers
     assert "  workflow_run:" not in triggers
 

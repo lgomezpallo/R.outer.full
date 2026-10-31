@@ -1,7 +1,11 @@
 name: Promote frozen Router release with automatic rollback
 
 on:
-  workflow_dispatch:
+  # Production is reachable only after the owner merges this exact reviewed PR.
+  # A normal push, another PR, or a manual dispatch cannot promote.
+  pull_request:
+    types: [closed]
+    branches: [main]
 
 permissions:
   contents: read
@@ -12,6 +16,8 @@ concurrency:
 
 jobs:
   tests:
+    # Exact release PR merged by the repository owner; all other closes skip.
+    if: ${{ github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.number == 89 && github.event.pull_request.base.ref == 'main' && github.event.pull_request.head.repo.full_name == 'lgomezpallo/R.outer.full' && github.event.pull_request.head.ref == 'release/router-reviewed-oracle-promotion-20261031' && github.event.pull_request.merged_by.login == 'lgomezpallo' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -45,12 +51,12 @@ jobs:
             --entrypoint python router-release-promote-ci /tmp/acceptance.py
 
   oracle-promote:
-    # Stage 8 offline freeze: never connect to Oracle or run live inference.
-    # Re-enabling requires a separately reviewed, explicitly authorized change.
-    if: ${{ false }}
+    # Merge-gated, owner-authorized release PR only; offline and reversible.
+    if: ${{ github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.number == 89 && github.event.pull_request.base.ref == 'main' && github.event.pull_request.head.repo.full_name == 'lgomezpallo/R.outer.full' && github.event.pull_request.head.ref == 'release/router-reviewed-oracle-promotion-20261031' && github.event.pull_request.merged_by.login == 'lgomezpallo' }}
     needs: tests
     runs-on: ubuntu-latest
     timeout-minutes: 12
+    environment: router-production
     steps:
       - uses: actions/checkout@v4
       - name: Switch only the pinned release using a reversible systemd drop-in
@@ -59,7 +65,7 @@ jobs:
           SSH_USER: ${{ secrets.ORACLE_SSH_USER }}
           SSH_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
           SSH_KNOWN_HOSTS: ${{ secrets.ORACLE_SSH_KNOWN_HOSTS }}
-          SCRIPT_SHA: ${{ github.sha }}
+          SCRIPT_SHA: 96cae21106abdd15cba19195374b116892c58008
         run: |
           set -euo pipefail
           test -n "$SSH_HOST" && test -n "$SSH_USER" && test -n "$SSH_KEY" && test -n "$SSH_KNOWN_HOSTS"

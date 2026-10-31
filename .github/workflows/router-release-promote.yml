@@ -74,7 +74,7 @@ jobs:
           set -euo pipefail
           umask 077
           cd /home/ubuntu/Proyecto/Herramientas/Router
-          git fetch --quiet origin feat/offline-cooldown-restart-consistency-20261028
+          git fetch --quiet origin main
           git cat-file -e "$ROUTER_SCRIPT_SHA:scripts/router_release_promote.py"
           mkdir -p -m 700 "$HOME/router-private-backups"
           SCRIPT="$(mktemp "$HOME/router-private-backups/router-promote-script-XXXXXXXX.py")"

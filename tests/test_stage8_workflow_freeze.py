@@ -29,7 +29,7 @@ def test_oracle_jobs_fail_closed_in_offline_freeze(filename, job):
     job_header = job_body.split("    needs:", 1)[0]
     # Literal GitHub Actions expression. Do not replace with a user-controlled input.
     if filename == "router-release-stage.yml":
-        approved = "    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/feat/offline-cooldown-restart-consistency-20261028' }}"
+        approved = "    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}"
         assert approved in job_header, "Oracle staging is not pinned to the candidate branch"
         assert job_header.count("    if: ") == 1
     else:
@@ -44,7 +44,7 @@ def test_oracle_workflows_have_no_automatic_triggers(filename):
     triggers = source.split("\non:\n", 1)[1].split("\npermissions:", 1)[0]
     assert "  workflow_dispatch:" in triggers
     if filename == "router-release-stage.yml":
-        assert "  push:\n    branches: [feat/offline-cooldown-restart-consistency-20261028]\n    paths:\n      - .github/workflows/router-release-stage.yml\n" in triggers
+        assert "  push:\n    branches: [main]\n    paths:\n      - .github/workflows/router-release-stage.yml\n" in triggers
     else:
         assert "  push:" not in triggers
     assert "  pull_request:" not in triggers

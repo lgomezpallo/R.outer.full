@@ -21,7 +21,7 @@ def git(repo: Path, *args: str) -> str:
 
 
 def test_candidate_sha_must_be_explicit_and_match_candidate_branch(monkeypatch):
-    assert stage.RELEASE_BRANCH == "feat/offline-cooldown-restart-consistency-20261028"
+    assert stage.RELEASE_BRANCH == "main"
     monkeypatch.delenv("ROUTER_RELEASE_SHA", raising=False)
     with pytest.raises(stage.StageBlocked, match="candidate_sha_required"):
         stage.candidate_pin()

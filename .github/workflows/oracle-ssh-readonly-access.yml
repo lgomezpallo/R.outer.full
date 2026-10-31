@@ -85,7 +85,7 @@ jobs:
               phase = "complete"
               print("diagnostic_promotion_preflight=passed", flush=True)
           except Exception as error:
-              code = str(error) if isinstance(error, (RuntimeError, getattr(sys.modules.get("release_diagnostic"), "PromoteBlocked", RuntimeError))) else type(error).__name__.lower()
+              code = str(error) if isinstance(error, (RuntimeError, getattr(locals().get("mod"), "PromoteBlocked", RuntimeError))) else type(error).__name__.lower()
               if not re.fullmatch(r"[a-z0-9_]{1,90}", code):
                   code = "unexpected_error"
               print("diagnostic_block_phase=" + phase, flush=True)

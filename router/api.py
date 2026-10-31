@@ -131,24 +131,18 @@ class RouteInput(BaseModel):
     max_subtasks: int = Field(default=12, ge=1, le=50)
 
 def _startup_has_eligible_inference() -> bool:
-    """Fail closed before scheduling any opt-in startup inference activity.
+    """Only explicit free-model eligibility can schedule opt-in startup checks.
 
-    Catalog discovery is read-only and remains independent of this check.
-    An account's advertised free models do not establish no-overage status.
-    Route and transport still recheck authorization for every attempt.
+    This is not an account-billing guarantee. Offline mode independently blocks
+    startup inference, and the transport rechecks each model before dispatch.
     """
-    from .billing import account_billing_ineligibility_reason
     from .selector import billing_ineligibility_reason
 
-    for provider in router.registry.all():
-        if account_billing_ineligibility_reason(provider.spec.id) is not None:
-            continue
-        if any(
-            billing_ineligibility_reason(provider, model) is None
-            for model in provider.spec.models
-        ):
-            return True
-    return False
+    return any(
+        billing_ineligibility_reason(provider, model) is None
+        for provider in router.registry.all()
+        for model in provider.spec.models
+    )
 
 
 
@@ -189,9 +183,8 @@ def load_environment_providers() -> None:
             except ValueError:
                 pass
 
-    # Environment flags are requests to run diagnostics, NOT permission to
-    # spend. With no verified no-overage account, do not even schedule tests
-    # or background smoke/profiling threads.
+    # Startup diagnostics remain opt-in. Offline mode always suppresses them;
+    # outside offline mode only explicitly free models can be selected.
     active_startup_flags = (
         "ROUTER_STARTUP_PROVIDER_TESTS",
         "ROUTER_STARTUP_CAPABILITY_PROFILE",

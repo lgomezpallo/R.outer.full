@@ -3,6 +3,8 @@
 
 Only a private snapshot, a detached Git worktree and an unprivileged loopback
 sidecar are created. This program NEVER switches router.service or edits router.db.
+The current free-model-only policy removes account-audit prerequisites, but
+staging remains isolated and cannot authorize production inference.
 """
 from __future__ import annotations
 

@@ -74,7 +74,8 @@ def test_all_startup_flags_and_spoofed_selector_still_deny(monkeypatch):
     _isolate_startup(monkeypatch)
     for flag in STARTUP_FLAGS:
         monkeypatch.setenv(flag, "1")
-    # A forged selector cannot override the independent account-level check.
+    # Offline mode must prevent startup inference even if a selector is forged.
+    monkeypatch.setenv("ROUTER_OFFLINE_ONLY", "1")
     monkeypatch.setattr(selector, "billing_ineligibility_reason", lambda *a: None)
     monkeypatch.setattr(
         api.threading, "Thread",

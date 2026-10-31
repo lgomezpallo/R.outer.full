@@ -102,15 +102,12 @@ def test_fallback_rechecks_changed_model_billing_before_custom_client(monkeypatc
     assert client.calls == [("groq", "openai/gpt-oss-20b")]
 
 
-def test_retry_stops_when_account_evidence_is_revoked(monkeypatch):
-    allowed = {"value": True}
-    monkeypatch.setattr(
-        billing, "account_billing_ineligibility_reason",
-        lambda provider_id: None if allowed["value"] else "billing_unverified_account",
-    )
-
+def test_retry_stops_when_model_free_price_is_revoked(monkeypatch):
     def fail_and_revoke(provider, model, req):
-        allowed["value"] = False
+        # A catalog refresh can revoke a previously free model between retries.
+        provider.spec = replace(provider.spec, models=(
+            replace(provider.spec.models[0], billing_status="unknown"),
+        ))
         raise httpx.ReadTimeout("offline_timeout")
 
     client = RecordingClient(fail_and_revoke)

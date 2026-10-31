@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 import router.api as module
 from router.router import Router
+from router.storage import RouterStore
 
 def test_health():
     module.router = Router()
@@ -108,3 +109,25 @@ def test_route_accepts_up_to_fifty_subtasks(monkeypatch):
         json={"task":"hola","max_subtasks":50},
     )
     assert response.status_code == 200
+
+
+def test_iachat_token_prevents_anonymous_online_router_access(monkeypatch, tmp_path):
+    """A configured IAchat token must disable legacy anonymous development mode."""
+    monkeypatch.setenv("ROUTER_OFFLINE_ONLY", "0")
+    monkeypatch.delenv("ROUTER_SERVICE_TOKEN", raising=False)
+    monkeypatch.setenv("ROUTER_IACHAT_TOKEN", "offline-fixture-iachat-token")
+    monkeypatch.setattr(module, "store", RouterStore(tmp_path / "iachat-online-auth.db"))
+    monkeypatch.setattr(module, "router", Router())
+    client = TestClient(module.app)
+    payload = {"task": "hola", "decompose": False}
+    assert module.store.list_app_tokens() == []
+    assert client.post("/route", json=payload).status_code == 401
+    assert client.post(
+        "/route", headers={"Authorization": "Bearer incorrect"}, json=payload
+    ).status_code == 401
+    valid = client.post(
+        "/route", headers={"Authorization": "Bearer offline-fixture-iachat-token"}, json=payload
+    )
+    assert valid.status_code == 200
+    assert valid.json()["error"] == "no_eligible_provider"
+    assert valid.json()["attempts"] == []

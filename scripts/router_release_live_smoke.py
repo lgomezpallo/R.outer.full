@@ -296,6 +296,9 @@ def orchestrate(script: Path) -> None:
         for reason in sorted(SAFE_FALLBACK_DIAGNOSTICS):
             if "live_fallback_diagnostic=" + reason in output:
                 print("live_fallback_diagnostic=" + reason, flush=True)
+        for scope in ("provider", "model"):
+            if "live_fallback_scope=" + scope in output:
+                print("live_fallback_scope=" + scope, flush=True)
         if result.returncode != 0 or not all(label in output for label in VALID_STATUSES):
             raise SmokeBlocked("live_smoke_failed")
         if command("systemctl", "is-active", "router.service") != "active":

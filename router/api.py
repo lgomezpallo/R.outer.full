@@ -51,7 +51,7 @@ def require_auth(authorization: str | None = Header(default=None)) -> str:
             return app_name
     # Safe-mode release must never silently accept unauthenticated G.O. traffic.
     # Keep the legacy development fallback only outside offline-only mode.
-    if not offline_only() and not expected and not store.list_app_tokens():
+    if not offline_only() and not expected and not iachat_token and not store.list_app_tokens():
         return "development"
     raise HTTPException(401, "unauthorized")
 

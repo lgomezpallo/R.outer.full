@@ -77,15 +77,12 @@ def billing_endpoint_ineligibility_reason(provider_id: str, base_url: str, proto
 
 
 def account_billing_ineligibility_reason(provider_id: str) -> str | None:
-    """Deny inference until a non-billable ACCOUNT state can be proven.
+    """Account billing audits are advisory, not a Router execution prerequisite.
 
-    Zero catalog prices, a free-tier label, a previous allowlist, or a local
-    environment variable cannot prove that provider-side overages are off.
-    No provider currently exposes verified, immutable account-level evidence
-    to this router. There is deliberately no production opt-in switch.
-    Discovery remains permitted after endpoint validation (no inference).
+    Model-level verified-free eligibility and endpoint validation remain
+    independent mandatory protections. This does not control provider charges.
     """
-    return "billing_unverified_account"
+    return None
 
 
 def offline_only() -> bool:

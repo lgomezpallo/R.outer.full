@@ -137,3 +137,51 @@ def test_free_candidate_pool_reports_only_safe_categories():
     assert set(smoke.SAFE_POOL_CATEGORIES) == {
         "none", "one_model", "multiple_models_one_provider", "multiple_providers",
     }
+
+
+def test_live_smoke_auth_preflight_rejects_missing_or_unsafe_auth(monkeypatch):
+    """No credentials or provider calls: only the authentication dependency."""
+    from types import SimpleNamespace
+    from fastapi import HTTPException
+
+    monkeypatch.delenv("ROUTER_SERVICE_TOKEN", raising=False)
+    monkeypatch.delenv("ROUTER_IACHAT_TOKEN", raising=False)
+    accepts_anonymous = SimpleNamespace(require_auth=lambda authorization: "development")
+    with pytest.raises(smoke.SmokeBlocked, match="router_auth_token_missing"):
+        smoke.authenticated_smoke_token(accepts_anonymous)
+
+    monkeypatch.setenv("ROUTER_IACHAT_TOKEN", "offline-fixture-token")
+    with pytest.raises(smoke.SmokeBlocked, match="router_anonymous_auth_unsafe"):
+        smoke.authenticated_smoke_token(accepts_anonymous)
+
+    def authenticates_only_token(authorization):
+        if authorization is None:
+            raise HTTPException(status_code=401, detail="unauthorized")
+        assert authorization == "Bearer offline-fixture-token"
+        return "iachat"
+
+    assert smoke.authenticated_smoke_token(
+        SimpleNamespace(require_auth=authenticates_only_token)
+    ) == "offline-fixture-token"
+
+    def rejects_all_tokens(authorization):
+        raise HTTPException(status_code=401, detail="unauthorized")
+
+    with pytest.raises(smoke.SmokeBlocked, match="router_token_auth_failed"):
+        smoke.authenticated_smoke_token(
+            SimpleNamespace(require_auth=rejects_all_tokens)
+        )
+
+    def unexpected_rejection(authorization):
+        raise HTTPException(status_code=403, detail="unexpected")
+
+    with pytest.raises(smoke.SmokeBlocked, match="router_anonymous_auth_unsafe"):
+        smoke.authenticated_smoke_token(
+            SimpleNamespace(require_auth=unexpected_rejection)
+        )
+
+    # Authentication must be checked before TestClient starts provider discovery.
+    source = MODULE.read_text()
+    assert source.index("token = authenticated_smoke_token(api)") < source.index(
+        "with TestClient(api.app) as client:"
+    )

@@ -89,6 +89,33 @@ def eligible_pool_category(decisions) -> str:
     return "multiple_models_one_provider"
 
 
+def authenticated_smoke_token(api) -> str:
+    """Reject a live smoke that could pass via Router's anonymous dev mode.
+
+    Call before TestClient startup, which may perform credentialed inventory
+    discovery. This direct dependency check performs no inference or HTTP call.
+    """
+    from fastapi import HTTPException
+
+    token = (os.getenv("ROUTER_SERVICE_TOKEN") or os.getenv("ROUTER_IACHAT_TOKEN") or "").strip()
+    if not token:
+        raise SmokeBlocked("router_auth_token_missing")
+    try:
+        api.require_auth(None)
+    except HTTPException as exc:
+        if exc.status_code != 401:
+            raise SmokeBlocked("router_anonymous_auth_unsafe") from None
+    else:
+        raise SmokeBlocked("router_anonymous_auth_unsafe")
+    try:
+        identity = api.require_auth("Bearer " + token)
+    except HTTPException:
+        raise SmokeBlocked("router_token_auth_failed") from None
+    if identity not in {"service", "iachat"}:
+        raise SmokeBlocked("router_token_auth_failed")
+    return token
+
+
 def fallback_plan(decisions):
     """Prefer provider-wide 429 recovery; otherwise test model-specific recovery.
 
@@ -164,8 +191,8 @@ def internal(work: Path) -> None:
     from router.selector import rank, billing_ineligibility_reason
     from router.types import RouteRequest
 
-    token = os.getenv("ROUTER_SERVICE_TOKEN") or os.getenv("ROUTER_IACHAT_TOKEN")
-    headers = {"Authorization": "Bearer " + token} if token else {}
+    token = authenticated_smoke_token(api)
+    headers = {"Authorization": "Bearer " + token}
     with TestClient(api.app) as client:
         status = client.get("/health")
         if status.status_code != 200 or status.json().get("status") != "ok":

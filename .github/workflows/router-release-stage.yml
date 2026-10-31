@@ -2,7 +2,7 @@ name: Stage frozen Router release on Oracle (no production switch)
 
 on:
   push:
-    branches: [feat/offline-cooldown-restart-consistency-20261028]
+    branches: [main]
     paths:
       - .github/workflows/router-release-stage.yml
       - .github/workflows/router-release-promote.yml
@@ -32,7 +32,7 @@ jobs:
   oracle-stage:
     # Explicitly authorized non-production staging only. No service switch.
     # Branch- and blob-pinned staging; sandboxed pytest has no outbound network.
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/feat/offline-cooldown-restart-consistency-20261028' }}
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     needs: tests
     runs-on: ubuntu-latest
     timeout-minutes: 12
@@ -58,7 +58,7 @@ jobs:
           ssh -i ~/.ssh/router_oracle -o BatchMode=yes -o StrictHostKeyChecking=yes "$SSH_USER@$SSH_HOST" "ROUTER_SCRIPT_SHA=$SCRIPT_SHA ROUTER_RELEASE_SHA=$SCRIPT_SHA bash -se" <<'REMOTE'
           set -euo pipefail
           cd /home/ubuntu/Proyecto/Herramientas/Router
-          git fetch --quiet origin feat/offline-cooldown-restart-consistency-20261028
+          git fetch --quiet origin main
           git cat-file -e "$ROUTER_SCRIPT_SHA:scripts/router_release_stage.py"
           git show "$ROUTER_SCRIPT_SHA:scripts/router_release_stage.py" | python3 - stage
           REMOTE

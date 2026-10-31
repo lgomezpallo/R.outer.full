@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   tests:
-    if: ${gate}
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor == 'lgomezpallo' && github.event.before == '429ec271938e95159d256f94e9650bbfa012e750' && startsWith(github.event.head_commit.message, 'Router isolated free-model live smoke gate') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

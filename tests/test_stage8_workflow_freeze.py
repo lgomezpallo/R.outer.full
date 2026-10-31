@@ -40,10 +40,10 @@ def test_oracle_jobs_fail_closed_in_offline_freeze(filename, job):
         assert "    environment: router-production" in job_body
         assert approved in source.split("  tests:", 1)[1].split("  oracle-promote:", 1)[0]
     elif filename == "router-release-live-smoke.yml":
-        approved = "    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor == 'lgomezpallo' && github.event.before == '429ec271938e95159d256f94e9650bbfa012e750' && startsWith(github.event.head_commit.message, 'Router isolated free-model live smoke gate') }}"
+        approved = "    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor == 'lgomezpallo' && github.event.before == '1684ee0bcc896d88f7d3a0acaef091ff8ccc8075' && startsWith(github.event.head_commit.message, 'Router isolated free-model live smoke gate') }}"
         assert approved in job_header, "Live smoke requires one-time owner-authorized main push"
         assert job_header.count("    if: ") == 1
-        assert "          RELEASE_SHA: dc3e64ea0e5b70ed0d93a64d272e14a261ef0c46" in source
+        assert "          RELEASE_SHA: 3377e3088c5249a0662aa05870eba18886d4f4e7" in source
         assert "    environment: router-production" in job_body
         assert approved in source.split("  tests:", 1)[1].split("  oracle-live-smoke:", 1)[0]
     else:

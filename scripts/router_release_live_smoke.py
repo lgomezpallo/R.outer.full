@@ -28,6 +28,7 @@ BACKUPS = Path.home() / "router-private-backups"
 VALID_STATUSES = ("live_health=passed", "live_chat=passed", "live_fallback=passed")
 SAFE_FALLBACK_DIAGNOSTICS = frozenset({"single_model", "no_attempts", "first_provider_not_attempted", "no_second_attempt", "second_provider_failed", "second_model_failed", "unexpected_result"})
 SAFE_POOL_CATEGORIES = frozenset({"none", "one_model", "multiple_models_one_provider", "multiple_providers"})
+SAFE_PREFLIGHT_DIAGNOSTICS = frozenset({"frozen_release_missing", "frozen_release_invalid", "frozen_release_mismatch"})
 ENV_PATTERN = re.compile(r"(-?/[^\s()]+)\s+\(ignore_errors=(?:yes|no)\)")
 SAFE_USER = re.compile(r"[a-z_][a-z0-9_-]*")
 
@@ -43,6 +44,18 @@ def candidate_pin() -> str:
     if not re.fullmatch(r"[0-9a-f]{40}", SCRIPT_SHA):
         raise SmokeBlocked("script_sha_required")
     return PINNED_SHA
+
+
+def verify_frozen_release() -> None:
+    """Read-only check of the exact pinned worktree, with safe error categories."""
+    if RELEASE.is_symlink() or not RELEASE.is_dir():
+        raise SmokeBlocked("frozen_release_missing")
+    try:
+        actual = command("git", "-C", str(RELEASE), "rev-parse", "HEAD")
+    except subprocess.CalledProcessError:
+        raise SmokeBlocked("frozen_release_invalid") from None
+    if actual != PINNED_SHA:
+        raise SmokeBlocked("frozen_release_mismatch")
 
 
 def command(*args: str) -> str:
@@ -153,8 +166,7 @@ def internal(work: Path) -> None:
     candidate_pin()
     if not work.is_dir() or work.is_symlink():
         raise SmokeBlocked("unsafe_private_directory")
-    if command("git", "-C", str(RELEASE), "rev-parse", "HEAD") != PINNED_SHA:
-        raise SmokeBlocked("frozen_release_mismatch")
+    verify_frozen_release()
     prod_workdir = Path(os.environ.get("ROUTER_PRODUCTION_WORKDIR", str(APP)))
     if prod_workdir != APP:
         raise SmokeBlocked("unexpected_production_workdir")
@@ -279,8 +291,7 @@ def orchestrate(script: Path) -> None:
     candidate_pin()
     if command("systemctl", "is-active", "router.service") != "active":
         raise SmokeBlocked("production_not_active")
-    if command("git", "-C", str(RELEASE), "rev-parse", "HEAD") != PINNED_SHA:
-        raise SmokeBlocked("frozen_release_missing")
+    verify_frozen_release()
     if not (APP / ".venv/bin/python").is_file():
         raise SmokeBlocked("python_venv_missing")
     service_user = command("systemctl", "show", "router.service", "-p", "User", "--value")
@@ -365,6 +376,8 @@ if __name__ == "__main__":
         else:
             raise SmokeBlocked("invalid_smoke_mode")
     except (SmokeBlocked, OSError, subprocess.SubprocessError, sqlite3.Error,
-            ValueError, KeyError, ImportError):
+            ValueError, KeyError, ImportError) as error:
+        if isinstance(error, SmokeBlocked) and str(error) in SAFE_PREFLIGHT_DIAGNOSTICS:
+            print("live_smoke_preflight=" + str(error), flush=True)
         print("live_smoke_status=blocked", flush=True)
         sys.exit(2)

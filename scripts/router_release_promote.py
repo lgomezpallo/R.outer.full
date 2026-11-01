@@ -15,6 +15,7 @@ import re
 import shlex
 import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
@@ -173,6 +174,105 @@ def original_argv(raw: str) -> list[str]:
     return argv
 
 
+
+
+def standard_external_uvicorn_launcher(executable: Path, external_root: Path) -> bool:
+    """Accept only a recognized pip console script from the verified checkout.
+
+    Do not execute or log the external launcher: arbitrary wrapper behavior
+    cannot be assumed equivalent to canonical 'python -m uvicorn'.
+    """
+    expected = external_root / ".venv/bin/uvicorn"
+    interpreter = external_root / ".venv/bin/python"
+    try:
+        if (executable != expected or executable.is_symlink()
+                or executable.resolve(strict=True) != expected
+                or not os.access(executable, os.X_OK)
+                or not interpreter.is_file() or not os.access(interpreter, os.X_OK)):
+            return False
+        source = executable.read_bytes()
+        if len(source) > 2048 or b"\0" in source:
+            return False
+        first, sep, rest = source.decode("utf-8").partition("\n")
+        if not sep or first != "#!" + str(interpreter):
+            return False
+        body = rest.strip() + "\n"
+        legacy = (
+            "import re\n"
+            "import sys\n"
+            "from uvicorn.main import main\n"
+            "if __name__ == '__main__':\n"
+            "    sys.argv[0] = re.sub(r'(-script\\.pyw|\\.exe)?$', '', sys.argv[0])\n"
+            "    sys.exit(main())\n"
+        )
+        modern = (
+            "import sys\n"
+            "from uvicorn.main import main\n"
+            "if __name__ == '__main__':\n"
+            "    if sys.argv[0].endswith('.exe'):\n"
+            "        sys.argv[0] = sys.argv[0][:-4]\n"
+            "    sys.exit(main())\n"
+        )
+        return body in (legacy, modern, "# -*- coding: utf-8 -*-\n" + legacy,
+                        "# -*- coding: utf-8 -*-\n" + modern)
+    except (OSError, UnicodeError, RuntimeError):
+        return False
+
+
+def promotion_argv(raw: str) -> list[str]:
+    """Normalize a *verified* external service to the canonical venv in the
+    new release drop-in. Never rewrite the base unit or weaken original_argv.
+
+    The original ExecStart remains intact. Removing our single drop-in restores
+    the original executable and import checkout together.
+    """
+    try:
+        return original_argv(raw)
+    except PromoteBlocked as error:
+        if str(error) != "service_interpreter_unsupported":
+            raise
+    match = re.search(r"argv\[\]=(.*?)\s+;\s+ignore_errors=", raw)
+    if match is None:
+        raise PromoteBlocked("service_exec_layout_unsupported")
+    try:
+        original = shlex.split(match.group(1))
+    except ValueError:
+        raise PromoteBlocked("service_exec_layout_unsupported") from None
+    if not original:
+        raise PromoteBlocked("service_exec_layout_unsupported")
+    executable = Path(original[0])
+    if not executable.is_absolute() or executable.is_symlink() or not executable.is_file():
+        raise PromoteBlocked("service_interpreter_unsupported")
+    if executable.name == "uvicorn":
+        tail = original[1:]
+    else:
+        # A foreign Python can import a different uvicorn or startup wrapper.
+        # Do not normalize it without a separately verified provenance.
+        raise PromoteBlocked("service_interpreter_unsupported")
+    if original.count("--app-dir") != 1:
+        raise PromoteBlocked("service_app_dir_unsupported")
+    index = original.index("--app-dir") + 1
+    if index >= len(original) or not Path(original[index]).is_absolute():
+        raise PromoteBlocked("service_app_dir_unsupported")
+    try:
+        external_root = Path(original[index]).resolve(strict=True)
+    except (OSError, RuntimeError):
+        raise PromoteBlocked("service_app_dir_unsupported") from None
+    # Unlike the general app-dir verifier, an external interpreter requires a
+    # clean, tracked Router checkout whose HEAD is a candidate ancestor.
+    if not clean_known_external_checkout(external_root):
+        raise PromoteBlocked("service_app_dir_unsupported")
+    if not standard_external_uvicorn_launcher(executable, external_root):
+        raise PromoteBlocked("service_interpreter_unsupported")
+    canonical = APP / ".venv/bin/python"
+    if not canonical.is_file() or not os.access(canonical, os.X_OK):
+        raise PromoteBlocked("canonical_interpreter_unavailable")
+    normalized = [str(canonical), "-m", "uvicorn", *tail]
+    # Reuse all existing host/port/import-root/flag checks unchanged.
+    original_argv("argv[]=" + shlex.join(normalized) + " ; ignore_errors=no")
+    return normalized
+
+
 def candidate_argv(argv: list[str]) -> list[str]:
     """Replace an existing uvicorn --app-dir instead of duplicating the flag."""
     if "--app-dir" not in argv:
@@ -205,6 +305,34 @@ def dropin_precedence_safe() -> bool:
     except (OSError, subprocess.SubprocessError):
         return False
 
+
+
+def release_override_absent() -> bool:
+    """Reject overrides and sudo denial (which also exits 1, like test false).
+
+    Probe a known-present path using the same sudo/test command before and
+    after the negative checks. Never treat sudo exit 1 alone as proof that
+    the release override is absent.
+    """
+    # Each negative test must have a positive inverse against the SAME
+    # protected path. sudoers may allow testing "/" but deny this path;
+    # a denied sudo command also exits 1 and must never mean "absent".
+    probes = (
+        (("-e", "/"), 0),
+        (("-e", str(OVERRIDE)), 1),
+        (("!", "-e", str(OVERRIDE)), 0),
+        (("-L", str(OVERRIDE)), 1),
+        (("!", "-L", str(OVERRIDE)), 0),
+        (("-e", "/"), 0),
+    )
+    for args, expected in probes:
+        result = subprocess.run(
+            ["sudo", "-n", "test", *args],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10,
+        )
+        if result.returncode != expected:
+            return False
+    return True
 
 
 def private_dir(path: Path) -> None:
@@ -369,10 +497,42 @@ def pinned_process() -> bool:
         return False
 
 
-def rollback() -> bool:
+def release_file_identity(path: Path) -> tuple[int, int]:
+    """Read inode identity without following symlinks; never trust a swapped file."""
+    try:
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode):
+            raise PromoteBlocked("release_override_identity_unsafe")
+        return info.st_dev, info.st_ino
+    except OSError:
+        raise PromoteBlocked("release_override_identity_unavailable") from None
+
+
+def release_override_matches(identity: tuple[int, int]) -> bool:
+    try:
+        return release_file_identity(OVERRIDE) == identity
+    except PromoteBlocked:
+        return False
+
+
+def rollback(expected_exec: str | None = None,
+             expected_identity: tuple[int, int] | None = None) -> bool:
+    """Remove only our installed inode; verify original ExecStart before restart.
+
+    Legacy isolated tests call rollback() without identity. Every production
+    promotion supplies both original ExecStart and the installed file identity.
+    """
+    if expected_exec is not None and (
+        expected_identity is None or not release_override_matches(expected_identity)
+    ):
+        return False
     try:
         run("sudo", "-n", "rm", "-f", str(OVERRIDE))
         run("sudo", "-n", "systemctl", "daemon-reload")
+        if expected_exec is not None and command(
+            "systemctl", "show", "router.service", "-p", "ExecStart", "--value"
+        ) != expected_exec:
+            return False
         run("sudo", "-n", "systemctl", "restart", "router.service")
         return wait_health()
     except (OSError, subprocess.SubprocessError):
@@ -395,11 +555,11 @@ def promote(script: Path) -> None:
     inline = command("systemctl", "show", "router.service", "-p", "Environment", "--value")
     if re.search(r"(?:KEY|TOKEN|PASSWORD|SECRET|CREDENTIAL)", inline, re.I):
         raise PromoteBlocked("inline_secret_environment_unsupported")
-    argv = original_argv(command("systemctl", "show", "router.service", "-p", "ExecStart", "--value"))
+    original_exec = command("systemctl", "show", "router.service", "-p", "ExecStart", "--value")
+    argv = promotion_argv(original_exec)
     if not dropin_precedence_safe():
         raise PromoteBlocked("service_dropin_order_unsupported")
-    if subprocess.run(["sudo", "-n", "test", "-e", str(OVERRIDE)],
-                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+    if not release_override_absent():
         raise PromoteBlocked("existing_release_override")
     private_dir(BACKUPS)
     work = Path(tempfile.mkdtemp(prefix="router-promote-", dir=BACKUPS))
@@ -423,12 +583,23 @@ def promote(script: Path) -> None:
     staged.write_text(content)
     staged.chmod(0o600)
     installed = False
+    installed_identity: tuple[int, int] | None = None
     try:
         run("sudo", "-n", "mkdir", "-p", str(OVERRIDE.parent))
         temp_override = str(OVERRIDE) + ".pending-" + uuid.uuid4().hex[:10]
         run("sudo", "-n", "install", "-m", "0644", str(staged), temp_override)
-        run("sudo", "-n", "mv", "-T", temp_override, str(OVERRIDE))
-        installed = True
+        try:
+            # Record the source inode BEFORE linking. A concurrently replaced
+            # drop-in must never be mistaken for our release during rollback.
+            installed_identity = release_file_identity(Path(temp_override))
+            # Same-directory hard link: atomic create-if-absent. -T prevents
+            # following a concurrent destination symlink to a directory.
+            run("sudo", "-n", "ln", "-T", temp_override, str(OVERRIDE))
+            installed = True
+            if not release_override_matches(installed_identity):
+                raise PromoteBlocked("release_override_identity_changed")
+        finally:
+            run("sudo", "-n", "rm", "-f", temp_override)
         run("sudo", "-n", "systemctl", "daemon-reload")
         run("sudo", "-n", "systemctl", "restart", "router.service")
         if not wait_health() or not pinned_process():
@@ -436,12 +607,14 @@ def promote(script: Path) -> None:
         print("postdeploy_health=passed", flush=True)
         print("postdeploy_release_pin=passed", flush=True)
         private_unit(script, work, user, envfiles, "verify")
+        if not release_override_matches(installed_identity):
+            raise PromoteBlocked("release_override_identity_changed")
         print("production_release_sha=" + PINNED_SHA, flush=True)
         print("release_status=DEPLOYED_VERIFIED", flush=True)
         installed = False  # Successful promotion: keep our reversible drop-in.
     finally:
         if installed:
-            restored = rollback()
+            restored = rollback(original_exec, installed_identity)
             print("automatic_rollback=" + ("passed" if restored else "failed"), flush=True)
 
 

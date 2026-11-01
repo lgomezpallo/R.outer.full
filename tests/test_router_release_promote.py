@@ -292,3 +292,249 @@ def test_private_backup_uses_effective_process_data_paths_not_provider_envfiles(
     assert 'if mode == "backup":' in source
     assert '"--setenv=ROUTER_DB_FILE=" + db_path' in source
     assert '"--setenv=ROUTER_CATALOG_FILE=" + catalog_path' in source
+
+
+def test_external_interpreter_promotes_only_as_reversible_canonical_override(monkeypatch, tmp_path):
+    app = tmp_path / "checkout"
+    (app / ".venv/bin").mkdir(parents=True)
+    (app / "router").mkdir()
+    (app / "router/api.py").write_text("app = object()\\n")
+    canonical = app / ".venv/bin/python"
+    canonical.write_text("synthetic canonical python")
+    canonical.chmod(0o755)
+    external_root = tmp_path / "external-checkout"
+    (external_root / "router").mkdir(parents=True)
+    (external_root / "router/api.py").write_text("app = object()\n")
+    (external_root / ".venv/bin").mkdir(parents=True)
+    interpreter = external_root / ".venv/bin/python"
+    interpreter.write_text("synthetic interpreter")
+    interpreter.chmod(0o755)
+    external_binary = external_root / ".venv/bin/uvicorn"
+    external_binary.write_text(
+        f"#!{interpreter}\n"
+        "import sys\n"
+        "from uvicorn.main import main\n"
+        "if __name__ == '__main__':\n"
+        "    if sys.argv[0].endswith('.exe'):\n"
+        "        sys.argv[0] = sys.argv[0][:-4]\n"
+        "    sys.exit(main())\n"
+    )
+    external_binary.chmod(0o755)
+    release = tmp_path / "frozen"
+    release.mkdir()
+    monkeypatch.setattr(promote, "APP", app)
+    monkeypatch.setattr(promote, "RELEASE", release)
+    monkeypatch.setattr(
+        promote, "clean_known_external_checkout",
+        lambda root: root == external_root,
+    )
+    raw = (
+        f"{{ path={external_binary} ; argv[]={external_binary} "
+        f"router.api:app --host 127.0.0.1 --port 8010 "
+        f"--app-dir {external_root} ; ignore_errors=no }}"
+    )
+    with pytest.raises(promote.PromoteBlocked, match="service_interpreter_unsupported"):
+        promote.original_argv(raw)
+    normalized = promote.promotion_argv(raw)
+    assert normalized[:3] == [str(canonical), "-m", "uvicorn"]
+    candidate = promote.candidate_argv(normalized)
+    assert candidate[:3] == normalized[:3]
+    assert candidate[candidate.index("--app-dir") + 1] == str(release)
+    assert candidate[candidate.index("--host") + 1] == "127.0.0.1"
+    assert candidate[candidate.index("--port") + 1] == "8010"
+
+    monkeypatch.setattr(promote, "clean_known_external_checkout", lambda root: False)
+    with pytest.raises(promote.PromoteBlocked, match="service_app_dir_unsupported"):
+        promote.promotion_argv(raw)
+    with pytest.raises(promote.PromoteBlocked):
+        promote.promotion_argv(raw.replace("--port 8010", "--port 8080"))
+    with pytest.raises(promote.PromoteBlocked):
+        promote.promotion_argv(raw.replace("127.0.0.1", "0.0.0.0"))
+    with pytest.raises(promote.PromoteBlocked):
+        promote.promotion_argv(raw.replace("router.api:app", "other.api:app"))
+    with pytest.raises(promote.PromoteBlocked, match="service_interpreter_unsupported"):
+        promote.promotion_argv(raw.replace(str(external_binary), "/bin/sh"))
+
+
+def test_external_interpreter_rejects_unverified_or_symlinked_binary(monkeypatch, tmp_path):
+    app = tmp_path / "app"
+    (app / ".venv/bin").mkdir(parents=True)
+    (app / ".venv/bin/python").write_text("synthetic")
+    monkeypatch.setattr(promote, "APP", app)
+    external_root = tmp_path / "external"
+    external_root.mkdir()
+    binary = tmp_path / "uvicorn"
+    binary.write_text("synthetic")
+    alias = tmp_path / "alias"
+    alias.symlink_to(binary)
+    raw = (
+        f"argv[]={alias} router.api:app --host 127.0.0.1 --port 8010 "
+        f"--app-dir {external_root} ; ignore_errors=no"
+    )
+    with pytest.raises(promote.PromoteBlocked, match="service_interpreter_unsupported"):
+        promote.promotion_argv(raw)
+
+
+def test_rollback_verifies_original_effective_exec_before_restart(monkeypatch, tmp_path):
+    override = tmp_path / "release.conf"
+    override.write_text("[Service]\n")
+    monkeypatch.setattr(promote, "OVERRIDE", override)
+    identity = promote.release_file_identity(override)
+    calls = []
+    monkeypatch.setattr(promote, "run", lambda *args: calls.append(args))
+    monkeypatch.setattr(promote, "wait_health", lambda: True)
+    monkeypatch.setattr(promote, "command", lambda *args: "original-exec")
+    assert promote.rollback("original-exec", identity)
+    assert any("daemon-reload" in args for args in calls)
+    assert any("restart" in args for args in calls)
+    calls.clear()
+    assert not promote.rollback("different-exec", identity)
+    assert not any("restart" in args for args in calls)
+
+
+def test_rollback_preserves_foreign_or_replaced_dropin(monkeypatch, tmp_path):
+    installed = tmp_path / "installed.conf"
+    installed.write_text("[Service]\nExecStart=owned\n")
+    identity = promote.release_file_identity(installed)
+    override = tmp_path / "release.conf"
+    override.write_text("[Service]\nExecStart=foreign\n")
+    monkeypatch.setattr(promote, "OVERRIDE", override)
+    calls = []
+    monkeypatch.setattr(promote, "run", lambda *args: calls.append(args))
+    assert not promote.rollback("original-exec", identity)
+    assert override.read_text() == "[Service]\nExecStart=foreign\n"
+    assert calls == []
+    override.unlink()
+    override.symlink_to(installed)
+    assert not promote.rollback("original-exec", identity)
+    assert override.is_symlink()
+    assert calls == []
+    override.unlink()
+    assert not promote.rollback("original-exec", identity)
+    assert calls == []
+
+
+def test_release_identity_requires_regular_file_without_following_symlinks(tmp_path):
+    installed = tmp_path / "installed.conf"
+    installed.write_text("[Service]\n")
+    alias = tmp_path / "alias.conf"
+    alias.symlink_to(installed)
+    with pytest.raises(promote.PromoteBlocked, match="release_override_identity_unsafe"):
+        promote.release_file_identity(alias)
+    with pytest.raises(promote.PromoteBlocked, match="release_override_identity_unsafe"):
+        promote.release_file_identity(tmp_path)
+
+
+
+def test_release_override_preflight_rejects_existing_file_dangling_link_and_sudo_error(monkeypatch):
+    def check(file_status, symlink_status, first_probe=0, last_probe=0,
+              inverse_file_status=0, inverse_symlink_status=0):
+        observed = []
+        def fake_run(args, **kwargs):
+            inverse = args[3] == "!"
+            flag, target = args[-2:]
+            observed.append((("!" if inverse else "") + flag, target))
+            if target == "/":
+                status = first_probe if observed.count(("-e", "/")) == 1 else last_probe
+            elif inverse:
+                status = inverse_file_status if flag == "-e" else inverse_symlink_status
+            else:
+                status = file_status if flag == "-e" else symlink_status
+            return subprocess.CompletedProcess(args, status)
+        monkeypatch.setattr(promote.subprocess, "run", fake_run)
+        return promote.release_override_absent(), observed
+
+    initial = [("-e", "/")]
+    file_check = initial + [("-e", str(promote.OVERRIDE))]
+    inverse_file_check = file_check + [("!-e", str(promote.OVERRIDE))]
+    symlink_check = inverse_file_check + [("-L", str(promote.OVERRIDE))]
+    inverse_symlink_check = symlink_check + [("!-L", str(promote.OVERRIDE))]
+    complete = inverse_symlink_check + [("-e", "/")]
+    assert check(1, 1) == (True, complete)
+    assert check(0, 1) == (False, file_check)
+    assert check(1, 0) == (False, symlink_check)
+    assert check(2, 1) == (False, file_check)
+    assert check(1, 2) == (False, symlink_check)
+    # A selective sudoers denial on the protected path cannot look absent.
+    assert check(1, 1, inverse_file_status=1) == (False, inverse_file_check)
+    assert check(1, 1, inverse_symlink_status=1) == (False, inverse_symlink_check)
+    assert check(1, 1, inverse_file_status=2) == (False, inverse_file_check)
+    assert check(1, 1, inverse_symlink_status=2) == (False, inverse_symlink_check)
+    assert check(1, 1, first_probe=1) == (False, initial)
+    assert check(1, 1, last_probe=1) == (False, complete)
+
+
+def test_dropin_install_uses_atomic_create_without_replacing_existing_override():
+    source = MODULE.read_text()
+    assert 'run("sudo", "-n", "ln", "-T", temp_override, str(OVERRIDE))' in source
+    assert 'run("sudo", "-n", "mv", "-T", temp_override, str(OVERRIDE))' not in source
+    assert 'run("sudo", "-n", "rm", "-f", temp_override)' in source
+
+
+def test_atomic_dropin_link_never_follows_directory_symlink(tmp_path):
+    """GNU ln without -T follows a symlink to a directory (unsafe race)."""
+    source = tmp_path / "pending"
+    source.write_text("[Service]\\n")
+    target_dir = tmp_path / "outside"
+    target_dir.mkdir()
+    override = tmp_path / "release.conf"
+    override.symlink_to(target_dir, target_is_directory=True)
+    attempt = subprocess.run(
+        ["ln", "-T", str(source), str(override)],
+        capture_output=True, check=False,
+    )
+    assert attempt.returncode != 0
+    assert override.is_symlink()
+    assert not (target_dir / source.name).exists()
+    # The intended absent destination remains a valid atomic hardlink.
+    ordinary = tmp_path / "new.conf"
+    subprocess.run(["ln", "-T", str(source), str(ordinary)], check=True)
+    assert ordinary.samefile(source)
+
+
+def test_external_launcher_rejects_arbitrary_wrapper_and_foreign_python(monkeypatch, tmp_path):
+    app = tmp_path / "canonical"
+    (app / ".venv/bin").mkdir(parents=True)
+    (app / "router").mkdir()
+    (app / "router/api.py").write_text("app = object()\n")
+    (app / ".venv/bin/python").write_text("synthetic")
+    (app / ".venv/bin/python").chmod(0o755)
+    monkeypatch.setattr(promote, "APP", app)
+    root = tmp_path / "external"
+    (root / ".venv/bin").mkdir(parents=True)
+    (root / "router").mkdir()
+    (root / "router/api.py").write_text("app = object()\n")
+    interpreter = root / ".venv/bin/python"
+    interpreter.write_text("synthetic")
+    interpreter.chmod(0o755)
+    launcher = root / ".venv/bin/uvicorn"
+    launcher.write_text(
+        f"#!{interpreter}\n"
+        "import sys\n"
+        "from uvicorn.main import main\n"
+        "if __name__ == '__main__':\n"
+        "    if sys.argv[0].endswith('.exe'):\n"
+        "        sys.argv[0] = sys.argv[0][:-4]\n"
+        "    sys.exit(main())\n"
+    )
+    launcher.chmod(0o755)
+    monkeypatch.setattr(promote, "clean_known_external_checkout", lambda path: path == root)
+    def raw(executable, args=""):
+        return (
+            f"argv[]={executable} {args}router.api:app --host 127.0.0.1 "
+            f"--port 8010 --app-dir {root} ; ignore_errors=no"
+        )
+    assert promote.promotion_argv(raw(launcher))[:3] == [
+        str(app / ".venv/bin/python"), "-m", "uvicorn"
+    ]
+    launcher.write_text(f"#!{interpreter}\nimport os\nos.system('echo unexpected')\n")
+    with pytest.raises(promote.PromoteBlocked, match="service_interpreter_unsupported"):
+        promote.promotion_argv(raw(launcher))
+    launcher.write_text(f"#!/wrong/interpreter\nfrom uvicorn.main import main\n")
+    with pytest.raises(promote.PromoteBlocked, match="service_interpreter_unsupported"):
+        promote.promotion_argv(raw(launcher))
+    with pytest.raises(promote.PromoteBlocked, match="service_interpreter_unsupported"):
+        promote.promotion_argv(raw(interpreter, "-m uvicorn "))
+    launcher.chmod(0o644)
+    with pytest.raises(promote.PromoteBlocked, match="service_interpreter_unsupported"):
+        promote.promotion_argv(raw(launcher))

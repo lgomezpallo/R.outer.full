@@ -119,8 +119,11 @@ def test_mocked_failed_promotion_rolls_back_service_override(monkeypatch, tmp_pa
         return values[property_name]
 
     def fake_subprocess_run(args, **kwargs):
-        if args[:4] == ["sudo", "-n", "test", "-e"]:
-            return SimpleNamespace(returncode=1)
+        if args[:3] == ["sudo", "-n", "test"]:
+            if args[3] == "!" and args[4] in ("-e", "-L"):
+                return SimpleNamespace(returncode=0 if args[5] != "/" else 1)
+            if args[3] in ("-e", "-L"):
+                return SimpleNamespace(returncode=0 if args[4] == "/" else 1)
         if args == ["systemctl", "cat", "router.service"]:
             kwargs["stdout"].write(b"[Service]\nExecStart=baseline\n")
             return SimpleNamespace(returncode=0)
@@ -143,8 +146,10 @@ def test_mocked_failed_promotion_rolls_back_service_override(monkeypatch, tmp_pa
             Path(args[4]).mkdir(parents=True, exist_ok=True)
         elif args[2:5] == ("install", "-m", "0644"):
             shutil.copy2(args[5], args[6])
-        elif args[2:4] == ("mv", "-T"):
-            os.replace(args[4], args[5])
+        elif args[2] == "ln":
+            # Atomic no-clobber installation: existing paths must never be replaced.
+            assert args[3] == "-T", "drop-in link must not follow directory symlinks"
+            os.link(args[4], args[5])
         elif args[2:4] == ("rm", "-f"):
             Path(args[4]).unlink(missing_ok=True)
         elif args[2:4] == ("systemctl", "daemon-reload"):

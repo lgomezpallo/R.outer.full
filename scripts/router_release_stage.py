@@ -433,6 +433,27 @@ def preflight_promotion_layout(promote_module: object) -> None:
 
 
 
+
+SMOKE_FROZEN_SHA = "3377e3088c5249a0662aa05870eba18886d4f4e7"
+
+
+def frozen_smoke_worktree_status(release_root: Path) -> str:
+    """Read-only, categorical check of the old smoke pin; no paths in output."""
+    target = release_root / SMOKE_FROZEN_SHA
+    if not target.exists() and not target.is_symlink():
+        return "missing"
+    if target.is_symlink() or not target.is_dir():
+        return "invalid"
+    try:
+        top = command("git", "rev-parse", "--show-toplevel", cwd=target)
+        if Path(top).resolve(strict=True) != target.resolve(strict=True):
+            return "invalid"
+        actual = command("git", "rev-parse", "HEAD", cwd=target)
+        return "match" if actual == SMOKE_FROZEN_SHA else "mismatch"
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return "invalid"
+
+
 def live_baseline_root(pin: str, snapshot: Path) -> Path:
     """Preserve the actual external import checkout before rollback rehearsal."""
     raw = command("systemctl", "show", "router.service", "-p", "ExecStart", "--value")
@@ -481,6 +502,7 @@ def stage() -> None:
     release_root = Path.home() / "router-releases"
     private_directory(backup_root)
     private_directory(release_root)
+    print("smoke_frozen_worktree=" + frozen_smoke_worktree_status(release_root), flush=True)
     snapshot = Path(tempfile.mkdtemp(prefix="router-stage-", dir=backup_root))
     snapshot.chmod(0o700)
     # Record the dirty state BEFORE fetching anything; preserve every untracked path.

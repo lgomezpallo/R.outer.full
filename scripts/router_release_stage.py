@@ -419,16 +419,12 @@ def preflight_promotion_layout(promote_module: object) -> None:
         raise StageBlocked(reason) from None
     if not promote_module.dropin_precedence_safe():
         raise StageBlocked("promotion_service_dropin_order_unsupported")
-    override = subprocess.run(
-        ["sudo", "-n", "test", "-e", str(promote_module.OVERRIDE)],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
-    if override.returncode == 0:
+    # The promotion gate also rejects dangling symlinks and unexpected sudo
+    # status; a pre-existing drop-in must never be overwritten or removed.
+    if not promote_module.release_override_absent():
         print("existing_override_kind=" + classify_existing_override(promote_module.OVERRIDE),
               flush=True)
         raise StageBlocked("promotion_override_already_present")
-    if override.returncode != 1:
-        raise StageBlocked("promotion_override_check_unavailable")
     print("production_switch_preflight=passed", flush=True)
 
 

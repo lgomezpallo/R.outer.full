@@ -148,7 +148,8 @@ def test_mocked_failed_promotion_rolls_back_service_override(monkeypatch, tmp_pa
             shutil.copy2(args[5], args[6])
         elif args[2] == "ln":
             # Atomic no-clobber installation: existing paths must never be replaced.
-            os.link(args[3], args[4])
+            assert args[3] == "-T", "drop-in link must not follow directory symlinks"
+            os.link(args[4], args[5])
         elif args[2:4] == ("rm", "-f"):
             Path(args[4]).unlink(missing_ok=True)
         elif args[2:4] == ("systemctl", "daemon-reload"):

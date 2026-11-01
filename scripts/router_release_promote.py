@@ -218,7 +218,7 @@ def promotion_argv(raw: str) -> list[str]:
     if not clean_known_external_checkout(external_root):
         raise PromoteBlocked("service_app_dir_unsupported")
     canonical = APP / ".venv/bin/python"
-    if canonical.is_symlink() or not canonical.is_file():
+    if not canonical.is_file() or not os.access(canonical, os.X_OK):
         raise PromoteBlocked("canonical_interpreter_unavailable")
     normalized = [str(canonical), "-m", "uvicorn", *tail]
     # Reuse all existing host/port/import-root/flag checks unchanged.

@@ -108,6 +108,18 @@ def test_rejects_unverified_release_and_launcher(tmp_path):
         p3.canonicalize(raw, **kwargs)
 
 
+def test_canonical_python_rejects_symlink_to_untrusted_binary(tmp_path):
+    original, raw, kwargs = fixture(tmp_path)
+    canonical = kwargs["app"] / ".venv/bin/python"
+    canonical.unlink()
+    foreign = tmp_path / "untrusted-python3"
+    foreign.write_text("synthetic")
+    foreign.chmod(0o755)
+    canonical.symlink_to(foreign)
+    with pytest.raises(p3.MigrationBlocked, match="canonical_python_unverified_symlink"):
+        p3.canonicalize(raw, **kwargs)
+
+
 def test_rejects_unverified_argv_shape_and_symlink_release(tmp_path):
     original, raw, kwargs = fixture(tmp_path)
     with pytest.raises(p3.MigrationBlocked, match="execstart_shape_unverified"):

@@ -78,6 +78,54 @@ def pip_uvicorn_launcher(executable: Path, root: Path) -> bool:
         return False
 
 
+
+def classify_nested_shebang(executable: Path, *, checkout: Path, release: Path) -> str:
+    """Read-only P3 evidence probe. Return ONLY fixed labels, never paths or data.
+
+    This does not authorize canonicalization: a verified shebang alone cannot
+    establish that the launcher body matches the supported pip wrapper.
+    """
+    expected = {
+        checkout / ".venv/bin/uvicorn": "checkout",
+        release / ".venv/bin/uvicorn": "release",
+    }
+    if executable not in expected:
+        return "launcher_outside_expected"
+    try:
+        if executable.is_symlink() or not executable.is_file():
+            return "launcher_unsafe"
+        with executable.open("rb") as stream:
+            first = stream.readline(512)
+        if not first.startswith(b"#!") or not first.endswith(b"\n"):
+            return "shebang_missing_or_long"
+        directive = first[2:-1].decode("utf-8").strip()
+        if not directive or any(c.isspace() for c in directive):
+            return "shebang_arguments_unsupported"
+        interpreter = Path(directive)
+        if not interpreter.is_absolute():
+            return "shebang_not_absolute"
+        roots = {
+            checkout / ".venv/bin": "checkout",
+            release / ".venv/bin": "release",
+        }
+        scope = roots.get(interpreter.parent)
+        if scope is None or not re.fullmatch(r"python(?:3(?:\.\d+)?)?", interpreter.name):
+            return "interpreter_outside_expected_venv"
+        if not interpreter.is_file():
+            return "interpreter_missing"
+        if not os.access(interpreter, os.X_OK):
+            return "interpreter_not_executable"
+        resolved = interpreter.resolve(strict=True)
+        if interpreter.is_symlink() and not (
+            resolved.parent in (Path("/usr/bin"), Path("/usr/local/bin"))
+            and re.fullmatch(r"python3(?:\.\d+)?", resolved.name)
+        ):
+            return "interpreter_symlink_untrusted"
+        return "expected_" + scope + "_venv_python_executable"
+    except (OSError, UnicodeError, RuntimeError):
+        return "probe_unreadable"
+
+
 def canonicalize(
     raw: str, *, app: Path, releases: Path, release_sha: str,
     verified_release_sha: str,

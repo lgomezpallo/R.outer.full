@@ -169,3 +169,25 @@ def test_signal_during_atomic_install_waits_for_owned_identity(tmp_path, monkeyp
     assert fake.capture() == original
     assert fake.restarts == 1
     assert not (args["dropin_dir"] / p3.LATE_DROPIN).exists()
+
+
+def test_privileged_systemctl_uses_fixed_binary_and_clean_environment(monkeypatch):
+    """Untrusted PATH/SYSTEMD_* must not control the privileged subprocess."""
+    from types import SimpleNamespace
+
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return SimpleNamespace(stdout=b"active\n")
+
+    monkeypatch.setattr(one.subprocess, "run", fake_run)
+    monkeypatch.setenv("PATH", "/tmp/untrusted")
+    monkeypatch.setenv("SYSTEMD_PAGER", "/tmp/untrusted")
+    assert one._run(one.SYSTEMCTL, "is-active", one.UNIT) == b"active\n"
+    assert calls[0][0] == ("/usr/bin/systemctl", "is-active", "router.service")
+    assert calls[0][1]["env"] == {"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"}
+    assert calls[0][1]["check"] is True
+    with pytest.raises(one.OperationalBlock, match="system_command_not_allowlisted"):
+        one._run("systemctl", "restart", one.UNIT)
+    assert len(calls) == 1

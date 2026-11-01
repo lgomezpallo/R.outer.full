@@ -25,6 +25,8 @@ from pathlib import Path
 import router_execstart_reconcile as p3
 
 UNIT = "router.service"
+SYSTEMCTL = "/usr/bin/systemctl"  # fixed root-owned binary, never inherited PATH
+SYSTEMCTL_ENV = {"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"}
 DROPINS = Path("/etc/systemd/system/router.service.d")
 HEALTH_HOST = "127.0.0.1"
 HEALTH_PORT = 8010
@@ -64,9 +66,14 @@ def parse_effective(raw: bytes) -> list[str]:
 
 
 def _run(*args: str, timeout: int = 10) -> bytes:
+    # A privileged wrapper must not inherit an attacker-controlled PATH or
+    # SYSTEMD_* environment when invoking the only allowed system binary.
+    if not args or args[0] != SYSTEMCTL:
+        raise OperationalBlock("system_command_not_allowlisted")
     try:
         return subprocess.run(args, check=True, stdout=subprocess.PIPE,
-                              stderr=subprocess.DEVNULL, timeout=timeout).stdout
+                              stderr=subprocess.DEVNULL, timeout=timeout,
+                              env=SYSTEMCTL_ENV).stdout
     except (OSError, subprocess.SubprocessError):
         raise OperationalBlock("system_command_failed") from None
 
@@ -94,7 +101,7 @@ class LiveSystemd:
         self.directory = directory
 
     def capture(self) -> Observed:
-        paths = tuple(_run("systemctl", "show", UNIT, "-p", "DropInPaths",
+        paths = tuple(_run(SYSTEMCTL, "show", UNIT, "-p", "DropInPaths",
                            "--value").decode("utf-8").split())
         if len(paths) not in (4, 5):
             raise OperationalBlock("dropin_count_unexpected")
@@ -108,10 +115,10 @@ class LiveSystemd:
             ):
                 raise OperationalBlock("dropin_path_unexpected")
             dropins[path.name] = _regular_bytes(path)
-        state = _run("systemctl", "is-active", UNIT).decode("ascii").strip()
+        state = _run(SYSTEMCTL, "is-active", UNIT).decode("ascii").strip()
         return Observed(
-            unit_cat=_run("systemctl", "cat", UNIT),
-            effective_exec=_run("systemctl", "show", UNIT, "-p", "ExecStart", "--value"),
+            unit_cat=_run(SYSTEMCTL, "cat", UNIT),
+            effective_exec=_run(SYSTEMCTL, "show", UNIT, "-p", "ExecStart", "--value"),
             paths=paths, dropins=dropins, state=state, health_ok=self.health(),
         )
 
@@ -130,10 +137,10 @@ class LiveSystemd:
             connection.close()
 
     def reload(self) -> None:
-        _run("systemctl", "daemon-reload", timeout=20)
+        _run(SYSTEMCTL, "daemon-reload", timeout=20)
 
     def restart(self) -> None:
-        _run("systemctl", "restart", UNIT, timeout=40)
+        _run(SYSTEMCTL, "restart", UNIT, timeout=40)
 
 
 def require_privileged_private_root(root: Path) -> None:

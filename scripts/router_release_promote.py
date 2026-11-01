@@ -186,7 +186,7 @@ def promotion_argv(raw: str) -> list[str]:
     except PromoteBlocked as error:
         if str(error) != "service_interpreter_unsupported":
             raise
-    match = re.search(r"argv\\[\\]=(.*?)\\s+;\\s+ignore_errors=", raw)
+    match = re.search(r"argv\[\]=(.*?)\s+;\s+ignore_errors=", raw)
     if match is None:
         raise PromoteBlocked("service_exec_layout_unsupported")
     try:
@@ -200,7 +200,7 @@ def promotion_argv(raw: str) -> list[str]:
         raise PromoteBlocked("service_interpreter_unsupported")
     if executable.name == "uvicorn":
         tail = original[1:]
-    elif re.fullmatch(r"python(?:3(?:\\.[0-9]+)?)?", executable.name) and original[1:3] == ["-m", "uvicorn"]:
+    elif re.fullmatch(r"python(?:3(?:\.[0-9]+)?)?", executable.name) and original[1:3] == ["-m", "uvicorn"]:
         tail = original[3:]
     else:
         raise PromoteBlocked("service_interpreter_unsupported")

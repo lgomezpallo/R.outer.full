@@ -438,12 +438,12 @@ def test_full_effective_snapshot_preserves_four_dropins_and_offline_exec(tmp_pat
     private = tmp_path / "snapshot"
     private.mkdir(mode=0o700)
     dropins = {
-        "10-runtime.conf": b"[Service]\\nEnvironment=ROUTER_OFFLINE_ONLY=1\\n",
-        "30-offline.conf": b"[Service]\\n",
-        "50-release.conf": b"[Service]\\nExecStart=/usr/bin/env ROUTER_OFFLINE_ONLY=1\\n",
-        "90-guard.conf": b"[Service]\\n",
+        "10-runtime.conf": b"[Service]\nEnvironment=ROUTER_OFFLINE_ONLY=1\n",
+        "30-offline.conf": b"[Service]\n",
+        "50-release.conf": b"[Service]\nExecStart=/usr/bin/env ROUTER_OFFLINE_ONLY=1\n",
+        "90-guard.conf": b"[Service]\n",
     }
-    cat = b"# unit and all drop-ins, byte-for-byte\\n" + b"".join(dropins.values())
+    cat = b"# unit and all drop-ins, byte-for-byte\n" + b"".join(dropins.values())
     effective = b"argv[]=/usr/bin/env ROUTER_OFFLINE_ONLY=1 ; ignore_errors=no"
     p3.backup_effective_service_snapshot(
         unit_cat=cat, dropins=dropins, effective_exec=effective,
@@ -451,7 +451,7 @@ def test_full_effective_snapshot_preserves_four_dropins_and_offline_exec(tmp_pat
     )
     assert (private / "systemctl-cat.before").read_bytes() == cat
     assert (private / "effective-execstart.before").read_bytes() == effective
-    assert (private / "service-state.before").read_bytes() == b"active\\n"
+    assert (private / "service-state.before").read_bytes() == b"active\n"
     names = sorted(dropins)
     assert (private / "dropin-names.before").read_text().splitlines() == names
     for i, name in enumerate(names):
@@ -468,7 +468,7 @@ def test_full_effective_snapshot_preserves_four_dropins_and_offline_exec(tmp_pat
 def test_full_snapshot_fails_closed_before_writing(tmp_path):
     private = tmp_path / "snapshot"
     private.mkdir(mode=0o700)
-    drops = {f"{i}0-entry.conf": b"[Service]\\n" for i in range(4)}
+    drops = {f"{i}0-entry.conf": b"[Service]\n" for i in range(4)}
     args = dict(unit_cat=b"unit", dropins=drops,
                 effective_exec=b"ROUTER_OFFLINE_ONLY=1", state="active", private=private)
     for bad in (

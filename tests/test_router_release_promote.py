@@ -375,17 +375,54 @@ def test_external_interpreter_rejects_unverified_or_symlinked_binary(monkeypatch
         promote.promotion_argv(raw)
 
 
-def test_rollback_verifies_original_effective_exec_before_restart(monkeypatch):
+def test_rollback_verifies_original_effective_exec_before_restart(monkeypatch, tmp_path):
+    override = tmp_path / "release.conf"
+    override.write_text("[Service]\n")
+    monkeypatch.setattr(promote, "OVERRIDE", override)
+    identity = promote.release_file_identity(override)
     calls = []
     monkeypatch.setattr(promote, "run", lambda *args: calls.append(args))
     monkeypatch.setattr(promote, "wait_health", lambda: True)
     monkeypatch.setattr(promote, "command", lambda *args: "original-exec")
-    assert promote.rollback("original-exec")
+    assert promote.rollback("original-exec", identity)
     assert any("daemon-reload" in args for args in calls)
     assert any("restart" in args for args in calls)
     calls.clear()
-    assert not promote.rollback("different-exec")
+    assert not promote.rollback("different-exec", identity)
     assert not any("restart" in args for args in calls)
+
+
+def test_rollback_preserves_foreign_or_replaced_dropin(monkeypatch, tmp_path):
+    installed = tmp_path / "installed.conf"
+    installed.write_text("[Service]\nExecStart=owned\n")
+    identity = promote.release_file_identity(installed)
+    override = tmp_path / "release.conf"
+    override.write_text("[Service]\nExecStart=foreign\n")
+    monkeypatch.setattr(promote, "OVERRIDE", override)
+    calls = []
+    monkeypatch.setattr(promote, "run", lambda *args: calls.append(args))
+    assert not promote.rollback("original-exec", identity)
+    assert override.read_text() == "[Service]\nExecStart=foreign\n"
+    assert calls == []
+    override.unlink()
+    override.symlink_to(installed)
+    assert not promote.rollback("original-exec", identity)
+    assert override.is_symlink()
+    assert calls == []
+    override.unlink()
+    assert not promote.rollback("original-exec", identity)
+    assert calls == []
+
+
+def test_release_identity_requires_regular_file_without_following_symlinks(tmp_path):
+    installed = tmp_path / "installed.conf"
+    installed.write_text("[Service]\n")
+    alias = tmp_path / "alias.conf"
+    alias.symlink_to(installed)
+    with pytest.raises(promote.PromoteBlocked, match="release_override_identity_unsafe"):
+        promote.release_file_identity(alias)
+    with pytest.raises(promote.PromoteBlocked, match="release_override_identity_unsafe"):
+        promote.release_file_identity(tmp_path)
 
 
 

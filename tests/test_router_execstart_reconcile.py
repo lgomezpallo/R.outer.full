@@ -335,3 +335,58 @@ def test_rollback_race_preserves_foreign_symlink(tmp_path, monkeypatch):
     assert path.is_symlink()
     assert path.resolve() == target
     assert target.read_bytes() == b"untouched"
+
+
+def test_shebang_probe_classifies_expected_release_and_checkout_interpreters(tmp_path):
+    original, _, kwargs = fixture(tmp_path)
+    checkout = kwargs["app"]
+    release = kwargs["releases"] / SHA
+    probe = lambda launcher: p3.classify_nested_shebang(
+        launcher, checkout=checkout, release=release)
+    assert probe(Path(original[4])) == "expected_release_venv_python_executable"
+    launcher = checkout / ".venv/bin/uvicorn"
+    alt = checkout / ".venv/bin/python3"
+    alt.write_text("synthetic python")
+    alt.chmod(0o755)
+    launcher.write_text("#!" + str(alt) + "\n" + PIP_SCRIPT)
+    assert probe(launcher) == "expected_checkout_venv_python_executable"
+
+
+def test_shebang_probe_distinguishes_unsupported_and_missing_interpreters(tmp_path):
+    original, _, kwargs = fixture(tmp_path)
+    checkout = kwargs["app"]
+    release = kwargs["releases"] / SHA
+    launcher = Path(original[4])
+    probe = lambda: p3.classify_nested_shebang(
+        launcher, checkout=checkout, release=release)
+    launcher.write_text("#!/usr/bin/env python3\n" + PIP_SCRIPT)
+    assert probe() == "shebang_arguments_unsupported"
+    launcher.write_text("#!/usr/bin/python3\n" + PIP_SCRIPT)
+    assert probe() == "interpreter_outside_expected_venv"
+    launcher.write_text("#!" + str(release / ".venv/bin/python3") + "\n" + PIP_SCRIPT)
+    assert probe() == "interpreter_missing"
+    interpreter = release / ".venv/bin/python3"
+    interpreter.write_text("not executable")
+    interpreter.chmod(0o644)
+    assert probe() == "interpreter_not_executable"
+    launcher.write_text("not a script\n")
+    assert probe() == "shebang_missing_or_long"
+
+
+def test_shebang_probe_rejects_untrusted_symlink_and_never_leaks_paths(tmp_path):
+    original, _, kwargs = fixture(tmp_path)
+    checkout = kwargs["app"]
+    release = kwargs["releases"] / SHA
+    launcher = Path(original[4])
+    interpreter = release / ".venv/bin/python3"
+    foreign = tmp_path / "private-sensitive-path" / "python3"
+    foreign.parent.mkdir()
+    foreign.write_text("synthetic")
+    foreign.chmod(0o755)
+    interpreter.symlink_to(foreign)
+    launcher.write_text("#!" + str(interpreter) + "\n" + PIP_SCRIPT)
+    label = p3.classify_nested_shebang(launcher, checkout=checkout, release=release)
+    assert label == "interpreter_symlink_untrusted"
+    assert str(tmp_path) not in label
+    assert "private-sensitive-path" not in label
+    assert p3.classify_nested_shebang(foreign, checkout=checkout, release=release) == "launcher_outside_expected"

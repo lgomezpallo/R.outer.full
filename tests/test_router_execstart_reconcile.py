@@ -200,3 +200,25 @@ def test_rehearsal_is_offline_and_does_not_offer_production_apply(capsys):
     assert "subprocess.run(" not in source
     assert "sudo" not in source.split('if __name__ == "__main__":')[1]
     assert "Only --rehearse is supported" in source
+
+
+def test_dropin_precedence_requires_same_effective_four_and_late_sorting():
+    paths = [
+        "/etc/systemd/system/router.service.d/10-runtime.conf",
+        "/etc/systemd/system/router.service.d/30-offline.conf",
+        "/etc/systemd/system/router.service.d/50-release.conf",
+        "/etc/systemd/system/router.service.d/90-guard.conf",
+    ]
+    p3.verify_dropin_precedence(paths)
+    with pytest.raises(p3.MigrationBlocked, match="dropin_inventory_changed"):
+        p3.verify_dropin_precedence(paths[:-1])
+    with pytest.raises(p3.MigrationBlocked, match="dropin_precedence_unverified"):
+        p3.verify_dropin_precedence(paths[:-1] + [
+            "/etc/systemd/system/router.service.d/zzzzzz-override.conf"])
+    with pytest.raises(p3.MigrationBlocked, match="dropin_precedence_unverified"):
+        p3.verify_dropin_precedence(paths[:-1] + [
+            "/etc/systemd/system/router.service.d/" + p3.LATE_DROPIN])
+    with pytest.raises(p3.MigrationBlocked, match="dropin_inventory_unsafe"):
+        p3.verify_dropin_precedence(paths[:-1] + [paths[0]])
+    with pytest.raises(p3.MigrationBlocked, match="dropin_inventory_unsafe"):
+        p3.verify_dropin_precedence(paths[:-1] + ["relative.conf"])

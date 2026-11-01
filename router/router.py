@@ -62,7 +62,23 @@ class Router:
                         registered.spec.id, model_ids, billing_statuses, source=snapshot_source
                     )
             except Exception:
-                pass
+                # A failed refresh cannot preserve old "free" approval from a
+                # previously successful OpenRouter price snapshot. An endpoint
+                # outage, malformed response or changed pricing must not cause
+                # stale cached billing evidence to authorize a new inference.
+                # Keep the models for diagnostics; the next successful refresh
+                # can reclassify them. Offline mode never refreshes or routes.
+                if (registered.spec.id == "openrouter"
+                        and registered.spec.last_inventory_source == "client_discover_inventory"):
+                    invalidated = replace(
+                        registered.spec,
+                        models=tuple(
+                            replace(model, billing_status="unknown", discovered_in_last_snapshot=False)
+                            if model.billing_status == "free" else model
+                            for model in registered.spec.models
+                        ),
+                    )
+                    registered.spec = self.catalog.put(invalidated)
         self._hydrate_provider_metrics(registered)
         return registered
 

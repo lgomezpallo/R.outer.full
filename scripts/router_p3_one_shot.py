@@ -172,6 +172,33 @@ def exclusive_lock(root: Path):
         os.close(fd)
 
 
+def consume_one_shot(root: Path) -> None:
+    """Durably consume the single authorized attempt before any service write.
+
+    A failed or interrupted attempt must not be retried under the same approval.
+    The root-owned private directory is held open to avoid pathname swaps.
+    """
+    try:
+        dfd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            marker = os.open(".one-shot-consumed",
+                             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             0o600, dir_fd=dfd)
+            with os.fdopen(marker, "wb") as stream:
+                stream.write(b"consumed\\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except FileExistsError:
+        raise OperationalBlock("one_shot_already_consumed") from None
+    except OSError:
+        # If the marker was created but fsync failed, leave it in place.
+        # No automatic retry may assume that an attempt did not start.
+        raise OperationalBlock("one_shot_marker_unavailable") from None
+
+
 @contextlib.contextmanager
 def rollback_signals():
     """Catch normal termination; defer further signals during restoration."""
@@ -224,6 +251,8 @@ def run_once(*, system: LiveSystemd, app: Path, releases: Path,
     """
     require_privileged_private_root(private_root)
     with exclusive_lock(private_root):
+        if os.path.lexists(private_root / ".one-shot-consumed"):
+            raise OperationalBlock("one_shot_already_consumed")
         before = system.capture()
         candidate = verify_preflight(
             before, app=app, releases=releases, release_sha=release_sha,
@@ -243,6 +272,9 @@ def run_once(*, system: LiveSystemd, app: Path, releases: Path,
             private=private, unit_cat=before.unit_cat, dropins=before.dropins,
             effective_exec=before.effective_exec, state=before.state,
             offline_explicit=before.offline, health_ok=before.health_ok)
+        # Commit the one-use authorization only after a verified backup,
+        # immediately before the first possible service mutation.
+        consume_one_shot(private_root)
         owned = None
         restore_error = None
         try:

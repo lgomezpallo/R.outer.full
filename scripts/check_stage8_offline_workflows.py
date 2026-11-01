@@ -37,7 +37,7 @@ REMOTE_JOBS = {
 EXPECTED_WORKFLOW_BLOBS: dict[str, str] = {
     "ci.yml": "b351afd4f3ae6c9af3ccd650719f4ef4ff41aa2d",
     "oracle-candidate-reconcile.yml": "e24d2e9be6c2a19bb13c88cdab640a573891076c",
-    "oracle-ssh-readonly-access.yml": "a4177931fede25c1af459f1df09044276e991f79",
+    "oracle-ssh-readonly-access.yml": "459f43b9a6253219b4d0c152082d10ce06b2cc63",
     "check-provider-secrets.yml": "30fb296f7d0d87d180d5a1a87b69822382113eb5",
     "oracle-deploy.yml": "5dc10c0fbba1198a14e2ee65321c10d79ecb3545",
     "router-oracle-monitor.yml": "c7fc8ddb2501c33c772488d97bf6dbe216dbbb68",

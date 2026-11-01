@@ -4,6 +4,7 @@ from __future__ import annotations
 import ast
 import io
 import subprocess
+import textwrap
 from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
@@ -15,7 +16,7 @@ def remote_python() -> str:
     source = WORKFLOW.read_text(encoding="utf-8")
     assert "ssh -i " in source
     assert "'python3 -' <<'PY'" in source
-    return source.split("<<'PY'\n", 1)[1].rsplit("\n          PY", 1)[0]
+    return textwrap.dedent(source.split("<<'PY'\n", 1)[1].rsplit("\n          PY", 1)[0])
 
 
 def test_readonly_workflow_has_no_mutating_commands():

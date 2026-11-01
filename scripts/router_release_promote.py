@@ -260,6 +260,18 @@ def dropin_precedence_safe() -> bool:
 
 
 
+def release_override_absent() -> bool:
+    """Reject existing files AND dangling symlinks; fail closed on sudo errors."""
+    for flag in ("-e", "-L"):
+        result = subprocess.run(
+            ["sudo", "-n", "test", flag, str(OVERRIDE)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10,
+        )
+        if result.returncode != 1:
+            return False
+    return True
+
+
 def private_dir(path: Path) -> None:
     if path.is_symlink():
         raise PromoteBlocked("unsafe_private_directory")
@@ -459,8 +471,7 @@ def promote(script: Path) -> None:
     argv = promotion_argv(original_exec)
     if not dropin_precedence_safe():
         raise PromoteBlocked("service_dropin_order_unsupported")
-    if subprocess.run(["sudo", "-n", "test", "-e", str(OVERRIDE)],
-                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+    if not release_override_absent():
         raise PromoteBlocked("existing_release_override")
     private_dir(BACKUPS)
     work = Path(tempfile.mkdtemp(prefix="router-promote-", dir=BACKUPS))
@@ -488,8 +499,13 @@ def promote(script: Path) -> None:
         run("sudo", "-n", "mkdir", "-p", str(OVERRIDE.parent))
         temp_override = str(OVERRIDE) + ".pending-" + uuid.uuid4().hex[:10]
         run("sudo", "-n", "install", "-m", "0644", str(staged), temp_override)
-        run("sudo", "-n", "mv", "-T", temp_override, str(OVERRIDE))
-        installed = True
+        try:
+            # Same-directory hard link: atomic create-if-absent. Never replace
+            # a concurrent drop-in or dangling symlink as mv -T would do.
+            run("sudo", "-n", "ln", temp_override, str(OVERRIDE))
+            installed = True
+        finally:
+            run("sudo", "-n", "rm", "-f", temp_override)
         run("sudo", "-n", "systemctl", "daemon-reload")
         run("sudo", "-n", "systemctl", "restart", "router.service")
         if not wait_health() or not pinned_process():

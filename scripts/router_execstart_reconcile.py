@@ -436,13 +436,6 @@ def rehearse() -> None:
     print("isolated_execstart_rehearsal=passed")
 
 
-if __name__ == "__main__":
-    import sys
-    if sys.argv[1:] != ["--rehearse"]:
-        raise SystemExit("Only --rehearse is supported; production apply is intentionally disabled")
-    rehearse()
-
-
 def backup_effective_service_snapshot(
     *, unit_cat: bytes, dropins: dict[str, bytes], effective_exec: bytes,
     state: str, private: Path,
@@ -483,8 +476,8 @@ def backup_effective_service_snapshot(
         entries = [
             ("systemctl-cat.before", unit_cat),
             ("effective-execstart.before", effective_exec),
-            ("service-state.before", b"active\\n"),
-            ("dropin-names.before", ("\\n".join(names) + "\\n").encode()),
+            ("service-state.before", b"active\n"),
+            ("dropin-names.before", ("\n".join(names) + "\n").encode()),
         ] + [(f"dropin-{i:02d}.before", dropins[name]) for i, name in enumerate(names)]
         for name, data in entries:
             fd = os.open(
@@ -500,3 +493,12 @@ def backup_effective_service_snapshot(
         raise MigrationBlocked("service_snapshot_write_failed") from None
     finally:
         os.close(dfd)
+
+
+if __name__ == "__main__":
+    import sys
+    if sys.argv[1:] != ["--rehearse"]:
+        raise SystemExit("Only --rehearse is supported; production apply is intentionally disabled")
+    rehearse()
+
+

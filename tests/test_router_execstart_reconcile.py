@@ -482,3 +482,58 @@ def test_full_snapshot_fails_closed_before_writing(tmp_path):
     private.chmod(0o755)
     with pytest.raises(p3.MigrationBlocked, match="service_snapshot_directory_unsafe"):
         p3.backup_effective_service_snapshot(**args)
+
+
+def test_effective_service_restoration_verifier_requires_exact_original_and_health(tmp_path):
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    dropins = {
+        "10-runtime.conf": b"[Service]\nEnvironment=ROUTER_OFFLINE_ONLY=1\n",
+        "30-offline.conf": b"[Service]\n",
+        "50-release.conf": b"[Service]\nExecStart=/usr/bin/env ROUTER_OFFLINE_ONLY=1\n",
+        "90-guard.conf": b"[Service]\n",
+    }
+    args = dict(
+        unit_cat=b"# exact systemctl cat original\n" + b"".join(dropins.values()),
+        dropins=dropins,
+        effective_exec=b"argv[]=/usr/bin/env ROUTER_OFFLINE_ONLY=1 ; ignore_errors=no",
+        state="active",
+        offline_explicit=True,
+        health_ok=True,
+    )
+    p3.backup_effective_service_snapshot(
+        unit_cat=args["unit_cat"], dropins=dropins,
+        effective_exec=args["effective_exec"], state="active", private=private,
+    )
+    p3.verify_restored_effective_service_snapshot(private=private, **args)
+    bad = [
+        {**args, "state": "inactive"},
+        {**args, "offline_explicit": False},
+        {**args, "health_ok": False},
+        {**args, "unit_cat": args["unit_cat"] + b"# changed\n"},
+        {**args, "effective_exec": args["effective_exec"] + b" --reload"},
+        {**args, "dropins": {**dropins, "30-offline.conf": b"[Service]\n# changed\n"}},
+        {**args, "dropins": dict(list(dropins.items())[:-1])},
+    ]
+    for observed in bad:
+        with pytest.raises(p3.MigrationBlocked, match="service_restore_"):
+            p3.verify_restored_effective_service_snapshot(private=private, **observed)
+    assert (private / "systemctl-cat.before").read_bytes() == args["unit_cat"]
+
+
+def test_effective_service_restoration_verifier_rejects_untrusted_backup(tmp_path):
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    foreign = tmp_path / "foreign"
+    foreign.mkdir(mode=0o700)
+    fake = dict(
+        unit_cat=b"cat", dropins={f"{i}0-x.conf": b"unit" for i in range(4)},
+        effective_exec=b"ROUTER_OFFLINE_ONLY=1", state="active",
+        offline_explicit=True, health_ok=True,
+    )
+    with pytest.raises(p3.MigrationBlocked, match="service_restore_snapshot_unavailable"):
+        p3.verify_restored_effective_service_snapshot(private=private, **fake)
+    private.rmdir()
+    private.symlink_to(foreign, target_is_directory=True)
+    with pytest.raises(p3.MigrationBlocked, match="service_restore_snapshot_unavailable"):
+        p3.verify_restored_effective_service_snapshot(private=private, **fake)

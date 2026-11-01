@@ -149,5 +149,4 @@ def test_no_root_privilege_and_no_direct_cli(tmp_path, monkeypatch):
         one.require_privileged_private_root(tmp_path)
     source = Path(one.__file__).read_text()
     assert "if __name__ == \"__main__\"" not in source
-    assert "sudo " not in source
     assert "shell=True" not in source

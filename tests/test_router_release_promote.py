@@ -292,3 +292,84 @@ def test_private_backup_uses_effective_process_data_paths_not_provider_envfiles(
     assert 'if mode == "backup":' in source
     assert '"--setenv=ROUTER_DB_FILE=" + db_path' in source
     assert '"--setenv=ROUTER_CATALOG_FILE=" + catalog_path' in source
+
+
+def test_external_interpreter_promotes_only_as_reversible_canonical_override(monkeypatch, tmp_path):
+    app = tmp_path / "checkout"
+    (app / ".venv/bin").mkdir(parents=True)
+    (app / "router").mkdir()
+    (app / "router/api.py").write_text("app = object()\\n")
+    canonical = app / ".venv/bin/python"
+    canonical.write_text("synthetic canonical python")
+    external_binary = tmp_path / "external-bin/uvicorn"
+    external_binary.parent.mkdir()
+    external_binary.write_text("synthetic external launcher")
+    external_root = tmp_path / "external-checkout"
+    (external_root / "router").mkdir(parents=True)
+    (external_root / "router/api.py").write_text("app = object()\\n")
+    release = tmp_path / "frozen"
+    release.mkdir()
+    monkeypatch.setattr(promote, "APP", app)
+    monkeypatch.setattr(promote, "RELEASE", release)
+    monkeypatch.setattr(
+        promote, "clean_known_external_checkout",
+        lambda root: root == external_root,
+    )
+    raw = (
+        f"{{ path={external_binary} ; argv[]={external_binary} "
+        f"router.api:app --host 127.0.0.1 --port 8010 "
+        f"--app-dir {external_root} ; ignore_errors=no }}"
+    )
+    with pytest.raises(promote.PromoteBlocked, match="service_interpreter_unsupported"):
+        promote.original_argv(raw)
+    normalized = promote.promotion_argv(raw)
+    assert normalized[:3] == [str(canonical), "-m", "uvicorn"]
+    candidate = promote.candidate_argv(normalized)
+    assert candidate[:3] == normalized[:3]
+    assert candidate[candidate.index("--app-dir") + 1] == str(release)
+    assert candidate[candidate.index("--host") + 1] == "127.0.0.1"
+    assert candidate[candidate.index("--port") + 1] == "8010"
+
+    monkeypatch.setattr(promote, "clean_known_external_checkout", lambda root: False)
+    with pytest.raises(promote.PromoteBlocked, match="service_app_dir_unsupported"):
+        promote.promotion_argv(raw)
+    with pytest.raises(promote.PromoteBlocked):
+        promote.promotion_argv(raw.replace("--port 8010", "--port 8080"))
+    with pytest.raises(promote.PromoteBlocked):
+        promote.promotion_argv(raw.replace("127.0.0.1", "0.0.0.0"))
+    with pytest.raises(promote.PromoteBlocked):
+        promote.promotion_argv(raw.replace("router.api:app", "other.api:app"))
+    with pytest.raises(promote.PromoteBlocked, match="service_interpreter_unsupported"):
+        promote.promotion_argv(raw.replace(str(external_binary), "/bin/sh"))
+
+
+def test_external_interpreter_rejects_unverified_or_symlinked_binary(monkeypatch, tmp_path):
+    app = tmp_path / "app"
+    (app / ".venv/bin").mkdir(parents=True)
+    (app / ".venv/bin/python").write_text("synthetic")
+    monkeypatch.setattr(promote, "APP", app)
+    external_root = tmp_path / "external"
+    external_root.mkdir()
+    binary = tmp_path / "uvicorn"
+    binary.write_text("synthetic")
+    alias = tmp_path / "alias"
+    alias.symlink_to(binary)
+    raw = (
+        f"argv[]={alias} router.api:app --host 127.0.0.1 --port 8010 "
+        f"--app-dir {external_root} ; ignore_errors=no"
+    )
+    with pytest.raises(promote.PromoteBlocked, match="service_interpreter_unsupported"):
+        promote.promotion_argv(raw)
+
+
+def test_rollback_verifies_original_effective_exec_before_restart(monkeypatch):
+    calls = []
+    monkeypatch.setattr(promote, "run", lambda *args: calls.append(args))
+    monkeypatch.setattr(promote, "wait_health", lambda: True)
+    monkeypatch.setattr(promote, "command", lambda *args: "original-exec")
+    assert promote.rollback("original-exec")
+    assert any("daemon-reload" in args for args in calls)
+    assert any("restart" in args for args in calls)
+    calls.clear()
+    assert not promote.rollback("different-exec")
+    assert not any("restart" in args for args in calls)

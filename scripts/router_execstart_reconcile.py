@@ -54,7 +54,24 @@ def pip_uvicorn_launcher(executable: Path, root: Path) -> bool:
         if len(content) > 2048 or b"\0" in content:
             return False
         first, sep, body = content.decode("utf-8").partition("\n")
-        if not sep or first != "#!" + str(python):
+        if not sep or not first.startswith("#!"):
+            return False
+        # Oracle read-only probe #41329983185 confirmed an executable
+        # checkout-venv Python symlink to system Python, but not the literal
+        # '.venv/bin/python' shebang. Accept only that standard pip variant.
+        directive = first[2:].strip()
+        if not directive or any(ch.isspace() for ch in directive):
+            return False
+        interpreter = Path(directive)
+        if (interpreter.parent != root / ".venv/bin"
+                or not re.fullmatch(r"python(?:3(?:\\.\\d+)?)?", interpreter.name)
+                or not interpreter.is_file() or not os.access(interpreter, os.X_OK)):
+            return False
+        resolved = interpreter.resolve(strict=True)
+        if interpreter.is_symlink() and not (
+            resolved.parent in (Path("/usr/bin"), Path("/usr/local/bin"))
+            and re.fullmatch(r"python3(?:\\.\\d+)?", resolved.name)
+        ):
             return False
         modern = (
             "import sys\n"

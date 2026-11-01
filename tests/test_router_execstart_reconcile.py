@@ -160,6 +160,42 @@ def test_backup_private_atomic_install_and_rollback(tmp_path):
     assert (private / "release-dropin.before").read_bytes() == original
 
 
+
+def test_backup_directory_swap_cannot_redirect_private_contents(tmp_path, monkeypatch):
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    public = tmp_path / "public"
+    public.mkdir(mode=0o755)
+    moved = tmp_path / "private-original"
+    original_open = os.open
+    swapped = False
+
+    def swap_after_directory_open(path, flags, *args, **kwargs):
+        nonlocal swapped
+        if path == "systemctl-cat.before" and not swapped:
+            swapped = True
+            private.rename(moved)
+            private.symlink_to(public, target_is_directory=True)
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(p3.os, "open", swap_after_directory_open)
+    p3.backup_original(b"private unit", b"private dropin", private)
+    assert swapped
+    assert (moved / "systemctl-cat.before").read_bytes() == b"private unit"
+    assert (moved / "release-dropin.before").read_bytes() == b"private dropin"
+    assert list(public.iterdir()) == []
+
+
+def test_backup_rejects_initial_symlink_directory(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir(mode=0o700)
+    alias = tmp_path / "alias"
+    alias.symlink_to(real, target_is_directory=True)
+    with pytest.raises(p3.MigrationBlocked, match="backup_directory_unsafe"):
+        p3.backup_original(b"unit", b"dropin", alias)
+    assert list(real.iterdir()) == []
+
+
 def test_rollback_never_deletes_foreign_replacement_or_symlink(tmp_path):
     directory = tmp_path / "dropins"
     directory.mkdir()

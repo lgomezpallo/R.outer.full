@@ -184,6 +184,7 @@ def test_rehearsal_is_offline_and_does_not_offer_production_apply(capsys):
     p3.rehearse()
     assert "isolated_execstart_rehearsal=passed" in capsys.readouterr().out
     source = SOURCE.read_text()
-    assert "systemctl restart" not in source
+    assert "import subprocess" not in source
+    assert "subprocess.run(" not in source
     assert "sudo" not in source.split('if __name__ == "__main__":')[1]
     assert "Only --rehearse is supported" in source

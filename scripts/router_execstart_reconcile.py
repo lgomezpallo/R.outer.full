@@ -206,15 +206,27 @@ def identity(path: Path) -> tuple[int, int, int, int, str]:
 
 def backup_original(unit_bytes: bytes, dropin_bytes: bytes, private: Path) -> None:
     """Retain original unit/drop-in without exposing their contents in logs."""
-    if private.is_symlink() or not private.is_dir() or private.stat().st_mode & 0o077:
-        raise MigrationBlocked("backup_directory_unsafe")
-    for name, data in (("systemctl-cat.before", unit_bytes), ("release-dropin.before", dropin_bytes)):
-        path = private / name
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(data)
-            handle.flush()
-            os.fsync(handle.fileno())
+    # Pin the backup directory to an open descriptor. Checking the pathname
+    # and then opening children through that pathname permits a symlink swap
+    # between the check and the write (and could disclose systemctl-cat).
+    try:
+        directory_fd = os.open(private, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        raise MigrationBlocked("backup_directory_unsafe") from None
+    try:
+        info = os.fstat(directory_fd)
+        if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o077:
+            raise MigrationBlocked("backup_directory_unsafe")
+        for name, data in (("systemctl-cat.before", unit_bytes), ("release-dropin.before", dropin_bytes)):
+            fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                         0o600, dir_fd=directory_fd)
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
 
 
 def install_late_dropin(directory: Path, content: bytes) -> tuple[int, int, int, int, str]:

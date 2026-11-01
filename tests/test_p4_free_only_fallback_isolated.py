@@ -174,3 +174,46 @@ def test_503_retry_after_on_free_openrouter_model_falls_back_without_paid_dispat
     assert registered.state.available
     assert registered.state.model(first).cooldown_until - time() > 1100
     assert registered.state.model(second).available
+
+
+def test_failed_openrouter_refresh_revokes_stale_free_snapshot_without_dispatch(monkeypatch):
+    """A cached free price is not fresh authorization after a failed refresh."""
+    from dataclasses import replace
+
+    monkeypatch.setenv("ROUTER_OFFLINE_ONLY", "0")
+    free_id = "google/gemma-4-26b-a4b-it:free"
+    stale = replace(_model(free_id, "free", 100), discovered_in_last_snapshot=True)
+    spec = replace(
+        _provider((stale,)),
+        last_inventory_source="client_discover_inventory",
+        last_inventory_merge_at="2026-10-01T00:00:00+00:00",
+        discover_models=True,
+    )
+
+    class FailedRefreshClient:
+        def discover_inventory(self, provider):
+            raise httpx.ConnectError("simulated_inventory_outage")
+
+        def complete(self, provider, model, request):
+            raise AssertionError("stale_free_model_dispatched")
+
+    catalog = ProviderCatalog(providers=(spec,))
+    router = Router(client=FailedRefreshClient(), catalog=catalog)
+    registered = router.add_provider("openrouter", "offline-fixture-key")
+    assert registered.spec.models[0].billing_status == "unknown"
+    assert not registered.spec.models[0].discovered_in_last_snapshot
+    assert catalog.get("openrouter").models[0].billing_status == "unknown"
+    result = router.route(RouteRequest(task="offline test", decompose=False))
+    assert not result.ok
+    assert result.attempts == []
+
+    # A new, successfully classified inventory can restore free eligibility.
+    class SuccessfulRefreshClient(FailedRefreshClient):
+        def discover_inventory(self, provider):
+            return [free_id], {free_id: "free"}
+
+    recovered = Router(client=SuccessfulRefreshClient(), catalog=catalog)
+    current = recovered.add_provider("openrouter", "offline-fixture-key")
+    assert current.spec.models[0].billing_status == "free"
+    assert current.spec.models[0].discovered_in_last_snapshot
+    assert current.spec.last_inventory_source == "client_discover_inventory"

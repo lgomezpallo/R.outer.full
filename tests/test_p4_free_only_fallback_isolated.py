@@ -5,6 +5,7 @@ No real API credentials, network, provider calls, or production workflow.
 from __future__ import annotations
 
 import httpx
+import pytest
 
 from router.catalog import ModelSpec, ProviderCatalog, ProviderSpec
 from router.client import ProviderClient
@@ -113,3 +114,14 @@ def test_model_fallback_never_attempts_paid_or_unknown(monkeypatch):
     assert response.model == "google/gemma-4-26b-a4b-it:free"
     assert client.calls == ["nvidia/nemotron-3-ultra-550b-a55b:free", "google/gemma-4-26b-a4b-it:free"]
     assert [attempt.ok for attempt in response.attempts] == [False, True]
+
+
+def test_manual_catalog_free_label_cannot_authorize_non_free_variant(monkeypatch):
+    """Persisted catalog edits cannot bypass the no-credit variant restriction."""
+    monkeypatch.setenv("ROUTER_OFFLINE_ONLY", "0")
+    spec = _provider((_model("fixture/zero-but-funded", "free", 100),))
+    registered = RegisteredProvider(spec, "fixture-not-a-real-key", RuntimeState())
+    model = spec.models[0]
+    assert billing_ineligibility_reason(registered, model) == "billing_unverified"
+    with pytest.raises(RuntimeError, match="inference_blocked:billing_unverified"):
+        ProviderClient._require_billing_eligible(registered, model.id)

@@ -15,6 +15,7 @@ import re
 import shlex
 import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
@@ -496,10 +497,35 @@ def pinned_process() -> bool:
         return False
 
 
-def rollback(expected_exec: str | None = None) -> bool:
-    """Restore the untouched base unit and all original drop-ins by removing
-    only our late override. Verify the effective ExecStart after daemon-reload.
+def release_file_identity(path: Path) -> tuple[int, int]:
+    """Read inode identity without following symlinks; never trust a swapped file."""
+    try:
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode):
+            raise PromoteBlocked("release_override_identity_unsafe")
+        return info.st_dev, info.st_ino
+    except OSError:
+        raise PromoteBlocked("release_override_identity_unavailable") from None
+
+
+def release_override_matches(identity: tuple[int, int]) -> bool:
+    try:
+        return release_file_identity(OVERRIDE) == identity
+    except PromoteBlocked:
+        return False
+
+
+def rollback(expected_exec: str | None = None,
+             expected_identity: tuple[int, int] | None = None) -> bool:
+    """Remove only our installed inode; verify original ExecStart before restart.
+
+    Legacy isolated tests call rollback() without identity. Every production
+    promotion supplies both original ExecStart and the installed file identity.
     """
+    if expected_exec is not None and (
+        expected_identity is None or not release_override_matches(expected_identity)
+    ):
+        return False
     try:
         run("sudo", "-n", "rm", "-f", str(OVERRIDE))
         run("sudo", "-n", "systemctl", "daemon-reload")
@@ -557,15 +583,21 @@ def promote(script: Path) -> None:
     staged.write_text(content)
     staged.chmod(0o600)
     installed = False
+    installed_identity: tuple[int, int] | None = None
     try:
         run("sudo", "-n", "mkdir", "-p", str(OVERRIDE.parent))
         temp_override = str(OVERRIDE) + ".pending-" + uuid.uuid4().hex[:10]
         run("sudo", "-n", "install", "-m", "0644", str(staged), temp_override)
         try:
+            # Record the source inode BEFORE linking. A concurrently replaced
+            # drop-in must never be mistaken for our release during rollback.
+            installed_identity = release_file_identity(Path(temp_override))
             # Same-directory hard link: atomic create-if-absent. -T prevents
             # following a concurrent destination symlink to a directory.
             run("sudo", "-n", "ln", "-T", temp_override, str(OVERRIDE))
             installed = True
+            if not release_override_matches(installed_identity):
+                raise PromoteBlocked("release_override_identity_changed")
         finally:
             run("sudo", "-n", "rm", "-f", temp_override)
         run("sudo", "-n", "systemctl", "daemon-reload")
@@ -575,12 +607,14 @@ def promote(script: Path) -> None:
         print("postdeploy_health=passed", flush=True)
         print("postdeploy_release_pin=passed", flush=True)
         private_unit(script, work, user, envfiles, "verify")
+        if not release_override_matches(installed_identity):
+            raise PromoteBlocked("release_override_identity_changed")
         print("production_release_sha=" + PINNED_SHA, flush=True)
         print("release_status=DEPLOYED_VERIFIED", flush=True)
         installed = False  # Successful promotion: keep our reversible drop-in.
     finally:
         if installed:
-            restored = rollback(original_exec)
+            restored = rollback(original_exec, installed_identity)
             print("automatic_rollback=" + ("passed" if restored else "failed"), flush=True)
 
 

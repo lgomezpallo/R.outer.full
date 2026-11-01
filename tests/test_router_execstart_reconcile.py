@@ -390,3 +390,45 @@ def test_shebang_probe_rejects_untrusted_symlink_and_never_leaks_paths(tmp_path)
     assert str(tmp_path) not in label
     assert "private-sensitive-path" not in label
     assert p3.classify_nested_shebang(foreign, checkout=checkout, release=release) == "launcher_outside_expected"
+
+def test_oracle_observed_checkout_python3_system_symlink_is_accepted(tmp_path):
+    # SSH read-only #41329983185: absolute checkout venv Python alias,
+    # executable symlink to system Python, recognized pip Uvicorn body.
+    system = Path("/usr/bin/python3")
+    if not system.is_file() or not os.access(system, os.X_OK):
+        pytest.skip("system Python alias unavailable on this runner")
+    original, _, kwargs = fixture(tmp_path)
+    checkout = kwargs["app"]
+    launcher = checkout / ".venv/bin/uvicorn"
+    alias = checkout / ".venv/bin/python3"
+    alias.symlink_to(system)
+    launcher.write_text("#!" + str(alias) + "\n" + PIP_SCRIPT)
+    original[4] = str(launcher)
+    raw = "argv[]=" + " ".join(original) + " ; ignore_errors=no"
+    old, new = p3.canonicalize(raw, **kwargs)
+    assert old == original
+    assert new[4:7] == [str(checkout / ".venv/bin/python"), "-m", "uvicorn"]
+    assert new[:4] == old[:4]
+    assert new[7:] == old[5:]
+
+
+def test_alternate_shebang_rejects_foreign_symlink_and_fake_python_binary(tmp_path):
+    original, _, kwargs = fixture(tmp_path)
+    checkout = kwargs["app"]
+    launcher = checkout / ".venv/bin/uvicorn"
+    alias = checkout / ".venv/bin/python3"
+    foreign = tmp_path / "foreign" / "python3"
+    foreign.parent.mkdir()
+    foreign.write_text("untrusted executable")
+    foreign.chmod(0o755)
+    alias.symlink_to(foreign)
+    launcher.write_text("#!" + str(alias) + "\n" + PIP_SCRIPT)
+    original[4] = str(launcher)
+    raw = "argv[]=" + " ".join(original) + " ; ignore_errors=no"
+    with pytest.raises(p3.MigrationBlocked, match="nested_launcher_unverified"):
+        p3.canonicalize(raw, **kwargs)
+    alias.unlink()
+    alias.write_text("untrusted executable")
+    alias.chmod(0o755)
+    with pytest.raises(p3.MigrationBlocked, match="nested_launcher_unverified"):
+        p3.canonicalize(raw, **kwargs)

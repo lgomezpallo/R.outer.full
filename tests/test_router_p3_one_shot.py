@@ -150,3 +150,22 @@ def test_no_root_privilege_and_no_direct_cli(tmp_path, monkeypatch):
     source = Path(one.__file__).read_text()
     assert "if __name__ == \"__main__\"" not in source
     assert "shell=True" not in source
+
+
+def test_signal_during_atomic_install_waits_for_owned_identity(tmp_path, monkeypatch):
+    import signal
+    fake, args = fixture(tmp_path, monkeypatch)
+    original = fake.capture()
+    real_install = p3.install_late_dropin
+
+    def signal_during_install(directory, content):
+        owned = real_install(directory, content)
+        signal.raise_signal(signal.SIGTERM)
+        return owned
+
+    monkeypatch.setattr(p3, "install_late_dropin", signal_during_install)
+    with pytest.raises(one.Interrupted, match="operator_signal_received"):
+        one.run_once(**args)
+    assert fake.capture() == original
+    assert fake.restarts == 1
+    assert not (args["dropin_dir"] / p3.LATE_DROPIN).exists()

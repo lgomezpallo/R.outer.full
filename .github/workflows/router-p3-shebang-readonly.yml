@@ -1,0 +1,149 @@
+name: Router P3 shebang classification (SSH read-only)
+on:
+  push:
+    branches: [fix/router-p3-shebang-readonly-20261101]
+    paths:
+      - .github/workflows/router-p3-shebang-readonly.yml
+permissions:
+  contents: read
+jobs:
+  classify:
+    if: github.repository == 'lgomezpallo/R.outer.full' && github.ref == 'refs/heads/fix/router-p3-shebang-readonly-20261101'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Read only the nested launcher shebang and emit fixed classifications
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.ORACLE_SSH_HOST }}
+          SSH_USER: ${{ secrets.ORACLE_SSH_USER }}
+          SSH_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.ORACLE_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          for value in "$SSH_HOST" "$SSH_USER" "$SSH_KEY" "$SSH_KNOWN_HOSTS"; do
+            test -n "$value" || { echo 'p3_ssh_settings=missing'; exit 2; }
+          done
+          umask 077
+          mkdir -m 700 -p "$HOME/.ssh"
+          trap 'rm -f "$HOME/.ssh/router_p3_probe" "$HOME/.ssh/known_hosts"' EXIT
+          printf '%s\n' "$SSH_KEY" > "$HOME/.ssh/router_p3_probe"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/router_p3_probe" "$HOME/.ssh/known_hosts"
+          ssh -i "$HOME/.ssh/router_p3_probe" -o IdentitiesOnly=yes \
+            -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=12 \
+            -o LogLevel=ERROR "$SSH_USER@$SSH_HOST" 'python3 -' 2>/dev/null <<'PY'
+          import os
+          import pathlib
+          import re
+          import shlex
+          import subprocess
+          
+          app = pathlib.Path("/home/ubuntu/Proyecto/Herramientas/Router")
+          releases = pathlib.Path.home() / "router-releases"
+          allowed = {"ROUTER_OFFLINE_ONLY", "ROUTER_DB_FILE", "ROUTER_CATALOG_FILE"}
+          
+          def scope(path):
+              if path.parent == app / ".venv/bin":
+                  return "checkout_venv"
+              if path.parent.name == "bin" and path.parent.parent.name == ".venv":
+                  root = path.parent.parent.parent
+                  if root.parent == releases and re.fullmatch(r"[0-9a-f]{40}", root.name):
+                      return "release_venv"
+              if path.parent in (pathlib.Path("/usr/bin"), pathlib.Path("/usr/local/bin")):
+                  return "system"
+              return "other"
+          
+          try:
+              result = subprocess.run(
+                  ["systemctl", "show", "router.service", "-p", "ExecStart", "--value"],
+                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                  text=True, timeout=12, check=True
+              )
+              if len(result.stdout) > 32768:
+                  raise ValueError("shape")
+              match = re.search(r"argv\[\]=(.*?)\s+;\s+ignore_errors=", result.stdout)
+              argv = shlex.split(match.group(1)) if match else []
+              if len(argv) != 12 or argv[0] != "/usr/bin/env":
+                  raise ValueError("shape")
+              values = {}
+              i = 1
+              while i < len(argv) and "=" in argv[i]:
+                  key, value = argv[i].split("=", 1)
+                  if key not in allowed or key in values or not value:
+                      raise ValueError("env")
+                  values[key] = value
+                  i += 1
+              if (set(values) != allowed or values["ROUTER_OFFLINE_ONLY"] != "1"
+                      or any(not pathlib.Path(values[k]).is_absolute()
+                             for k in ("ROUTER_DB_FILE", "ROUTER_CATALOG_FILE"))):
+                  raise ValueError("env")
+              if i >= len(argv):
+                  raise ValueError("inner")
+              inner = pathlib.Path(argv[i])
+              if inner != app / ".venv/bin/uvicorn":
+                  raise ValueError("inner")
+              if inner.is_symlink() or not inner.is_file() or not os.access(inner, os.X_OK):
+                  raise ValueError("inner")
+              if inner.stat().st_size > 2048:
+                  raise ValueError("launcher_size")
+              content = inner.read_bytes()
+              if b"\x00" in content:
+                  raise ValueError("launcher_binary")
+              first, sep, body = content.decode("utf-8").partition("\n")
+              if not sep or not first.startswith("#!"):
+                  print("p3_shebang_form=missing_or_invalid")
+                  raise SystemExit(2)
+              directive = first[2:].strip()
+              tokens = directive.split()
+              if not tokens:
+                  print("p3_shebang_form=missing_or_invalid")
+                  raise SystemExit(2)
+              interpreter = pathlib.Path(tokens[0])
+              form = ("absolute_single" if interpreter.is_absolute() and len(tokens) == 1
+                      else "absolute_with_args" if interpreter.is_absolute()
+                      else "relative")
+              print("p3_shebang_form=" + form)
+              if not interpreter.is_absolute():
+                  raise SystemExit(2)
+              print("p3_shebang_scope=" + scope(interpreter))
+              print("p3_shebang_python_name=" + (
+                  "yes" if re.fullmatch(r"python(?:3(?:\.\d+)?)?", interpreter.name) else "no"
+              ))
+              print("p3_shebang_exists=" + ("yes" if interpreter.is_file() else "no"))
+              print("p3_shebang_executable=" + ("yes" if os.access(interpreter, os.X_OK) else "no"))
+              print("p3_shebang_symlink=" + ("yes" if interpreter.is_symlink() else "no"))
+              try:
+                  resolved = interpreter.resolve(strict=True)
+                  resolved_kind = (scope(resolved) + "_python"
+                                   if re.fullmatch(r"python(?:3(?:\.\d+)?)?", resolved.name)
+                                   else scope(resolved) + "_other")
+              except (OSError, RuntimeError):
+                  resolved_kind = "unverified"
+              print("p3_shebang_resolved=" + resolved_kind)
+              canonical = app / ".venv/bin/python"
+              print("p3_shebang_exact_canonical=" + ("yes" if interpreter == canonical and len(tokens) == 1 else "no"))
+              legacy = (
+                  "import re\nimport sys\nfrom uvicorn.main import main\n"
+                  "if __name__ == '__main__':\n"
+                  "    sys.argv[0] = re.sub(r'(-script\\.pyw|\\.exe)?$', '', sys.argv[0])\n"
+                  "    sys.exit(main())\n"
+              )
+              modern = (
+                  "import sys\nfrom uvicorn.main import main\n"
+                  "if __name__ == '__main__':\n"
+                  "    if sys.argv[0].endswith('.exe'):\n"
+                  "        sys.argv[0] = sys.argv[0][:-4]\n"
+                  "    sys.exit(main())\n"
+              )
+              recognized = body.strip() + "\n" in (
+                  modern, legacy, "# -*- coding: utf-8 -*-\n" + modern,
+                  "# -*- coding: utf-8 -*-\n" + legacy
+              )
+              print("p3_pip_body=" + ("recognized" if recognized else "unverified"))
+              print("p3_probe_complete=yes")
+          except (OSError, ValueError, IndexError, UnicodeError, RuntimeError,
+                  subprocess.SubprocessError):
+              print("p3_probe_complete=no")
+              raise SystemExit(2)
+          PY

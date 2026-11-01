@@ -562,9 +562,9 @@ def promote(script: Path) -> None:
         temp_override = str(OVERRIDE) + ".pending-" + uuid.uuid4().hex[:10]
         run("sudo", "-n", "install", "-m", "0644", str(staged), temp_override)
         try:
-            # Same-directory hard link: atomic create-if-absent. Never replace
-            # a concurrent drop-in or dangling symlink as mv -T would do.
-            run("sudo", "-n", "ln", temp_override, str(OVERRIDE))
+            # Same-directory hard link: atomic create-if-absent. -T prevents
+            # following a concurrent destination symlink to a directory.
+            run("sudo", "-n", "ln", "-T", temp_override, str(OVERRIDE))
             installed = True
         finally:
             run("sudo", "-n", "rm", "-f", temp_override)

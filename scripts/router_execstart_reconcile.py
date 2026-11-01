@@ -67,6 +67,10 @@ def pip_uvicorn_launcher(executable: Path, root: Path) -> bool:
                 or not re.fullmatch(r"python(?:3(?:\.\d+)?)?", interpreter.name)
                 or not interpreter.is_file() or not os.access(interpreter, os.X_OK)):
             return False
+        # A noncanonical venv alias must be a verified symlink to system
+        # Python; do not trust an arbitrary executable merely named python3.
+        if interpreter != python and not interpreter.is_symlink():
+            return False
         resolved = interpreter.resolve(strict=True)
         if interpreter.is_symlink() and not (
             resolved.parent in (Path("/usr/bin"), Path("/usr/local/bin"))

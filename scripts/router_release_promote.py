@@ -173,6 +173,59 @@ def original_argv(raw: str) -> list[str]:
     return argv
 
 
+
+def promotion_argv(raw: str) -> list[str]:
+    """Normalize a *verified* external service to the canonical venv in the
+    new release drop-in. Never rewrite the base unit or weaken original_argv.
+
+    The original ExecStart remains intact. Removing our single drop-in restores
+    the original executable and import checkout together.
+    """
+    try:
+        return original_argv(raw)
+    except PromoteBlocked as error:
+        if str(error) != "service_interpreter_unsupported":
+            raise
+    match = re.search(r"argv\\[\\]=(.*?)\\s+;\\s+ignore_errors=", raw)
+    if match is None:
+        raise PromoteBlocked("service_exec_layout_unsupported")
+    try:
+        original = shlex.split(match.group(1))
+    except ValueError:
+        raise PromoteBlocked("service_exec_layout_unsupported") from None
+    if not original:
+        raise PromoteBlocked("service_exec_layout_unsupported")
+    executable = Path(original[0])
+    if not executable.is_absolute() or executable.is_symlink() or not executable.is_file():
+        raise PromoteBlocked("service_interpreter_unsupported")
+    if executable.name == "uvicorn":
+        tail = original[1:]
+    elif re.fullmatch(r"python(?:3(?:\\.[0-9]+)?)?", executable.name) and original[1:3] == ["-m", "uvicorn"]:
+        tail = original[3:]
+    else:
+        raise PromoteBlocked("service_interpreter_unsupported")
+    if original.count("--app-dir") != 1:
+        raise PromoteBlocked("service_app_dir_unsupported")
+    index = original.index("--app-dir") + 1
+    if index >= len(original) or not Path(original[index]).is_absolute():
+        raise PromoteBlocked("service_app_dir_unsupported")
+    try:
+        external_root = Path(original[index]).resolve(strict=True)
+    except (OSError, RuntimeError):
+        raise PromoteBlocked("service_app_dir_unsupported") from None
+    # Unlike the general app-dir verifier, an external interpreter requires a
+    # clean, tracked Router checkout whose HEAD is a candidate ancestor.
+    if not clean_known_external_checkout(external_root):
+        raise PromoteBlocked("service_app_dir_unsupported")
+    canonical = APP / ".venv/bin/python"
+    if canonical.is_symlink() or not canonical.is_file():
+        raise PromoteBlocked("canonical_interpreter_unavailable")
+    normalized = [str(canonical), "-m", "uvicorn", *tail]
+    # Reuse all existing host/port/import-root/flag checks unchanged.
+    original_argv("argv[]=" + shlex.join(normalized) + " ; ignore_errors=no")
+    return normalized
+
+
 def candidate_argv(argv: list[str]) -> list[str]:
     """Replace an existing uvicorn --app-dir instead of duplicating the flag."""
     if "--app-dir" not in argv:
@@ -369,10 +422,17 @@ def pinned_process() -> bool:
         return False
 
 
-def rollback() -> bool:
+def rollback(expected_exec: str | None = None) -> bool:
+    """Restore the untouched base unit and all original drop-ins by removing
+    only our late override. Verify the effective ExecStart after daemon-reload.
+    """
     try:
         run("sudo", "-n", "rm", "-f", str(OVERRIDE))
         run("sudo", "-n", "systemctl", "daemon-reload")
+        if expected_exec is not None and command(
+            "systemctl", "show", "router.service", "-p", "ExecStart", "--value"
+        ) != expected_exec:
+            return False
         run("sudo", "-n", "systemctl", "restart", "router.service")
         return wait_health()
     except (OSError, subprocess.SubprocessError):
@@ -395,7 +455,8 @@ def promote(script: Path) -> None:
     inline = command("systemctl", "show", "router.service", "-p", "Environment", "--value")
     if re.search(r"(?:KEY|TOKEN|PASSWORD|SECRET|CREDENTIAL)", inline, re.I):
         raise PromoteBlocked("inline_secret_environment_unsupported")
-    argv = original_argv(command("systemctl", "show", "router.service", "-p", "ExecStart", "--value"))
+    original_exec = command("systemctl", "show", "router.service", "-p", "ExecStart", "--value")
+    argv = promotion_argv(original_exec)
     if not dropin_precedence_safe():
         raise PromoteBlocked("service_dropin_order_unsupported")
     if subprocess.run(["sudo", "-n", "test", "-e", str(OVERRIDE)],
@@ -441,7 +502,7 @@ def promote(script: Path) -> None:
         installed = False  # Successful promotion: keep our reversible drop-in.
     finally:
         if installed:
-            restored = rollback()
+            restored = rollback(original_exec)
             print("automatic_rollback=" + ("passed" if restored else "failed"), flush=True)
 
 

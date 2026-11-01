@@ -165,7 +165,9 @@ def verify_dropin_precedence(effective_paths: list[str], *, expected_count: int 
     for raw in effective_paths:
         path = Path(raw)
         name = path.name
-        if (not path.is_absolute() or not name.endswith(".conf")
+        if (not path.is_absolute() or ".." in path.parts
+                or path.parent.name != "router.service.d"
+                or not name.endswith(".conf")
                 or not TOKEN.fullmatch(name) or name in seen):
             raise MigrationBlocked("dropin_inventory_unsafe")
         if name >= LATE_DROPIN:

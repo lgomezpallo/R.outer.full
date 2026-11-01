@@ -197,16 +197,23 @@ def install_late_dropin(directory: Path, content: bytes) -> tuple[int, int, int,
             handle.flush()
             os.fsync(handle.fileno())
         source = directory / pending
-        owned = identity(source)
+        source_identity = identity(source)
         os.link(pending, LATE_DROPIN, src_dir_fd=fd, dst_dir_fd=fd, follow_symlinks=False)
-        if identity(directory / LATE_DROPIN) != owned:
+        installed = identity(directory / LATE_DROPIN)
+        # Hardlink creation changes ctime; compare stable inode and digest.
+        if installed[:2] != source_identity[:2] or installed[-1] != source_identity[-1]:
             raise MigrationBlocked("installed_identity_changed")
-        return owned
+        # Removing the pending hardlink changes ctime again. Capture the final
+        # owned identity only AFTER removing it, for reliable rollback checks.
+        os.unlink(pending, dir_fd=fd)
+        pending = None
+        return identity(directory / LATE_DROPIN)
     except FileExistsError:
         raise MigrationBlocked("dropin_already_exists") from None
     finally:
         try:
-            os.unlink(pending, dir_fd=fd)
+            if pending is not None:
+                os.unlink(pending, dir_fd=fd)
         except FileNotFoundError:
             pass
         os.close(fd)

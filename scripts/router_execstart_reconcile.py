@@ -125,9 +125,19 @@ def canonicalize(
     except IndexError:
         raise MigrationBlocked("service_flags_unverified") from None
     canonical = app / ".venv/bin/python"
-    if (canonical.is_symlink() or not canonical.is_file()
-            or not os.access(canonical, os.X_OK)):
-        raise MigrationBlocked("canonical_python_unavailable")
+    try:
+        resolved_python = canonical.resolve(strict=True)
+        if not canonical.is_file() or not os.access(canonical, os.X_OK):
+            raise MigrationBlocked("canonical_python_unavailable")
+        # Standard venv Python is commonly a symlink to the system interpreter.
+        # Permit only that narrow, known symlink target; not an arbitrary binary.
+        if canonical.is_symlink() and not (
+            resolved_python.parent in (Path("/usr/bin"), Path("/usr/local/bin"))
+            and re.fullmatch(r"python3(?:\.\d+)?", resolved_python.name)
+        ):
+            raise MigrationBlocked("canonical_python_unverified_symlink")
+    except (OSError, RuntimeError):
+        raise MigrationBlocked("canonical_python_unavailable") from None
     if inner == canonical and argv[index + 1:index + 3] == ["-m", "uvicorn"]:
         return argv, argv.copy()
     if inner != app / ".venv/bin/uvicorn" and inner != expected_release / ".venv/bin/uvicorn":

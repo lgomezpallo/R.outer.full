@@ -262,3 +262,76 @@ def test_dropin_precedence_requires_same_effective_four_and_late_sorting():
         p3.verify_dropin_precedence(paths[:-1] + ["/tmp/other.service.d/80-late.conf"])
     with pytest.raises(p3.MigrationBlocked, match="dropin_inventory_unsafe"):
         p3.verify_dropin_precedence(paths[:-1] + ["/etc/systemd/system/../router.service.d/80-late.conf"])
+
+
+def test_rollback_race_quarantines_then_restores_foreign_file(tmp_path, monkeypatch):
+    directory = tmp_path / "dropins"
+    directory.mkdir()
+    owned = p3.install_late_dropin(directory, b"owned")
+    path = directory / p3.LATE_DROPIN
+    original_rename = os.rename
+    swapped = False
+
+    def replace_at_move(src, dst, *args, **kwargs):
+        nonlocal swapped
+        if src == p3.LATE_DROPIN and dst == "held" and not swapped:
+            swapped = True
+            path.unlink()
+            path.write_bytes(b"foreign-after-precheck")
+        return original_rename(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(p3.os, "rename", replace_at_move)
+    assert not p3.rollback_late_dropin(directory, owned)
+    assert swapped
+    assert path.read_bytes() == b"foreign-after-precheck"
+    assert not list(directory.glob(".router-rollback-*"))
+
+
+def test_rollback_race_preserves_foreign_if_name_reoccupied(tmp_path, monkeypatch):
+    directory = tmp_path / "dropins"
+    directory.mkdir()
+    owned = p3.install_late_dropin(directory, b"owned")
+    path = directory / p3.LATE_DROPIN
+    original_rename = os.rename
+    original_link = os.link
+
+    def replace_at_move(src, dst, *args, **kwargs):
+        if src == p3.LATE_DROPIN and dst == "held":
+            path.unlink()
+            path.write_bytes(b"first-foreign")
+        return original_rename(src, dst, *args, **kwargs)
+
+    def reoccupy_before_restore(src, dst, *args, **kwargs):
+        if src == "held" and dst == p3.LATE_DROPIN:
+            path.write_bytes(b"second-foreign")
+        return original_link(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(p3.os, "rename", replace_at_move)
+    monkeypatch.setattr(p3.os, "link", reoccupy_before_restore)
+    assert not p3.rollback_late_dropin(directory, owned)
+    assert path.read_bytes() == b"second-foreign"
+    quarantines = list(directory.glob(".router-rollback-*"))
+    assert len(quarantines) == 1
+    assert (quarantines[0] / "held").read_bytes() == b"first-foreign"
+
+
+def test_rollback_race_preserves_foreign_symlink(tmp_path, monkeypatch):
+    directory = tmp_path / "dropins"
+    directory.mkdir()
+    owned = p3.install_late_dropin(directory, b"owned")
+    path = directory / p3.LATE_DROPIN
+    target = tmp_path / "foreign-target"
+    target.write_bytes(b"untouched")
+    original_rename = os.rename
+
+    def replace_at_move(src, dst, *args, **kwargs):
+        if src == p3.LATE_DROPIN and dst == "held":
+            path.unlink()
+            path.symlink_to(target)
+        return original_rename(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(p3.os, "rename", replace_at_move)
+    assert not p3.rollback_late_dropin(directory, owned)
+    assert path.is_symlink()
+    assert path.resolve() == target
+    assert target.read_bytes() == b"untouched"

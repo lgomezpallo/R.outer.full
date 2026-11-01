@@ -64,13 +64,13 @@ def pip_uvicorn_launcher(executable: Path, root: Path) -> bool:
             return False
         interpreter = Path(directive)
         if (interpreter.parent != root / ".venv/bin"
-                or not re.fullmatch(r"python(?:3(?:\\.\\d+)?)?", interpreter.name)
+                or not re.fullmatch(r"python(?:3(?:\.\d+)?)?", interpreter.name)
                 or not interpreter.is_file() or not os.access(interpreter, os.X_OK)):
             return False
         resolved = interpreter.resolve(strict=True)
         if interpreter.is_symlink() and not (
             resolved.parent in (Path("/usr/bin"), Path("/usr/local/bin"))
-            and re.fullmatch(r"python3(?:\\.\\d+)?", resolved.name)
+            and re.fullmatch(r"python3(?:\.\d+)?", resolved.name)
         ):
             return False
         modern = (

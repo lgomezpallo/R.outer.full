@@ -441,3 +441,62 @@ if __name__ == "__main__":
     if sys.argv[1:] != ["--rehearse"]:
         raise SystemExit("Only --rehearse is supported; production apply is intentionally disabled")
     rehearse()
+
+
+def backup_effective_service_snapshot(
+    *, unit_cat: bytes, dropins: dict[str, bytes], effective_exec: bytes,
+    state: str, private: Path,
+) -> None:
+    """Back up complete pre-switch evidence, not just the release drop-in.
+
+    This is an offline-only primitive. A future authorized adapter must obtain
+    these bytes from Oracle immediately before the switch and independently
+    verify effective ExecStart and active/offline state. Nothing here invokes
+    systemctl or performs a production change.
+    """
+    if state != "active" or len(dropins) != 4:
+        raise MigrationBlocked("service_snapshot_state_or_inventory_unverified")
+    names = sorted(dropins)
+    if any(
+        not name.endswith(".conf") or name >= LATE_DROPIN
+        or name in (".", "..") or "/" in name or not TOKEN.fullmatch(name)
+        for name in names
+    ):
+        raise MigrationBlocked("service_snapshot_dropin_names_unsafe")
+    if (
+        not unit_cat or len(unit_cat) > 131072
+        or not effective_exec or len(effective_exec) > 32768
+        or b"ROUTER_OFFLINE_ONLY=1" not in effective_exec
+        or any(not isinstance(data, bytes) or len(data) > 65536 for data in dropins.values())
+    ):
+        raise MigrationBlocked("service_snapshot_content_unverified")
+    # Store a complete, byte-for-byte snapshot in a fresh 0700 directory.
+    # The descriptor pins the destination against pathname/symlink swaps.
+    try:
+        dfd = os.open(private, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        raise MigrationBlocked("service_snapshot_directory_unsafe") from None
+    try:
+        info = os.fstat(dfd)
+        if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o077 or os.listdir(dfd):
+            raise MigrationBlocked("service_snapshot_directory_unsafe")
+        entries = [
+            ("systemctl-cat.before", unit_cat),
+            ("effective-execstart.before", effective_exec),
+            ("service-state.before", b"active\\n"),
+            ("dropin-names.before", ("\\n".join(names) + "\\n").encode()),
+        ] + [(f"dropin-{i:02d}.before", dropins[name]) for i, name in enumerate(names)]
+        for name, data in entries:
+            fd = os.open(
+                name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600, dir_fd=dfd,
+            )
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
+        os.fsync(dfd)
+    except OSError:
+        raise MigrationBlocked("service_snapshot_write_failed") from None
+    finally:
+        os.close(dfd)

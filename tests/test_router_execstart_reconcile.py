@@ -222,3 +222,7 @@ def test_dropin_precedence_requires_same_effective_four_and_late_sorting():
         p3.verify_dropin_precedence(paths[:-1] + [paths[0]])
     with pytest.raises(p3.MigrationBlocked, match="dropin_inventory_unsafe"):
         p3.verify_dropin_precedence(paths[:-1] + ["relative.conf"])
+    with pytest.raises(p3.MigrationBlocked, match="dropin_inventory_unsafe"):
+        p3.verify_dropin_precedence(paths[:-1] + ["/tmp/other.service.d/80-late.conf"])
+    with pytest.raises(p3.MigrationBlocked, match="dropin_inventory_unsafe"):
+        p3.verify_dropin_precedence(paths[:-1] + ["/etc/systemd/system/../router.service.d/80-late.conf"])

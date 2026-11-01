@@ -390,22 +390,31 @@ def test_rollback_verifies_original_effective_exec_before_restart(monkeypatch):
 
 
 def test_release_override_preflight_rejects_existing_file_dangling_link_and_sudo_error(monkeypatch):
-    def check(file_status, symlink_status):
+    def check(file_status, symlink_status, first_probe=0, last_probe=0):
         observed = []
         def fake_run(args, **kwargs):
-            observed.append(args[3])
-            return subprocess.CompletedProcess(
-                args, file_status if args[3] == "-e" else symlink_status
-            )
+            flag, target = args[3:5]
+            observed.append((flag, target))
+            if target == "/":
+                status = first_probe if observed.count(("-e", "/")) == 1 else last_probe
+            else:
+                status = file_status if flag == "-e" else symlink_status
+            return subprocess.CompletedProcess(args, status)
         monkeypatch.setattr(promote.subprocess, "run", fake_run)
-        result = promote.release_override_absent()
-        return result, observed
+        return promote.release_override_absent(), observed
 
-    assert check(1, 1) == (True, ["-e", "-L"])
-    assert check(0, 1) == (False, ["-e"])
-    assert check(1, 0) == (False, ["-e", "-L"])
-    assert check(2, 1) == (False, ["-e"])
-    assert check(1, 2) == (False, ["-e", "-L"])
+    initial = [("-e", "/")]
+    file_check = initial + [("-e", str(promote.OVERRIDE))]
+    symlink_check = file_check + [("-L", str(promote.OVERRIDE))]
+    complete = symlink_check + [("-e", "/")]
+    assert check(1, 1) == (True, complete)
+    assert check(0, 1) == (False, file_check)
+    assert check(1, 0) == (False, symlink_check)
+    assert check(2, 1) == (False, file_check)
+    assert check(1, 2) == (False, symlink_check)
+    # sudo -n itself may return 1: that is NOT evidence of an absent file.
+    assert check(1, 1, first_probe=1) == (False, initial)
+    assert check(1, 1, last_probe=1) == (False, complete)
 
 
 def test_dropin_install_uses_atomic_create_without_replacing_existing_override():

@@ -380,7 +380,7 @@ def preflight_promotion_layout(promote_module: object) -> None:
     if provenance == "external_shadow_router":
         print("external_router_history=" + external_router_history(raw_exec, candidate_pin()), flush=True)
     try:
-        parsed_argv = promote_module.original_argv(raw_exec)
+        parsed_argv = promote_module.promotion_argv(raw_exec)
         promote_module.candidate_argv(parsed_argv)
     except promote_module.PromoteBlocked as error:
         # Both are fixed internal reason codes, never service command values.

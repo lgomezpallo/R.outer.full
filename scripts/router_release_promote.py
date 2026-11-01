@@ -313,11 +313,20 @@ def release_override_absent() -> bool:
     after the negative checks. Never treat sudo exit 1 alone as proof that
     the release override is absent.
     """
-    probes = (("-e", "/", 0), ("-e", str(OVERRIDE), 1),
-              ("-L", str(OVERRIDE), 1), ("-e", "/", 0))
-    for flag, target, expected in probes:
+    # Each negative test must have a positive inverse against the SAME
+    # protected path. sudoers may allow testing "/" but deny this path;
+    # a denied sudo command also exits 1 and must never mean "absent".
+    probes = (
+        (("-e", "/"), 0),
+        (("-e", str(OVERRIDE)), 1),
+        (("!", "-e", str(OVERRIDE)), 0),
+        (("-L", str(OVERRIDE)), 1),
+        (("!", "-L", str(OVERRIDE)), 0),
+        (("-e", "/"), 0),
+    )
+    for args, expected in probes:
         result = subprocess.run(
-            ["sudo", "-n", "test", flag, target],
+            ["sudo", "-n", "test", *args],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10,
         )
         if result.returncode != expected:

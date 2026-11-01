@@ -390,13 +390,17 @@ def test_rollback_verifies_original_effective_exec_before_restart(monkeypatch):
 
 
 def test_release_override_preflight_rejects_existing_file_dangling_link_and_sudo_error(monkeypatch):
-    def check(file_status, symlink_status, first_probe=0, last_probe=0):
+    def check(file_status, symlink_status, first_probe=0, last_probe=0,
+              inverse_file_status=0, inverse_symlink_status=0):
         observed = []
         def fake_run(args, **kwargs):
-            flag, target = args[3:5]
-            observed.append((flag, target))
+            inverse = args[3] == "!"
+            flag, target = args[-2:]
+            observed.append((("!" if inverse else "") + flag, target))
             if target == "/":
                 status = first_probe if observed.count(("-e", "/")) == 1 else last_probe
+            elif inverse:
+                status = inverse_file_status if flag == "-e" else inverse_symlink_status
             else:
                 status = file_status if flag == "-e" else symlink_status
             return subprocess.CompletedProcess(args, status)
@@ -405,14 +409,20 @@ def test_release_override_preflight_rejects_existing_file_dangling_link_and_sudo
 
     initial = [("-e", "/")]
     file_check = initial + [("-e", str(promote.OVERRIDE))]
-    symlink_check = file_check + [("-L", str(promote.OVERRIDE))]
-    complete = symlink_check + [("-e", "/")]
+    inverse_file_check = file_check + [("!-e", str(promote.OVERRIDE))]
+    symlink_check = inverse_file_check + [("-L", str(promote.OVERRIDE))]
+    inverse_symlink_check = symlink_check + [("!-L", str(promote.OVERRIDE))]
+    complete = inverse_symlink_check + [("-e", "/")]
     assert check(1, 1) == (True, complete)
     assert check(0, 1) == (False, file_check)
     assert check(1, 0) == (False, symlink_check)
     assert check(2, 1) == (False, file_check)
     assert check(1, 2) == (False, symlink_check)
-    # sudo -n itself may return 1: that is NOT evidence of an absent file.
+    # A selective sudoers denial on the protected path cannot look absent.
+    assert check(1, 1, inverse_file_status=1) == (False, inverse_file_check)
+    assert check(1, 1, inverse_symlink_status=1) == (False, inverse_symlink_check)
+    assert check(1, 1, inverse_file_status=2) == (False, inverse_file_check)
+    assert check(1, 1, inverse_symlink_status=2) == (False, inverse_symlink_check)
     assert check(1, 1, first_probe=1) == (False, initial)
     assert check(1, 1, last_probe=1) == (False, complete)
 

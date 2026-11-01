@@ -273,6 +273,12 @@ def rehearse() -> None:
         backup_original(original, original, private)
         drops = work / "dropins"
         drops.mkdir()
+        verify_dropin_precedence([
+            "/etc/systemd/system/router.service.d/10-runtime.conf",
+            "/etc/systemd/system/router.service.d/30-offline.conf",
+            "/etc/systemd/system/router.service.d/50-release.conf",
+            "/etc/systemd/system/router.service.d/90-guard.conf",
+        ])
         payload = render_dropin(["/usr/bin/env", "ROUTER_OFFLINE_ONLY=1", "/bin/true"])
         owned = install_late_dropin(drops, payload)
         if (drops / LATE_DROPIN).read_bytes() != payload:

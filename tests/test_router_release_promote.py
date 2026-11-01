@@ -418,6 +418,8 @@ def test_dropin_install_uses_atomic_create_without_replacing_existing_override()
 def test_external_launcher_rejects_arbitrary_wrapper_and_foreign_python(monkeypatch, tmp_path):
     app = tmp_path / "canonical"
     (app / ".venv/bin").mkdir(parents=True)
+    (app / "router").mkdir()
+    (app / "router/api.py").write_text("app = object()\n")
     (app / ".venv/bin/python").write_text("synthetic")
     (app / ".venv/bin/python").chmod(0o755)
     monkeypatch.setattr(promote, "APP", app)

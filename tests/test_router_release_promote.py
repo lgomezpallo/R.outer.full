@@ -301,6 +301,7 @@ def test_external_interpreter_promotes_only_as_reversible_canonical_override(mon
     (app / "router/api.py").write_text("app = object()\\n")
     canonical = app / ".venv/bin/python"
     canonical.write_text("synthetic canonical python")
+    canonical.chmod(0o755)
     external_binary = tmp_path / "external-bin/uvicorn"
     external_binary.parent.mkdir()
     external_binary.write_text("synthetic external launcher")

@@ -374,3 +374,30 @@ def test_rollback_verifies_original_effective_exec_before_restart(monkeypatch):
     calls.clear()
     assert not promote.rollback("different-exec")
     assert not any("restart" in args for args in calls)
+
+
+
+def test_release_override_preflight_rejects_existing_file_dangling_link_and_sudo_error(monkeypatch):
+    def check(file_status, symlink_status):
+        observed = []
+        def fake_run(args, **kwargs):
+            observed.append(args[3])
+            return subprocess.CompletedProcess(
+                args, file_status if args[3] == "-e" else symlink_status
+            )
+        monkeypatch.setattr(promote.subprocess, "run", fake_run)
+        result = promote.release_override_absent()
+        return result, observed
+
+    assert check(1, 1) == (True, ["-e", "-L"])
+    assert check(0, 1) == (False, ["-e"])
+    assert check(1, 0) == (False, ["-e", "-L"])
+    assert check(2, 1) == (False, ["-e"])
+    assert check(1, 2) == (False, ["-e", "-L"])
+
+
+def test_dropin_install_uses_atomic_create_without_replacing_existing_override():
+    source = MODULE.read_text()
+    assert 'run("sudo", "-n", "ln", temp_override, str(OVERRIDE))' in source
+    assert 'run("sudo", "-n", "mv", "-T", temp_override, str(OVERRIDE))' not in source
+    assert 'run("sudo", "-n", "rm", "-f", temp_override)' in source

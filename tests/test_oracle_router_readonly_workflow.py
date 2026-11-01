@@ -26,6 +26,12 @@ def test_readonly_workflow_has_no_mutating_commands():
                       "curl ", "pip install", "workflow_run:", "schedule:"):
         assert forbidden not in source
     ast.parse(remote_python())
+    # A PR-branch push must run the read-only inspection without triggering
+    # router-release-stage.yml (which is main-only and can write worktrees).
+    assert 'branches: [main, fix/router-oracle-p2-readonly-20261101]' in source
+    stage = (WORKFLOW.parent / 'router-release-stage.yml').read_text(encoding='utf-8')
+    assert 'branches: [main]' in stage
+    assert 'fix/router-oracle-p2-readonly-20261101' not in stage
 
 
 def test_readonly_inspection_never_prints_exec_or_environment_secrets():

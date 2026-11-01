@@ -214,3 +214,21 @@ def test_privileged_systemctl_uses_fixed_binary_and_clean_environment(monkeypatc
     with pytest.raises(one.OperationalBlock, match="system_command_not_allowlisted"):
         one._run("systemctl", "restart", one.UNIT)
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("drift", ["unloaded_conf", "modified_conf"])
+def test_unloaded_or_modified_disk_dropin_blocks_before_restart(tmp_path, monkeypatch, drift):
+    """systemctl may report cached DropInPaths until daemon-reload runs."""
+    fake, args = fixture(tmp_path, monkeypatch)
+    cached = fake.capture()
+    if drift == "unloaded_conf":
+        (args["dropin_dir"] / "80-unloaded.conf").write_bytes(b"[Service]\\nExecStart=/bin/false\\n")
+    else:
+        (args["dropin_dir"] / "30-offline.conf").write_bytes(b"[Service]\\nEnvironment=ROUTER_OFFLINE_ONLY=0\\n")
+    # Simulate systemctl show returning its pre-reload snapshot despite disk drift.
+    monkeypatch.setattr(fake, "capture", lambda: cached)
+    with pytest.raises(one.OperationalBlock, match="disk_dropin_inventory_changed"):
+        one.run_once(**args)
+    assert fake.restarts == 0 and fake.reloads == 0
+    assert not (args["private_root"] / ".one-shot-consumed").exists()
+    assert not list(args["private_root"].glob("p3-*"))

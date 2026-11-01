@@ -429,9 +429,30 @@ def test_release_override_preflight_rejects_existing_file_dangling_link_and_sudo
 
 def test_dropin_install_uses_atomic_create_without_replacing_existing_override():
     source = MODULE.read_text()
-    assert 'run("sudo", "-n", "ln", temp_override, str(OVERRIDE))' in source
+    assert 'run("sudo", "-n", "ln", "-T", temp_override, str(OVERRIDE))' in source
     assert 'run("sudo", "-n", "mv", "-T", temp_override, str(OVERRIDE))' not in source
     assert 'run("sudo", "-n", "rm", "-f", temp_override)' in source
+
+
+def test_atomic_dropin_link_never_follows_directory_symlink(tmp_path):
+    """GNU ln without -T follows a symlink to a directory (unsafe race)."""
+    source = tmp_path / "pending"
+    source.write_text("[Service]\\n")
+    target_dir = tmp_path / "outside"
+    target_dir.mkdir()
+    override = tmp_path / "release.conf"
+    override.symlink_to(target_dir, target_is_directory=True)
+    attempt = subprocess.run(
+        ["ln", "-T", str(source), str(override)],
+        capture_output=True, check=False,
+    )
+    assert attempt.returncode != 0
+    assert override.is_symlink()
+    assert not (target_dir / source.name).exists()
+    # The intended absent destination remains a valid atomic hardlink.
+    ordinary = tmp_path / "new.conf"
+    subprocess.run(["ln", "-T", str(source), str(ordinary)], check=True)
+    assert ordinary.samefile(source)
 
 
 def test_external_launcher_rejects_arbitrary_wrapper_and_foreign_python(monkeypatch, tmp_path):

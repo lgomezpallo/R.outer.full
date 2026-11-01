@@ -185,7 +185,7 @@ def consume_one_shot(root: Path) -> None:
                              os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                              0o600, dir_fd=dfd)
             with os.fdopen(marker, "wb") as stream:
-                stream.write(b"consumed\\n")
+                stream.write(b"consumed\n")
                 stream.flush()
                 os.fsync(stream.fileno())
             os.fsync(dfd)

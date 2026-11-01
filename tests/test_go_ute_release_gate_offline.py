@@ -120,7 +120,7 @@ def test_mocked_failed_promotion_rolls_back_service_override(monkeypatch, tmp_pa
 
     def fake_subprocess_run(args, **kwargs):
         if args[:4] in (["sudo", "-n", "test", "-e"], ["sudo", "-n", "test", "-L"]):
-            return SimpleNamespace(returncode=1)
+            return SimpleNamespace(returncode=0 if args[4] == "/" else 1)
         if args == ["systemctl", "cat", "router.service"]:
             kwargs["stdout"].write(b"[Service]\nExecStart=baseline\n")
             return SimpleNamespace(returncode=0)

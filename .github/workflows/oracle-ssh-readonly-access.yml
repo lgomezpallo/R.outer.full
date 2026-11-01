@@ -1,7 +1,7 @@
 name: Oracle SSH read-only access check
 on:
   push:
-    branches: [main]
+    branches: [main, fix/router-oracle-p2-readonly-20261101]
     paths:
       - .github/workflows/oracle-ssh-readonly-access.yml
   workflow_dispatch:

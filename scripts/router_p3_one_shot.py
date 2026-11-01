@@ -241,8 +241,16 @@ def run_once(*, system: LiveSystemd, app: Path, releases: Path,
         try:
             with rollback_signals() as signals:
                 try:
-                    owned = p3.install_late_dropin(
-                        dropin_dir, p3.render_dropin(candidate))
+                    # A termination between atomic link and returned identity
+                    # would leave ownership unknown. Defer catchable signals
+                    # until the owned identity has been recorded.
+                    guarded = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
+                    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, guarded)
+                    try:
+                        owned = p3.install_late_dropin(
+                            dropin_dir, p3.render_dropin(candidate))
+                    finally:
+                        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
                     system.reload()
                     system.restart()
                     verify_switched(system.capture(), candidate)

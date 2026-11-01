@@ -125,3 +125,52 @@ def test_manual_catalog_free_label_cannot_authorize_non_free_variant(monkeypatch
     assert billing_ineligibility_reason(registered, model) == "billing_unverified"
     with pytest.raises(RuntimeError, match="inference_blocked:billing_unverified"):
         ProviderClient._require_billing_eligible(registered, model.id)
+
+
+def test_503_retry_after_on_free_openrouter_model_falls_back_without_paid_dispatch(monkeypatch):
+    """Model-specific 503 cooldown must not disable another :free model.
+
+    Uses a real HTTPStatusError object but never performs an HTTP request.
+    This differs from a generic RuntimeError failure: Retry-After must be
+    respected and the provider must remain eligible for its other free model.
+    """
+    from time import time
+
+    monkeypatch.setenv("ROUTER_OFFLINE_ONLY", "0")
+    first = "nvidia/nemotron-3-ultra-550b-a55b:free"
+    second = "google/gemma-4-26b-a4b-it:free"
+    request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+    response = httpx.Response(503, request=request, headers={"Retry-After": "1200"})
+    unavailable = httpx.HTTPStatusError(
+        "simulated model unavailable", request=request, response=response
+    )
+
+    class LocalClient:
+        def __init__(self):
+            self.calls = []
+
+        def complete(self, provider, model, request):
+            self.calls.append(model)
+            if model == first:
+                raise unavailable
+            if model == second:
+                return "free-fallback-ok", {"fixture": True}
+            raise AssertionError("paid_or_unknown_dispatched")
+
+    spec = _provider((
+        _model(first, "free", 100),
+        _model(second, "free", 90),
+        _model("fixture/paid", "paid", 1000),
+        _model("fixture/unknown", "unknown", 1000),
+    ))
+    client = LocalClient()
+    router = Router(client=client, max_retries=2, catalog=ProviderCatalog(providers=(spec,)))
+    registered = router.add_provider("openrouter", "offline-fixture-key", discover=False)
+
+    result = router.route(RouteRequest(task="offline fixture", decompose=False))
+    assert result.ok and result.model == second
+    assert client.calls == [first, second]  # no retry, paid or unknown request
+    assert [attempt.ok for attempt in result.attempts] == [False, True]
+    assert registered.state.available
+    assert registered.state.model(first).cooldown_until - time() > 1100
+    assert registered.state.model(second).available

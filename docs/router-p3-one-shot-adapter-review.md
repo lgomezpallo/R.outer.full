@@ -1,0 +1,23 @@
+# Router P3 — adaptador one-shot, revisión técnica previa (NO AUTORIZADO)
+
+**Estado: código preparatorio en rama derivada de PR #107.** Este documento y los tests aislados **no conceden** permiso de escritura en Oracle. El módulo \`scripts/router_p3_one_shot.py\` no tiene \`__main__\`, workflow, endpoint ni entrada sudo. No desplegarlo ni ejecutarlo en producción hasta decisión explícita en [issue #109](https://github.com/lgomezpallo/R.outer.full/issues/109) y revisión independiente del operador.
+
+## Contrato operacional implementado
+
+- **Preflight sin cambios:** servicio active, health JSON status=ok por 127.0.0.1:8010, offline=1 en ExecStart efectivo, exactamente cuatro drop-ins, precedencia válida, 12 argumentos y normalización fail-closed del launcher Uvicorn de PR #107. El SHA del release debe verificarse de manera independiente en Oracle y pasarse como \`verified_release_sha\`; no aceptar una cadena introducida por el solicitante como evidencia.
+- **Privilegios:** euid=0 y directorio privado preexistente propiedad de root con permisos 0700. Lock exclusivo no bloqueante en ese directorio. No invoca sudo ni shell. Lecturas systemctl acotadas y únicas operaciones mutadoras: creación del drop-in propio con primitivas de PR #107, \`systemctl daemon-reload\` y \`systemctl restart router.service\`.
+- **Respaldo:** directorio privado nuevo 0700, snapshot completo de \`systemctl cat\`, ExecStart efectivo, cuatro drop-ins y estado, archivos 0600. Se valida la lectura del snapshot antes de la mutación. Se conserva aun cuando el ensayo falle.
+- **Switch y restauración:** instalación sin overwrite; reload y restart solo Router; verificación de ExecStart canónico, active, offline y HTTP; en \`finally\`, rollback ligado a identidad y segundo reload/restart, comparación exacta con snapshot y salud final. Captura SIGTERM, SIGINT y SIGHUP durante la sección crítica; difiere señales adicionales mientras restaura. Ante sustitución concurrente conserva archivo ajeno y falla cerrado.
+- **Salida:** únicamente resultado fijo \`switch_and_restoration_verified\` o error categorizado; no imprimir argumentos, env, rutas de datos, contenidos del snapshot ni secretos.
+
+## Límites y NO-GO
+
+1. **No existe rollback garantizable ante SIGKILL, caída de energía, kernel panic o pérdida total del host.** Se requiere operador de recuperación independiente, acceso administrativo fuera de banda y procedimiento documentado para quitar *solo* el drop-in propio con comprobación de identidad, reload, restart y verificación posterior. Si no hay esa capacidad, NO-GO.
+2. El módulo no está empaquetado como binario root-owned ni expone una vía de ejecución. **No permitir \`sudo python\`, \`sudo bash\`, \`sudo systemctl\` genérico, escritura de checkout, ni secrets SSH de solo lectura usados para mutar.** La única delegación aceptable requiere un wrapper inmutable root-owned, hash fijado, argumentos y rutas fijos, permiso sudoers limitado a ese ejecutable, y revisión independiente. Debe instalarlo el operador ya autorizado, no este PR.
+3. Antes de operar: fijar SHA exacto de PR #107 y de este adaptador, comprobar el SHA real del release desde una fuente local independiente, validar la ruta absoluta del checkout y del drop-in, y probar que el servicio actual coincide con el preflight. La comprobación de Git/SHA **no la implementa este módulo**; debe estar en el wrapper revisado.
+4. La aprobación formal del ensayo, operador responsable, ventana de un uso, método de recuperación y revisión de privilegios deben quedar registrados en #109. Ningún PR/issue por sí mismo concede acceso.
+5. No modificar workflows, Stage8, gates, ni \`router-production\`; no fusionar ni ejecutar este código como atajo. No activar modelos online, paid/unknown, IAchat, G.O. ni Prisma.
+
+## Pruebas y evidencia
+
+\`tests/test_router_p3_one_shot.py\` usa un systemd simulado y archivos temporales. Comprueba switch+restore exacto, rollback tras error y señal, conflicto con archivo ajeno y preflight fallido sin mutación. **Estos tests no prueban una restauración real en Oracle.** P3 permanece abierto hasta el ensayo autorizado, respaldo real y verificación final active/offline=1/HTTP.

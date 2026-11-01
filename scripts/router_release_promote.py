@@ -307,13 +307,20 @@ def dropin_precedence_safe() -> bool:
 
 
 def release_override_absent() -> bool:
-    """Reject existing files AND dangling symlinks; fail closed on sudo errors."""
-    for flag in ("-e", "-L"):
+    """Reject overrides and sudo denial (which also exits 1, like test false).
+
+    Probe a known-present path using the same sudo/test command before and
+    after the negative checks. Never treat sudo exit 1 alone as proof that
+    the release override is absent.
+    """
+    probes = (("-e", "/", 0), ("-e", str(OVERRIDE), 1),
+              ("-L", str(OVERRIDE), 1), ("-e", "/", 0))
+    for flag, target, expected in probes:
         result = subprocess.run(
-            ["sudo", "-n", "test", flag, str(OVERRIDE)],
+            ["sudo", "-n", "test", flag, target],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10,
         )
-        if result.returncode != 1:
+        if result.returncode != expected:
             return False
     return True
 

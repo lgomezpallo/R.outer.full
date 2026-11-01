@@ -266,15 +266,77 @@ def install_late_dropin(directory: Path, content: bytes) -> tuple[int, int, int,
 
 
 def rollback_late_dropin(directory: Path, owned: tuple[int, int, int, int, str]) -> bool:
-    """Remove only the inode created by us. Caller must verify effective ExecStart."""
-    path = directory / LATE_DROPIN
+    """Quarantine before deleting: never unlink a concurrently substituted drop-in.
+
+    POSIX offers no compare-and-unlink primitive. An identity check followed by
+    unlink is racy. Move the entry into a fresh private directory via pinned
+    directory FDs, then inspect *the moved entry*. If it is foreign, hard-link
+    it back with create-if-absent semantics (including symlinks) and keep the
+    quarantine if a concurrent writer already occupied the original name.
+    In either case a foreign entry is never unlinked.
+    """
     try:
-        if identity(path) != owned:
+        if identity(directory / LATE_DROPIN) != owned:
             return False
-        path.unlink()
-        return True
+        fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     except (OSError, MigrationBlocked):
         return False
+    quarantine = ".router-rollback-" + os.urandom(12).hex()
+    qfd = None
+    made = False
+    held = False
+    try:
+        os.mkdir(quarantine, mode=0o700, dir_fd=fd)
+        made = True
+        qfd = os.open(quarantine, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+        os.rename(LATE_DROPIN, "held", src_dir_fd=fd, dst_dir_fd=qfd)
+        held = True
+        # Read through the pinned quarantine FD; rename cannot be paired with
+        # a pre-rename identity test atomically, so decide only AFTER the move.
+        try:
+            h = os.open("held", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=qfd)
+            with os.fdopen(h, "rb") as stream:
+                st1 = os.fstat(stream.fileno())
+                if not stat.S_ISREG(st1.st_mode):
+                    raise MigrationBlocked("quarantined_entry_not_regular")
+                digest = hashlib.sha256(stream.read()).hexdigest()
+                st2 = os.fstat(stream.fileno())
+                if (st1.st_dev, st1.st_ino, st1.st_size, st1.st_ctime_ns) != (
+                    st2.st_dev, st2.st_ino, st2.st_size, st2.st_ctime_ns
+                ):
+                    raise MigrationBlocked("quarantined_entry_changed")
+                # Rename may change ctime, so match inode, device, size and hash.
+                is_ours = (st2.st_dev, st2.st_ino, st2.st_size, digest) == (
+                    owned[0], owned[1], owned[3], owned[4]
+                )
+        except (OSError, MigrationBlocked):
+            is_ours = False
+        if not is_ours:
+            try:
+                # Hard-link the foreign entry without overwriting an entry
+                # another writer may have created in the meantime.
+                os.link("held", LATE_DROPIN, src_dir_fd=qfd,
+                        dst_dir_fd=fd, follow_symlinks=False)
+            except OSError:
+                # Preserve foreign content in quarantine for recovery.
+                return False
+            os.unlink("held", dir_fd=qfd)
+            held = False
+            return False
+        os.unlink("held", dir_fd=qfd)
+        held = False
+        return True
+    except OSError:
+        return False
+    finally:
+        if qfd is not None:
+            os.close(qfd)
+        if made and not held:
+            try:
+                os.rmdir(quarantine, dir_fd=fd)
+            except OSError:
+                pass
+        os.close(fd)
 
 
 def rehearse() -> None:

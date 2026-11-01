@@ -302,12 +302,24 @@ def test_external_interpreter_promotes_only_as_reversible_canonical_override(mon
     canonical = app / ".venv/bin/python"
     canonical.write_text("synthetic canonical python")
     canonical.chmod(0o755)
-    external_binary = tmp_path / "external-bin/uvicorn"
-    external_binary.parent.mkdir()
-    external_binary.write_text("synthetic external launcher")
     external_root = tmp_path / "external-checkout"
     (external_root / "router").mkdir(parents=True)
-    (external_root / "router/api.py").write_text("app = object()\\n")
+    (external_root / "router/api.py").write_text("app = object()\n")
+    (external_root / ".venv/bin").mkdir(parents=True)
+    interpreter = external_root / ".venv/bin/python"
+    interpreter.write_text("synthetic interpreter")
+    interpreter.chmod(0o755)
+    external_binary = external_root / ".venv/bin/uvicorn"
+    external_binary.write_text(
+        f"#!{interpreter}\n"
+        "import sys\n"
+        "from uvicorn.main import main\n"
+        "if __name__ == '__main__':\n"
+        "    if sys.argv[0].endswith('.exe'):\n"
+        "        sys.argv[0] = sys.argv[0][:-4]\n"
+        "    sys.exit(main())\n"
+    )
+    external_binary.chmod(0o755)
     release = tmp_path / "frozen"
     release.mkdir()
     monkeypatch.setattr(promote, "APP", app)
@@ -401,3 +413,49 @@ def test_dropin_install_uses_atomic_create_without_replacing_existing_override()
     assert 'run("sudo", "-n", "ln", temp_override, str(OVERRIDE))' in source
     assert 'run("sudo", "-n", "mv", "-T", temp_override, str(OVERRIDE))' not in source
     assert 'run("sudo", "-n", "rm", "-f", temp_override)' in source
+
+
+def test_external_launcher_rejects_arbitrary_wrapper_and_foreign_python(monkeypatch, tmp_path):
+    app = tmp_path / "canonical"
+    (app / ".venv/bin").mkdir(parents=True)
+    (app / ".venv/bin/python").write_text("synthetic")
+    (app / ".venv/bin/python").chmod(0o755)
+    monkeypatch.setattr(promote, "APP", app)
+    root = tmp_path / "external"
+    (root / ".venv/bin").mkdir(parents=True)
+    (root / "router").mkdir()
+    (root / "router/api.py").write_text("app = object()\n")
+    interpreter = root / ".venv/bin/python"
+    interpreter.write_text("synthetic")
+    interpreter.chmod(0o755)
+    launcher = root / ".venv/bin/uvicorn"
+    launcher.write_text(
+        f"#!{interpreter}\n"
+        "import sys\n"
+        "from uvicorn.main import main\n"
+        "if __name__ == '__main__':\n"
+        "    if sys.argv[0].endswith('.exe'):\n"
+        "        sys.argv[0] = sys.argv[0][:-4]\n"
+        "    sys.exit(main())\n"
+    )
+    launcher.chmod(0o755)
+    monkeypatch.setattr(promote, "clean_known_external_checkout", lambda path: path == root)
+    def raw(executable, args=""):
+        return (
+            f"argv[]={executable} {args}router.api:app --host 127.0.0.1 "
+            f"--port 8010 --app-dir {root} ; ignore_errors=no"
+        )
+    assert promote.promotion_argv(raw(launcher))[:3] == [
+        str(app / ".venv/bin/python"), "-m", "uvicorn"
+    ]
+    launcher.write_text(f"#!{interpreter}\nimport os\nos.system('echo unexpected')\n")
+    with pytest.raises(promote.PromoteBlocked, match="service_interpreter_unsupported"):
+        promote.promotion_argv(raw(launcher))
+    launcher.write_text(f"#!/wrong/interpreter\nfrom uvicorn.main import main\n")
+    with pytest.raises(promote.PromoteBlocked, match="service_interpreter_unsupported"):
+        promote.promotion_argv(raw(launcher))
+    with pytest.raises(promote.PromoteBlocked, match="service_interpreter_unsupported"):
+        promote.promotion_argv(raw(interpreter, "-m uvicorn "))
+    launcher.chmod(0o644)
+    with pytest.raises(promote.PromoteBlocked, match="service_interpreter_unsupported"):
+        promote.promotion_argv(raw(launcher))

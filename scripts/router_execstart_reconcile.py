@@ -495,6 +495,58 @@ def backup_effective_service_snapshot(
         os.close(dfd)
 
 
+
+def verify_restored_effective_service_snapshot(
+    *, private: Path, unit_cat: bytes, dropins: dict[str, bytes],
+    effective_exec: bytes, state: str, offline_explicit: bool,
+    health_ok: bool,
+) -> None:
+    """Fail closed unless the *observed* restored service equals its backup.
+
+    Caller must capture fresh systemctl cat, effective ExecStart, all drop-in
+    bytes, systemctl active/offline and loopback health AFTER a real rollback.
+    This verifier performs no systemctl calls, writes or restarts; supplying
+    synthetic values does not prove any Oracle operation occurred.
+    """
+    if state != "active" or offline_explicit is not True or health_ok is not True:
+        raise MigrationBlocked("service_restore_runtime_unverified")
+    if len(dropins) != 4 or b"ROUTER_OFFLINE_ONLY=1" not in effective_exec:
+        raise MigrationBlocked("service_restore_inventory_or_offline_unverified")
+    try:
+        dfd = os.open(private, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        raise MigrationBlocked("service_restore_snapshot_unavailable") from None
+    try:
+        st = os.fstat(dfd)
+        if not stat.S_ISDIR(st.st_mode) or st.st_mode & 0o077:
+            raise MigrationBlocked("service_restore_snapshot_unsafe")
+
+        def saved(name: str) -> bytes:
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dfd)
+            with os.fdopen(fd, "rb") as handle:
+                info = os.fstat(handle.fileno())
+                if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077:
+                    raise MigrationBlocked("service_restore_snapshot_unsafe")
+                return handle.read(131073)
+
+        names = sorted(dropins)
+        if saved("service-state.before") != b"active\n":
+            raise MigrationBlocked("service_restore_snapshot_mismatch")
+        if saved("dropin-names.before") != ("\n".join(names) + "\n").encode():
+            raise MigrationBlocked("service_restore_snapshot_mismatch")
+        expected = [
+            ("systemctl-cat.before", unit_cat),
+            ("effective-execstart.before", effective_exec),
+        ] + [(f"dropin-{i:02d}.before", dropins[name]) for i, name in enumerate(names)]
+        for name, observed in expected:
+            if saved(name) != observed:
+                raise MigrationBlocked("service_restore_snapshot_mismatch")
+    except OSError:
+        raise MigrationBlocked("service_restore_snapshot_unavailable") from None
+    finally:
+        os.close(dfd)
+
+
 if __name__ == "__main__":
     import sys
     if sys.argv[1:] != ["--rehearse"]:

@@ -112,6 +112,29 @@ def test_one_shot_switch_then_restores_exact_original(tmp_path, monkeypatch):
     assert all(p.stat().st_mode & 0o077 == 0 for p in snapshots[0].iterdir())
 
 
+def test_one_shot_authorization_cannot_be_replayed(tmp_path, monkeypatch):
+    fake, args = fixture(tmp_path, monkeypatch)
+    assert one.run_once(**args) == "switch_and_restoration_verified"
+    assert (args["private_root"] / ".one-shot-consumed").is_file()
+    assert (args["private_root"] / ".one-shot-consumed").stat().st_mode & 0o077 == 0
+    with pytest.raises(one.OperationalBlock, match="one_shot_already_consumed"):
+        one.run_once(**args)
+    assert fake.restarts == 2 and fake.reloads == 2
+    assert len(list(args["private_root"].glob("p3-*"))) == 1
+
+
+def test_failed_attempt_also_consumes_one_shot_authorization(tmp_path, monkeypatch):
+    fake, args = fixture(tmp_path, monkeypatch)
+    fake.fail_first = True
+    with pytest.raises(one.OperationalBlock, match="system_command_failed"):
+        one.run_once(**args)
+    assert fake.restarts == 2
+    with pytest.raises(one.OperationalBlock, match="one_shot_already_consumed"):
+        one.run_once(**args)
+    assert fake.restarts == 2
+    assert not (args["dropin_dir"] / p3.LATE_DROPIN).exists()
+
+
 @pytest.mark.parametrize("failure", ["fail_first", "interrupt_first"])
 def test_restart_error_or_signal_always_restores(tmp_path, monkeypatch, failure):
     fake, args = fixture(tmp_path, monkeypatch)

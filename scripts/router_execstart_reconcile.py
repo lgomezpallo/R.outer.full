@@ -92,7 +92,8 @@ def classify_nested_shebang(executable: Path, *, checkout: Path, release: Path) 
     if executable not in expected:
         return "launcher_outside_expected"
     try:
-        if executable.is_symlink() or not executable.is_file():
+        if (executable.is_symlink() or not executable.is_file()
+                or not os.access(executable, os.X_OK)):
             return "launcher_unsafe"
         with executable.open("rb") as stream:
             first = stream.readline(512)

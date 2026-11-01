@@ -8,6 +8,7 @@ A production adapter requires a separate reviewed authorization.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import shlex
@@ -146,12 +147,25 @@ def render_dropin(argv: list[str]) -> bytes:
     return ("[Service]\nExecStart=\nExecStart=" + " ".join(argv) + "\n").encode()
 
 
-def identity(path: Path) -> tuple[int, int]:
+def identity(path: Path) -> tuple[int, int, int, int, str]:
+    """Bind ownership to the opened regular file and its contents.
+
+    Device/inode alone is insufficient: an unlinked inode may be reused for
+    a foreign replacement. O_NOFOLLOW also rejects symlinks.
+    """
     try:
-        info = path.lstat()
-        if not stat.S_ISREG(info.st_mode):
-            raise MigrationBlocked("dropin_identity_unsafe")
-        return info.st_dev, info.st_ino
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd, "rb") as handle:
+            before = os.fstat(handle.fileno())
+            if not stat.S_ISREG(before.st_mode):
+                raise MigrationBlocked("dropin_identity_unsafe")
+            digest = hashlib.sha256(handle.read()).hexdigest()
+            after = os.fstat(handle.fileno())
+            if (before.st_dev, before.st_ino, before.st_ctime_ns, before.st_size) != (
+                after.st_dev, after.st_ino, after.st_ctime_ns, after.st_size
+            ):
+                raise MigrationBlocked("dropin_identity_changed")
+            return (after.st_dev, after.st_ino, after.st_ctime_ns, after.st_size, digest)
     except OSError:
         raise MigrationBlocked("dropin_identity_missing") from None
 
@@ -169,7 +183,7 @@ def backup_original(unit_bytes: bytes, dropin_bytes: bytes, private: Path) -> No
             os.fsync(handle.fileno())
 
 
-def install_late_dropin(directory: Path, content: bytes) -> tuple[int, int]:
+def install_late_dropin(directory: Path, content: bytes) -> tuple[int, int, int, int, str]:
     """Atomic create-if-absent, no overwrite; isolated filesystem operation."""
     if directory.is_symlink() or not directory.is_dir():
         raise MigrationBlocked("dropin_directory_unsafe")
@@ -198,7 +212,7 @@ def install_late_dropin(directory: Path, content: bytes) -> tuple[int, int]:
         os.close(fd)
 
 
-def rollback_late_dropin(directory: Path, owned: tuple[int, int]) -> bool:
+def rollback_late_dropin(directory: Path, owned: tuple[int, int, int, int, str]) -> bool:
     """Remove only the inode created by us. Caller must verify effective ExecStart."""
     path = directory / LATE_DROPIN
     try:

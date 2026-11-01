@@ -151,6 +151,28 @@ def canonicalize(
     return argv, candidate
 
 
+
+def verify_dropin_precedence(effective_paths: list[str], *, expected_count: int = 4) -> None:
+    """Preflight only: reject unverified systemd drop-in ordering.
+
+    The caller must obtain the *effective* DropInPaths from systemd immediately
+    before a future authorized switch. This function never reads Oracle or
+    installs a file; an earlier inventory cannot authorize a later write.
+    """
+    if len(effective_paths) != expected_count:
+        raise MigrationBlocked("dropin_inventory_changed")
+    seen: set[str] = set()
+    for raw in effective_paths:
+        path = Path(raw)
+        name = path.name
+        if (not path.is_absolute() or not name.endswith(".conf")
+                or not TOKEN.fullmatch(name) or name in seen):
+            raise MigrationBlocked("dropin_inventory_unsafe")
+        if name >= LATE_DROPIN:
+            raise MigrationBlocked("dropin_precedence_unverified")
+        seen.add(name)
+
+
 def render_dropin(argv: list[str]) -> bytes:
     if not argv or any(not TOKEN.fullmatch(arg) for arg in argv):
         raise MigrationBlocked("dropin_arguments_unsafe")

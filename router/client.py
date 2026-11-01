@@ -184,6 +184,13 @@ class ProviderClient:
                                         raise InvalidOperation
                                     charges.append(charge)
                             status = "free" if prompt == 0 and completion == 0 and all(c == 0 for c in charges) else "paid"
+                            # Zero advertised prices do not always mean the model
+                            # can be used on an unfunded account. OpenRouter
+                            # documents no-credit access for :free variants and
+                            # its explicit free-model router only. Keep other
+                            # zero-price IDs unverified rather than routable.
+                            if status == "free" and model_id != "openrouter/free" and not model_id.endswith(":free"):
+                                status = "unknown"
                 except (InvalidOperation, ValueError, TypeError):
                     pass
                 # A provider inventory can contain duplicate IDs with conflicting

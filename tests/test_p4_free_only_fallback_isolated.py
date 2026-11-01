@@ -34,7 +34,9 @@ def test_openrouter_inventory_requires_zero_for_every_advertised_charge(monkeypa
     """A /models listing is not free evidence unless every price is zero."""
     monkeypatch.setenv("ROUTER_OFFLINE_ONLY", "0")
     items = [
-        {"id": "fixture/zero", "pricing": {"prompt": "0", "completion": "0", "request": "0"}},
+        {"id": "google/gemma-4-26b-a4b-it:free", "pricing": {"prompt": "0", "completion": "0", "request": "0"}},
+        {"id": "openrouter/free", "pricing": {"prompt": "0", "completion": "0"}},
+        {"id": "fixture/zero-but-funded", "pricing": {"prompt": "0", "completion": "0"}},
         {"id": "fixture/paid", "pricing": {"prompt": "0.01", "completion": "0"}},
         {"id": "fixture/surcharge", "pricing": {"prompt": "0", "completion": "0", "request": "0.001"}},
         {"id": "fixture/unknown"},
@@ -57,7 +59,9 @@ def test_openrouter_inventory_requires_zero_for_every_advertised_charge(monkeypa
     ids, prices = ProviderClient().discover_inventory(registered)
     assert ids == [item["id"] for item in items]
     assert prices == {
-        "fixture/zero": "free",
+        "google/gemma-4-26b-a4b-it:free": "free",
+        "openrouter/free": "free",
+        "fixture/zero-but-funded": "unknown",
         "fixture/paid": "paid",
         "fixture/surcharge": "paid",
         "fixture/unknown": "unknown",
@@ -71,7 +75,9 @@ def test_openrouter_inventory_requires_zero_for_every_advertised_charge(monkeypa
         model.id: billing_ineligibility_reason(registered, model)
         for model in updated.models
     }
-    assert reasons["fixture/zero"] is None
+    assert reasons["google/gemma-4-26b-a4b-it:free"] is None
+    assert reasons["openrouter/free"] is None
+    assert reasons["fixture/zero-but-funded"] == "billing_unverified"
     assert reasons["fixture/paid"] == "billing_paid"
     assert reasons["fixture/surcharge"] == "billing_paid"
     assert reasons["fixture/unknown"] == "billing_unverified"
@@ -87,15 +93,15 @@ def test_model_fallback_never_attempts_paid_or_unknown(monkeypatch):
 
         def complete(self, provider, model, request):
             self.calls.append(model)
-            if model == "fixture/free-first":
+            if model == "nvidia/nemotron-3-ultra-550b-a55b:free":
                 raise RuntimeError("simulated_model_specific_failure")
-            if model != "fixture/free-second":
+            if model != "google/gemma-4-26b-a4b-it:free":
                 raise AssertionError("paid_or_unknown_dispatched")
             return "fixture-success", {"fixture": True}
 
     spec = _provider((
-        _model("fixture/free-first", "free", 100),
-        _model("fixture/free-second", "free", 90),
+        _model("nvidia/nemotron-3-ultra-550b-a55b:free", "free", 100),
+        _model("google/gemma-4-26b-a4b-it:free", "free", 90),
         _model("fixture/paid", "paid", 1000),
         _model("fixture/unknown", "unknown", 1000),
     ))
@@ -104,6 +110,6 @@ def test_model_fallback_never_attempts_paid_or_unknown(monkeypatch):
     router.add_provider("openrouter", "fixture-not-a-real-key", discover=False)
     response = router.route(RouteRequest(task="fixture text", decompose=False))
     assert response.ok
-    assert response.model == "fixture/free-second"
-    assert client.calls == ["fixture/free-first", "fixture/free-second"]
+    assert response.model == "google/gemma-4-26b-a4b-it:free"
+    assert client.calls == ["nvidia/nemotron-3-ultra-550b-a55b:free", "google/gemma-4-26b-a4b-it:free"]
     assert [attempt.ok for attempt in response.attempts] == [False, True]

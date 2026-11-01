@@ -190,3 +190,25 @@ def test_stage_backup_includes_effective_private_catalog_and_database(tmp_path: 
     catalog.unlink()
     with pytest.raises(stage.StageBlocked, match="effective_catalog_missing_or_unsafe"):
         stage.backup_checkout(app, snapshot, base, active={"db": db, "catalog": catalog})
+
+
+def test_old_smoke_worktree_classification_is_readonly_and_categorical(monkeypatch, tmp_path):
+    root = tmp_path / "releases"
+    root.mkdir()
+    assert stage.frozen_smoke_worktree_status(root) == "missing"
+    target = root / stage.SMOKE_FROZEN_SHA
+    target.mkdir()
+    assert stage.frozen_smoke_worktree_status(root) == "invalid"
+    git(target, "init", "-q")
+    git(target, "config", "user.name", "Test")
+    git(target, "config", "user.email", "test@example.invalid")
+    (target / "tracked").write_text("baseline")
+    git(target, "add", "tracked")
+    git(target, "commit", "-qm", "baseline")
+    assert stage.frozen_smoke_worktree_status(root) == "mismatch"
+    monkeypatch.setattr(stage, "SMOKE_FROZEN_SHA", git(target, "rev-parse", "HEAD"))
+    assert stage.frozen_smoke_worktree_status(root) == "missing"
+    renamed = root / stage.SMOKE_FROZEN_SHA
+    target.rename(renamed)
+    assert stage.frozen_smoke_worktree_status(root) == "match"
+    assert git(renamed, "status", "--porcelain") == ""

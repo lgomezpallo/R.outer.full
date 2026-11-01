@@ -432,3 +432,53 @@ def test_alternate_shebang_rejects_foreign_symlink_and_fake_python_binary(tmp_pa
     alias.chmod(0o755)
     with pytest.raises(p3.MigrationBlocked, match="nested_launcher_unverified"):
         p3.canonicalize(raw, **kwargs)
+
+
+def test_full_effective_snapshot_preserves_four_dropins_and_offline_exec(tmp_path):
+    private = tmp_path / "snapshot"
+    private.mkdir(mode=0o700)
+    dropins = {
+        "10-runtime.conf": b"[Service]\\nEnvironment=ROUTER_OFFLINE_ONLY=1\\n",
+        "30-offline.conf": b"[Service]\\n",
+        "50-release.conf": b"[Service]\\nExecStart=/usr/bin/env ROUTER_OFFLINE_ONLY=1\\n",
+        "90-guard.conf": b"[Service]\\n",
+    }
+    cat = b"# unit and all drop-ins, byte-for-byte\\n" + b"".join(dropins.values())
+    effective = b"argv[]=/usr/bin/env ROUTER_OFFLINE_ONLY=1 ; ignore_errors=no"
+    p3.backup_effective_service_snapshot(
+        unit_cat=cat, dropins=dropins, effective_exec=effective,
+        state="active", private=private,
+    )
+    assert (private / "systemctl-cat.before").read_bytes() == cat
+    assert (private / "effective-execstart.before").read_bytes() == effective
+    assert (private / "service-state.before").read_bytes() == b"active\\n"
+    names = sorted(dropins)
+    assert (private / "dropin-names.before").read_text().splitlines() == names
+    for i, name in enumerate(names):
+        item = private / f"dropin-{i:02d}.before"
+        assert item.read_bytes() == dropins[name]
+        assert item.stat().st_mode & 0o777 == 0o600
+    with pytest.raises(p3.MigrationBlocked, match="service_snapshot_directory_unsafe"):
+        p3.backup_effective_service_snapshot(
+            unit_cat=cat, dropins=dropins, effective_exec=effective,
+            state="active", private=private,
+        )
+
+
+def test_full_snapshot_fails_closed_before_writing(tmp_path):
+    private = tmp_path / "snapshot"
+    private.mkdir(mode=0o700)
+    drops = {f"{i}0-entry.conf": b"[Service]\\n" for i in range(4)}
+    args = dict(unit_cat=b"unit", dropins=drops,
+                effective_exec=b"ROUTER_OFFLINE_ONLY=1", state="active", private=private)
+    for bad in (
+        {**args, "state": "inactive"},
+        {**args, "effective_exec": b"no-offline-flag"},
+        {**args, "dropins": {**drops, "zzzzzz-foreign.conf": b"foreign"}},
+    ):
+        with pytest.raises(p3.MigrationBlocked):
+            p3.backup_effective_service_snapshot(**bad)
+        assert list(private.iterdir()) == []
+    private.chmod(0o755)
+    with pytest.raises(p3.MigrationBlocked, match="service_snapshot_directory_unsafe"):
+        p3.backup_effective_service_snapshot(**args)

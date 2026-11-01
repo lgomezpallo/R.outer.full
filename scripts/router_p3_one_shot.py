@@ -155,6 +155,27 @@ def require_privileged_private_root(root: Path) -> None:
         raise OperationalBlock("private_root_unsafe")
 
 
+
+def verify_disk_dropin_inventory(before: Observed, directory: Path) -> None:
+    """Reject on-disk .conf drift hidden by systemd's cached DropInPaths.
+
+    daemon-reload scans the directory anew. A stale/unloaded .conf could be
+    applied on the first reload even when the current systemctl show inventory
+    reports the four expected entries. Compare actual regular files and bytes
+    to the captured snapshot before consuming the one-shot authorization.
+    """
+    try:
+        disk = {entry.name: entry for entry in directory.iterdir()
+                if entry.name.endswith(".conf")}
+        if set(disk) != set(before.dropins):
+            raise OperationalBlock("disk_dropin_inventory_changed")
+        for name, entry in disk.items():
+            if _regular_bytes(entry) != before.dropins[name]:
+                raise OperationalBlock("disk_dropin_inventory_changed")
+    except OSError:
+        raise OperationalBlock("disk_dropin_inventory_unreadable") from None
+
+
 @contextlib.contextmanager
 def exclusive_lock(root: Path):
     fd = os.open(root / ".one-shot.lock",
@@ -262,6 +283,7 @@ def run_once(*, system: LiveSystemd, app: Path, releases: Path,
         if (dropin_dir / p3.LATE_DROPIN).exists() or (
             dropin_dir / p3.LATE_DROPIN).is_symlink():
             raise OperationalBlock("dropin_already_present")
+        verify_disk_dropin_inventory(before, dropin_dir)
         # Back up immediately before mutation. Keep the directory on failures.
         private = Path(tempfile.mkdtemp(prefix="p3-", dir=private_root))
         p3.backup_effective_service_snapshot(
@@ -272,6 +294,9 @@ def run_once(*, system: LiveSystemd, app: Path, releases: Path,
             private=private, unit_cat=before.unit_cat, dropins=before.dropins,
             effective_exec=before.effective_exec, state=before.state,
             offline_explicit=before.offline, health_ok=before.health_ok)
+        # Detect drift while the private backup was being written, before
+        # consuming the only authorized attempt or touching systemd.
+        verify_disk_dropin_inventory(before, dropin_dir)
         # Commit the one-use authorization only after a verified backup,
         # immediately before the first possible service mutation.
         consume_one_shot(private_root)

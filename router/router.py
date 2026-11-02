@@ -251,15 +251,14 @@ class Router:
                     error = f"{type(exc).__name__}: {exc}"
                     retryable, provider_wide, error_type, error_code, cooldown = self._classify_failure(exc)
                     # OpenRouter counts failed free requests against its
-                    # daily allowance. After a 5xx or an ambiguous transport
-                    # failure (e.g. read timeout after POST), the request may
-                    # already have reached the provider. Repeating that same
-                    # free model could spend another quota slot. Preserve its
-                    # cooldown and try a different eligible free model instead.
+                    # daily allowance. HTTP 408/409 may also represent a processed
+                    # POST, not just 5xx or lost responses. Avoid repeating
+                    # the same free model after any HTTP error or ambiguous
+                    # transport failure; try another eligible free model.
                     # Other providers retain their normal retry policy.
                     if (provider.spec.id == "openrouter"
                             and (decision.model.endswith(":free") or decision.model == "openrouter/free")
-                            and (error_code in {500, 502, 503, 504}
+                            and (isinstance(exc, httpx.HTTPStatusError)
                                  or isinstance(exc, httpx.TransportError))):
                         retryable = False
                     attempts.append(Attempt(decision.provider, decision.model, False, latency, error, phase))

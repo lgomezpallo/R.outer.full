@@ -295,3 +295,53 @@ def test_opaque_auto_router_remains_fallback_when_no_explicit_free_is_eligible(m
     router.add_provider("openrouter", "offline-fixture-key", discover=False)
     ranked = [decision.model for decision in rank(router.registry.all(), RouteRequest(task="hola", decompose=False))]
     assert ranked == ["openrouter/free"]
+
+
+@pytest.mark.parametrize("status_code", [500, 502, 504])
+def test_openrouter_free_server_errors_skip_same_model_retry(monkeypatch, status_code):
+    """Each failed :free HTTP request may consume quota; prefer another free ID.
+
+    Exercise actual Router retry/cooldown policy with a local HTTPStatusError.
+    No credentials, network, paid models, or live inference.
+    """
+    from time import time
+
+    monkeypatch.setenv("ROUTER_OFFLINE_ONLY", "0")
+    first = "nvidia/nemotron-3-ultra-550b-a55b:free"
+    second = "google/gemma-4-26b-a4b-it:free"
+    request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+    unavailable = httpx.HTTPStatusError(
+        "simulated free-model server error",
+        request=request,
+        response=httpx.Response(status_code, request=request),
+    )
+
+    class LocalClient:
+        def __init__(self):
+            self.calls = []
+
+        def complete(self, provider, model, request):
+            self.calls.append(model)
+            if model == first:
+                raise unavailable
+            if model == second:
+                return "free-fallback-ok", {"fixture": True}
+            raise AssertionError("paid_or_unknown_dispatched")
+
+    spec = _provider((
+        _model(first, "free", 100),
+        _model(second, "free", 90),
+        _model("fixture/paid", "paid", 1000),
+        _model("fixture/unknown", "unknown", 1000),
+    ))
+    client = LocalClient()
+    router = Router(client=client, max_retries=2, catalog=ProviderCatalog(providers=(spec,)))
+    registered = router.add_provider("openrouter", "offline-fixture-key", discover=False)
+    result = router.route(RouteRequest(task="offline fixture", decompose=False))
+
+    assert result.ok and result.model == second
+    assert client.calls == [first, second]
+    assert [attempt.ok for attempt in result.attempts] == [False, True]
+    assert registered.state.available
+    assert registered.state.model(first).cooldown_until - time() > 40
+    assert registered.state.model(second).available

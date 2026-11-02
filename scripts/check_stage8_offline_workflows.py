@@ -39,7 +39,7 @@ EXPECTED_WORKFLOW_BLOBS: dict[str, str] = {
     "oracle-candidate-reconcile.yml": "e24d2e9be6c2a19bb13c88cdab640a573891076c",
     "oracle-ssh-readonly-access.yml": "972a3dee33ea8299c7b6913ce5e94e249aa44b8b",
     "check-provider-secrets.yml": "30fb296f7d0d87d180d5a1a87b69822382113eb5",
-    "oracle-deploy.yml": "5dc10c0fbba1198a14e2ee65321c10d79ecb3545",
+    "oracle-deploy.yml": "ff713b91ce5fe4be42b10c46f1e12f78d2d1dfe1",
     "router-oracle-monitor.yml": "c7fc8ddb2501c33c772488d97bf6dbe216dbbb68",
     "router-release-stage.yml": "25adf54657c656cb8645cfa938472132428a2c30",
     "router-release-promote.yml": "a4466c539f732af051f04bbd982c89492eaa17eb",
@@ -155,6 +155,10 @@ def audit_workflows(sources: Mapping[str, str]) -> list[str]:
                         problems.append(f"{filename}/{job}: protected environment missing")
                     if f"    if: {approved}" not in source.split("  tests:", 1)[1].split("  oracle-live-smoke:", 1)[0]:
                         problems.append(f"{filename}/tests: one-time gate missing")
+                elif filename == "oracle-deploy.yml":
+                    approved = "${{ github.event_name == 'workflow_dispatch' && contains(fromJSON('[\"preflight\",\"snapshot\",\"compare\",\"reconcile-check\",\"deploy\"]'), inputs.mode) }}"
+                    if conditions != [approved]:
+                        problems.append(f"{filename}/{job}: invalid manual dispatch gate")
                 elif conditions != ["${{ false }}"]:
                     problems.append(f"{filename}/{job}: remote job is not unconditionally disabled")
             elif (filename == "oracle-candidate-reconcile.yml" and job == "preserve-and-reconcile") or (filename == "oracle-ssh-readonly-access.yml" and job == "ssh-readonly"):
@@ -179,7 +183,7 @@ def main() -> int:
         for error in errors:
             print(f"STAGE8_POLICY_FAIL {error}")
         return 1
-    print("STAGE8_POLICY_OK: 9 reviewed workflows; promotion one-time main push at pinned SHA; live inference disabled")
+    print("STAGE8_POLICY_OK: 9 reviewed workflows; Oracle deploy manual dispatch only; pinned promotion gates unchanged")
     return 0
 
 

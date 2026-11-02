@@ -242,6 +242,13 @@ class Router:
                     latency = int((perf_counter() - started) * 1000)
                     error = f"{type(exc).__name__}: {exc}"
                     retryable, provider_wide, error_type, error_code, cooldown = self._classify_failure(exc)
+                    # OpenRouter counts failed :free requests against its small
+                    # daily allowance. A 503 without Retry-After should try the
+                    # next eligible free model, not spend another request on
+                    # the same unavailable model. Preserve its model cooldown.
+                    if (provider.spec.id == "openrouter"
+                            and decision.model.endswith(":free") and error_code == 503):
+                        retryable = False
                     attempts.append(Attempt(decision.provider, decision.model, False, latency, error, phase))
                     if self.store is not None:
                         self.store.record_metric(

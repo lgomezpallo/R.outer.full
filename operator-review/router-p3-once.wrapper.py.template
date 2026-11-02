@@ -1,13 +1,16 @@
 #!/usr/bin/python3 -I
 """P3 REVIEW TEMPLATE ONLY — NOT INSTALLED, NOT AUTHORIZED TO RUN.
 
-Copy to /usr/local/sbin/router-p3-once ONLY after independent code review,
-approval in issue #109, and installation by an already authorized operator.
+Copy to /usr/local/sbin/router-p3-once ONLY after the specific operational
+decision in issue #109 and installation by an already authorized operator.
+The owner's current approval requires independent technical review unless
+explicitly amended. This is not an externally verified Oracle/GitHub rule;
+self-audit and automated checks must not be mislabeled independent approval.
 The final installed bytes must be root-owned and pinned by a sudoers sha256
 command digest with NO command-line arguments. Never grant sudo python/bash,
 sudo systemctl, or writable-checkout execution.
 
-Example *policy shape* for independent sudoers review (NOT ready to install):
+Example *policy shape* for authorized sudoers review (NOT ready to install):
   Cmnd_Alias ROUTER_P3_ONCE = sha256:<REVIEWED_BASE64_DIGEST> /usr/local/sbin/router-p3-once ""
   <PREEXISTING_AUTHORIZED_OPERATOR> ALL=(root) NOPASSWD: ROUTER_P3_ONCE
 Do not apply this policy without the production authority's final decision.
@@ -23,8 +26,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-# All placeholders are intentionally invalid. The operator and independent
-# reviewer must fill, hash, review and sign the FINAL installed artifact.
+# All placeholders are intentionally invalid. An authorized operator must
+# fill and verify the FINAL installed artifact under the terms then in #109.
 APP = Path("/REVIEW_REQUIRED/absolute-app-path")
 RELEASES = Path("/REVIEW_REQUIRED/absolute-releases-path")
 APPROVED_CODE_DIR = Path("/opt/router-p3-approved")
@@ -93,8 +96,8 @@ def verify_installed_artifacts() -> str:
         require_root_owned(path, directory=False)
         if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
             refuse()
-    # The attestation is prepared and signed off by an independent operator
-    # after checking the actual Oracle release, not by this wrapper or PR.
+    # The attestation must come from an authorized inspection of the actual
+    # Oracle release, not from this wrapper, a PR claim or a supplied SHA.
     attested = RELEASE_ATTESTATION.read_text(encoding="ascii").strip()
     if attested != RELEASE_SHA:
         refuse()
@@ -124,7 +127,7 @@ def main() -> int:
         return 0
     except BaseException:
         # Fail closed. The private backup and one-shot marker are retained.
-        # After any failure the independent recovery operator must inspect
+        # After any failure an authorized recovery operator must inspect
         # the real service state; NEVER retry with the same approval.
         print("P3_NO_GO_OR_RECOVERY_REQUIRED", file=sys.stderr)
         return 1

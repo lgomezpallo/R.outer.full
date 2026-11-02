@@ -57,6 +57,10 @@ def billing_ineligibility_reason(provider: RegisteredProvider, model) -> str | N
         return endpoint_block
     if model.billing_status == "paid":
         return "billing_paid"
+    # Last-mile catalog guard: a manually marked free row cannot bypass the
+    # no-credit variant rule established during OpenRouter discovery.
+    if provider.spec.id == "openrouter" and model.id != "openrouter/free" and not model.id.endswith(":free"):
+        return "billing_unverified"
     if provider.spec.id in {"groq", "nvidia", "openrouter"}:
         # Historical Groq/NVIDIA routing lists and model names are not proof
         # of zero price. All three providers require explicit per-model free
@@ -288,4 +292,15 @@ def rank(providers: list[RegisteredProvider], req: RouteRequest) -> list[Decisio
     # predictable fallback order when providers are registered in a different
     # order. Scores still determine preference; provider/model IDs only break
     # exact ties, without granting eligibility or overriding billing gates.
-    return sorted(decisions, key=lambda d: (-d.score, d.provider, d.model))
+    ordered = sorted(decisions, key=lambda d: (-d.score, d.provider, d.model))
+    # openrouter/free delegates selection to OpenRouter and hides the actual
+    # model from Router's per-model cooldown, metrics and fallback. Keep it
+    # available as a last resort, but exhaust explicitly identified :free
+    # variants first when any are eligible. This changes ordering only:
+    # billing/capability gates above still decide eligibility.
+    if any(d.provider == "openrouter" and d.model.endswith(":free") for d in ordered):
+        ordered.sort(key=lambda d: (
+            d.provider == "openrouter" and d.model == "openrouter/free",
+            -d.score, d.provider, d.model,
+        ))
+    return ordered

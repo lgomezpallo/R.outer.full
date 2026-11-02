@@ -1,0 +1,297 @@
+"""P4: offline fixtures for explicitly free inventory and per-model fallback.
+
+No real API credentials, network, provider calls, or production workflow.
+"""
+from __future__ import annotations
+
+import httpx
+import pytest
+
+from router.catalog import ModelSpec, ProviderCatalog, ProviderSpec
+from router.client import ProviderClient
+from router.registry import RegisteredProvider
+from router.router import Router
+from router.selector import billing_ineligibility_reason
+from router.state import RuntimeState
+from router.types import RouteRequest
+
+
+def _model(name: str, status: str, priority: int) -> ModelSpec:
+    return ModelSpec(
+        id=name, capabilities=frozenset({"chat"}), model_class="standard",
+        priority=priority, strategic_cost=10, billing_status=status,
+    )
+
+
+def _provider(models: tuple[ModelSpec, ...]) -> ProviderSpec:
+    return ProviderSpec(
+        id="openrouter", aliases=("openrouter",),
+        base_url="https://openrouter.ai/api/v1", models=models,
+        discover_models=False,
+    )
+
+
+def test_openrouter_inventory_requires_zero_for_every_advertised_charge(monkeypatch):
+    """A /models listing is not free evidence unless every price is zero."""
+    monkeypatch.setenv("ROUTER_OFFLINE_ONLY", "0")
+    items = [
+        {"id": "google/gemma-4-26b-a4b-it:free", "pricing": {"prompt": "0", "completion": "0", "request": "0"}},
+        {"id": "openrouter/free", "pricing": {"prompt": "0", "completion": "0"}},
+        {"id": "fixture/zero-but-funded", "pricing": {"prompt": "0", "completion": "0"}},
+        {"id": "fixture/paid", "pricing": {"prompt": "0.01", "completion": "0"}},
+        {"id": "fixture/surcharge", "pricing": {"prompt": "0", "completion": "0", "request": "0.001"}},
+        {"id": "fixture/unknown"},
+    ]
+    original_client = httpx.Client
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        assert request.url.host == "openrouter.ai"
+        assert request.url.path == "/api/v1/models"
+        return httpx.Response(200, json={"data": items})
+
+    def local_client(*args, **kwargs):
+        return original_client(*args, transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr("router.client.httpx.Client", local_client)
+    spec = _provider(())
+    registered = RegisteredProvider(spec, "fixture-not-a-real-key", RuntimeState())
+    ids, prices = ProviderClient().discover_inventory(registered)
+    assert ids == [item["id"] for item in items]
+    assert prices == {
+        "google/gemma-4-26b-a4b-it:free": "free",
+        "openrouter/free": "free",
+        "fixture/zero-but-funded": "unknown",
+        "fixture/paid": "paid",
+        "fixture/surcharge": "paid",
+        "fixture/unknown": "unknown",
+    }
+    assert len(calls) == 1
+
+    catalog = ProviderCatalog(providers=(spec,))
+    updated = catalog.merge_discovered_models("openrouter", ids, prices)
+    registered.spec = updated
+    reasons = {
+        model.id: billing_ineligibility_reason(registered, model)
+        for model in updated.models
+    }
+    assert reasons["google/gemma-4-26b-a4b-it:free"] is None
+    assert reasons["openrouter/free"] is None
+    assert reasons["fixture/zero-but-funded"] == "billing_unverified"
+    assert reasons["fixture/paid"] == "billing_paid"
+    assert reasons["fixture/surcharge"] == "billing_paid"
+    assert reasons["fixture/unknown"] == "billing_unverified"
+
+
+def test_model_fallback_never_attempts_paid_or_unknown(monkeypatch):
+    """One free model may fail; fallback stays within another explicit free model."""
+    monkeypatch.setenv("ROUTER_OFFLINE_ONLY", "0")
+
+    class LocalClient:
+        def __init__(self):
+            self.calls = []
+
+        def complete(self, provider, model, request):
+            self.calls.append(model)
+            if model == "nvidia/nemotron-3-ultra-550b-a55b:free":
+                raise RuntimeError("simulated_model_specific_failure")
+            if model != "google/gemma-4-26b-a4b-it:free":
+                raise AssertionError("paid_or_unknown_dispatched")
+            return "fixture-success", {"fixture": True}
+
+    spec = _provider((
+        _model("openrouter/free", "free", 1000),  # opaque auto-router must not lead
+        _model("nvidia/nemotron-3-ultra-550b-a55b:free", "free", 100),
+        _model("google/gemma-4-26b-a4b-it:free", "free", 90),
+        _model("fixture/paid", "paid", 1000),
+        _model("fixture/unknown", "unknown", 1000),
+    ))
+    client = LocalClient()
+    router = Router(client=client, max_retries=0, catalog=ProviderCatalog(providers=(spec,)))
+    router.add_provider("openrouter", "fixture-not-a-real-key", discover=False)
+    response = router.route(RouteRequest(task="fixture text", decompose=False))
+    assert response.ok
+    assert response.model == "google/gemma-4-26b-a4b-it:free"
+    assert client.calls == ["nvidia/nemotron-3-ultra-550b-a55b:free", "google/gemma-4-26b-a4b-it:free"]
+    assert [attempt.ok for attempt in response.attempts] == [False, True]
+
+
+def test_manual_catalog_free_label_cannot_authorize_non_free_variant(monkeypatch):
+    """Persisted catalog edits cannot bypass the no-credit variant restriction."""
+    monkeypatch.setenv("ROUTER_OFFLINE_ONLY", "0")
+    spec = _provider((_model("fixture/zero-but-funded", "free", 100),))
+    registered = RegisteredProvider(spec, "fixture-not-a-real-key", RuntimeState())
+    model = spec.models[0]
+    assert billing_ineligibility_reason(registered, model) == "billing_unverified"
+    with pytest.raises(RuntimeError, match="inference_blocked:billing_unverified"):
+        ProviderClient._require_billing_eligible(registered, model.id)
+
+
+@pytest.mark.parametrize("retry_after", ["1200", None])
+def test_503_on_free_openrouter_model_falls_back_without_paid_dispatch(monkeypatch, retry_after):
+    """503 must not spend free daily quota on same-model retries.
+
+    Both with and without Retry-After, a different :free model remains
+    eligible; a server-provided wait is honored when present. No network.
+    """
+    from time import time
+
+    monkeypatch.setenv("ROUTER_OFFLINE_ONLY", "0")
+    first = "nvidia/nemotron-3-ultra-550b-a55b:free"
+    second = "google/gemma-4-26b-a4b-it:free"
+    request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+    headers = {"Retry-After": retry_after} if retry_after else {}
+    response = httpx.Response(503, request=request, headers=headers)
+    unavailable = httpx.HTTPStatusError(
+        "simulated model unavailable", request=request, response=response
+    )
+
+    class LocalClient:
+        def __init__(self):
+            self.calls = []
+
+        def complete(self, provider, model, request):
+            self.calls.append(model)
+            if model == first:
+                raise unavailable
+            if model == second:
+                return "free-fallback-ok", {"fixture": True}
+            raise AssertionError("paid_or_unknown_dispatched")
+
+    spec = _provider((
+        _model(first, "free", 100),
+        _model(second, "free", 90),
+        _model("fixture/paid", "paid", 1000),
+        _model("fixture/unknown", "unknown", 1000),
+    ))
+    client = LocalClient()
+    router = Router(client=client, max_retries=2, catalog=ProviderCatalog(providers=(spec,)))
+    registered = router.add_provider("openrouter", "offline-fixture-key", discover=False)
+
+    result = router.route(RouteRequest(task="offline fixture", decompose=False))
+    assert result.ok and result.model == second
+    assert client.calls == [first, second]  # no retry, paid or unknown request
+    assert [attempt.ok for attempt in result.attempts] == [False, True]
+    assert registered.state.available
+    assert registered.state.model(first).cooldown_until - time() > (1100 if retry_after else 110)
+    assert registered.state.model(second).available
+
+
+def test_failed_openrouter_refresh_revokes_stale_free_snapshot_without_dispatch(monkeypatch):
+    """A cached free price is not fresh authorization after a failed refresh."""
+    from dataclasses import replace
+
+    monkeypatch.setenv("ROUTER_OFFLINE_ONLY", "0")
+    free_id = "google/gemma-4-26b-a4b-it:free"
+    stale = replace(_model(free_id, "free", 100), discovered_in_last_snapshot=True)
+    spec = replace(
+        _provider((stale,)),
+        last_inventory_source="client_discover_inventory",
+        last_inventory_merge_at="2026-10-01T00:00:00+00:00",
+        discover_models=True,
+    )
+
+    class FailedRefreshClient:
+        def discover_inventory(self, provider):
+            raise httpx.ConnectError("simulated_inventory_outage")
+
+        def complete(self, provider, model, request):
+            raise AssertionError("stale_free_model_dispatched")
+
+    catalog = ProviderCatalog(providers=(spec,))
+    router = Router(client=FailedRefreshClient(), catalog=catalog)
+    registered = router.add_provider("openrouter", "offline-fixture-key")
+    assert registered.spec.models[0].billing_status == "unknown"
+    assert not registered.spec.models[0].discovered_in_last_snapshot
+    assert catalog.get("openrouter").models[0].billing_status == "unknown"
+    result = router.route(RouteRequest(task="offline test", decompose=False))
+    assert not result.ok
+    assert result.attempts == []
+
+    # A new, successfully classified inventory can restore free eligibility.
+    class SuccessfulRefreshClient(FailedRefreshClient):
+        def discover_inventory(self, provider):
+            return [free_id], {free_id: "free"}
+
+    recovered = Router(client=SuccessfulRefreshClient(), catalog=catalog)
+    current = recovered.add_provider("openrouter", "offline-fixture-key")
+    assert current.spec.models[0].billing_status == "free"
+    assert current.spec.models[0].discovered_in_last_snapshot
+    assert current.spec.last_inventory_source == "client_discover_inventory"
+
+
+def test_offline_only_blocks_injected_client_route_and_probe(monkeypatch):
+    """Offline-only must block even custom clients, not only ProviderClient.
+
+    A production route/probe must not be able to bypass the release offline
+    switch by injecting an alternate client implementation. No network/keys.
+    """
+    monkeypatch.setenv("ROUTER_OFFLINE_ONLY", "1")
+    model_id = "google/gemma-4-26b-a4b-it:free"
+
+    class InjectedClient:
+        def __init__(self):
+            self.calls = []
+
+        def complete(self, provider, model, request):
+            self.calls.append(("complete", model))
+            raise AssertionError("offline_route_dispatched")
+
+        def probe_capability(self, provider, model, capability):
+            self.calls.append(("probe", model))
+            raise AssertionError("offline_probe_dispatched")
+
+    client = InjectedClient()
+    catalog = ProviderCatalog(providers=(_provider((_model(model_id, "free", 100),)),))
+    router = Router(client=client, catalog=catalog)
+    registered = router.add_provider("openrouter", "not-a-real-key", discover=False)
+
+    result = router.route(RouteRequest(task="offline fixture", decompose=False))
+    assert not result.ok
+    assert result.error == "no_eligible_provider"  # existing offline API contract
+    assert result.attempts == []
+
+    probe = router.verify_capability("openrouter", model_id, "chat")
+    assert probe["status"] == "inconclusive"
+    assert probe["evidence"] == "probe_blocked:offline_only"
+    assert client.calls == []
+    assert registered.spec.models[0].evidence == ()
+
+
+def test_explicit_free_models_rank_before_untraceable_openrouter_auto(monkeypatch):
+    """Prefer per-model cooldown and fallback over opaque openrouter/free routing."""
+    from router.selector import rank
+
+    monkeypatch.setenv("ROUTER_OFFLINE_ONLY", "0")
+    explicit_a = "nvidia/nemotron-3-ultra-550b-a55b:free"
+    explicit_b = "google/gemma-4-26b-a4b-it:free"
+    spec = _provider((
+        _model("openrouter/free", "free", 1000),
+        _model(explicit_a, "free", 90),
+        _model(explicit_b, "free", 80),
+        _model("fixture/paid", "paid", 2000),
+        _model("fixture/unknown", "unknown", 2000),
+    ))
+    router = Router(catalog=ProviderCatalog(providers=(spec,)))
+    router.add_provider("openrouter", "offline-fixture-key", discover=False)
+    ranked = [decision.model for decision in rank(router.registry.all(), RouteRequest(task="hola", decompose=False))]
+    assert set(ranked) == {explicit_a, explicit_b, "openrouter/free"}
+    assert ranked[-1] == "openrouter/free"
+    assert all(model.endswith(":free") for model in ranked[:-1])
+
+
+def test_opaque_auto_router_remains_fallback_when_no_explicit_free_is_eligible(monkeypatch):
+    """Do not remove openrouter/free; use it only when no trackable free candidate exists."""
+    from router.selector import rank
+
+    monkeypatch.setenv("ROUTER_OFFLINE_ONLY", "0")
+    spec = _provider((
+        _model("openrouter/free", "free", 70),
+        _model("fixture/paid", "paid", 1000),
+        _model("fixture/unknown", "unknown", 1000),
+    ))
+    router = Router(catalog=ProviderCatalog(providers=(spec,)))
+    router.add_provider("openrouter", "offline-fixture-key", discover=False)
+    ranked = [decision.model for decision in rank(router.registry.all(), RouteRequest(task="hola", decompose=False))]
+    assert ranked == ["openrouter/free"]

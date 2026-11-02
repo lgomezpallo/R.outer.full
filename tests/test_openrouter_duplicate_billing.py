@@ -27,8 +27,8 @@ def test_duplicate_openrouter_ids_take_most_restrictive_price(monkeypatch, rever
         {"id": "vendor/conflicting", "pricing": charged},
         {"id": "vendor/uncertain", "pricing": zero},
         {"id": "vendor/uncertain", "pricing": {"prompt": "0"}},
-        {"id": "vendor/zero", "pricing": zero},
-        {"id": "vendor/zero", "pricing": zero},
+        {"id": "vendor/zero:free", "pricing": zero},
+        {"id": "vendor/zero:free", "pricing": zero},
     ]
     if reverse:
         entries.reverse()
@@ -55,14 +55,14 @@ def test_duplicate_openrouter_ids_take_most_restrictive_price(monkeypatch, rever
     client = ProviderClient()
     ids, prices = client.discover_inventory(provider)
     expected_ids = (
-        ["vendor/zero", "vendor/uncertain", "vendor/conflicting"]
-        if reverse else ["vendor/conflicting", "vendor/uncertain", "vendor/zero"]
+        ["vendor/zero:free", "vendor/uncertain", "vendor/conflicting"]
+        if reverse else ["vendor/conflicting", "vendor/uncertain", "vendor/zero:free"]
     )
     assert ids == expected_ids
     assert prices == {
         "vendor/conflicting": "paid",
         "vendor/uncertain": "unknown",
-        "vendor/zero": "free",
+        "vendor/zero:free": "free",
     }
 
     provider.spec = ProviderCatalog(providers=(spec,)).merge_discovered_models(
@@ -74,7 +74,7 @@ def test_duplicate_openrouter_ids_take_most_restrictive_price(monkeypatch, rever
     models = {model.id: model for model in provider.spec.models}
     assert billing_ineligibility_reason(provider, models["vendor/conflicting"]) == "billing_paid"
     assert billing_ineligibility_reason(provider, models["vendor/uncertain"]) == "billing_unverified"
-    assert [d.model for d in rank([provider], RouteRequest("hello"))] == ["vendor/zero"]
+    assert [d.model for d in rank([provider], RouteRequest("hello"))] == ["vendor/zero:free"]
 
     def no_inference_client(*args, **kwargs):
         pytest.fail("billable or uncertain model constructed an inference HTTP client")

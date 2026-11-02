@@ -62,7 +62,23 @@ class Router:
                         registered.spec.id, model_ids, billing_statuses, source=snapshot_source
                     )
             except Exception:
-                pass
+                # A failed refresh cannot preserve old "free" approval from a
+                # previously successful OpenRouter price snapshot. An endpoint
+                # outage, malformed response or changed pricing must not cause
+                # stale cached billing evidence to authorize a new inference.
+                # Keep the models for diagnostics; the next successful refresh
+                # can reclassify them. Offline mode never refreshes or routes.
+                if (registered.spec.id == "openrouter"
+                        and registered.spec.last_inventory_source == "client_discover_inventory"):
+                    invalidated = replace(
+                        registered.spec,
+                        models=tuple(
+                            replace(model, billing_status="unknown", discovered_in_last_snapshot=False)
+                            if model.billing_status == "free" else model
+                            for model in registered.spec.models
+                        ),
+                    )
+                    registered.spec = self.catalog.put(invalidated)
         self._hydrate_provider_metrics(registered)
         return registered
 
@@ -168,6 +184,14 @@ class Router:
         unsupported = completion_transport_error(req)
         if unsupported is not None:
             return RouteResponse(False, None, None, None, [], [], unsupported)
+        # The offline release switch must block dispatch even when a caller
+        # injects a custom client that bypasses ProviderClient's transport guard.
+        # This also prevents simulated/custom capability clients from being
+        # accidentally used as a production escape hatch.
+        if offline_only():
+            # Preserve the existing /route offline response contract while
+            # preventing injected clients from dispatching any inference.
+            return RouteResponse(False, None, None, None, [], [], "no_eligible_provider")
         # Keep direct Python callers as safe as /route: an image cannot be
         # silently dispatched to a text-only model or lose its modality on fallback.
         required = effective_required_capabilities(req)
@@ -226,6 +250,13 @@ class Router:
                     latency = int((perf_counter() - started) * 1000)
                     error = f"{type(exc).__name__}: {exc}"
                     retryable, provider_wide, error_type, error_code, cooldown = self._classify_failure(exc)
+                    # OpenRouter counts failed :free requests against its small
+                    # daily allowance. A 503 without Retry-After should try the
+                    # next eligible free model, not spend another request on
+                    # the same unavailable model. Preserve its model cooldown.
+                    if (provider.spec.id == "openrouter"
+                            and decision.model.endswith(":free") and error_code == 503):
+                        retryable = False
                     attempts.append(Attempt(decision.provider, decision.model, False, latency, error, phase))
                     if self.store is not None:
                         self.store.record_metric(
@@ -299,6 +330,18 @@ class Router:
                 "status": "inconclusive",
                 "latency_ms": 0,
                 "evidence": f"probe_blocked:{blocked}",
+            }
+
+        # Capability probes can be dispatched by injected clients as well.
+        # Offline mode must be enforced before invoking any probe transport.
+        if offline_only():
+            return {
+                "provider": provider_id,
+                "model": model_id,
+                "capability": capability,
+                "status": "inconclusive",
+                "latency_ms": 0,
+                "evidence": "probe_blocked:offline_only",
             }
 
         started = perf_counter()

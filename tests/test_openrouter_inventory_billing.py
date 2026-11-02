@@ -35,7 +35,7 @@ def test_openrouter_discovers_all_but_ranks_only_verified_free(monkeypatch, tmp_
         {"id": f"vendor/paid-{i}", "pricing": {"prompt": "0.001", "completion": "0"}}
         for i in range(130)
     ] + [
-        {"id": "vendor/free-zero", "pricing": {"prompt": "0", "completion": "0.000"}},
+        {"id": "vendor/free-zero:free", "pricing": {"prompt": "0", "completion": "0.000"}},
         {"id": "vendor/missing-price"},
         {"id": "vendor/misleading:free", "pricing": {"prompt": "0.2", "completion": "0"}},
         {"id": "vendor/nan-price", "pricing": {"prompt": "NaN", "completion": "0"}},
@@ -47,12 +47,12 @@ def test_openrouter_discovers_all_but_ranks_only_verified_free(monkeypatch, tmp_
     provider = router.add_provider("openrouter", "fake-key")
     models = {m.id: m for m in provider.spec.models}
     assert len(models) == 136  # 135 discovered + built-in openrouter/free
-    assert models["vendor/free-zero"].billing_status == "free"
+    assert models["vendor/free-zero:free"].billing_status == "free"
     assert models["vendor/misleading:free"].billing_status == "paid"
     assert models["vendor/missing-price"].billing_status == "unknown"
     selected = {d.model for d in rank([provider], RouteRequest("hola"))}
     # Legacy openrouter/free without explicit zero-price evidence is blocked.
-    assert selected == {"vendor/free-zero"}
+    assert selected == {"vendor/free-zero:free"}
     coverage = model_coverage([provider], RouteRequest("hola"))
     assert coverage["totals"]["cataloged_models"] == 136
     assert coverage["totals"]["eligible_models"] == 1
@@ -93,7 +93,7 @@ def test_new_pricing_fields_fail_closed_without_inference(monkeypatch):
     from router.state import RuntimeState
 
     entries = [
-        {"id": "vendor/verified-zero", "pricing": {
+        {"id": "vendor/verified-zero:free", "pricing": {
             "prompt": "0", "completion": "0", "request": "0",
             "image": "0", "web_search": "0", "internal_reasoning": "0",
             "input_cache_read": "0", "input_cache_write": "0",
@@ -114,7 +114,7 @@ def test_new_pricing_fields_fail_closed_without_inference(monkeypatch):
     model_ids, prices = client.discover_inventory(provider)
     assert len(model_ids) == 4
     assert prices == {
-        "vendor/verified-zero": "free",
+        "vendor/verified-zero:free": "free",
         "vendor/unknown-audio-charge": "unknown",
         "vendor/unknown-zero-charge": "unknown",
         "vendor/invalid-charge": "unknown",
@@ -123,7 +123,7 @@ def test_new_pricing_fields_fail_closed_without_inference(monkeypatch):
     catalog = ProviderCatalog(providers=(_provider_spec(),))
     provider.spec = catalog.merge_discovered_models("openrouter", model_ids, prices)
     decisions = rank([provider], RouteRequest("hola"))
-    assert [d.model for d in decisions] == ["vendor/verified-zero"]
+    assert [d.model for d in decisions] == ["vendor/verified-zero:free"]
 
     # The client must reject direct calls before constructing any HTTP POST.
     for blocked_model in (

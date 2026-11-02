@@ -232,3 +232,27 @@ def test_unloaded_or_modified_disk_dropin_blocks_before_restart(tmp_path, monkey
     assert fake.restarts == 0 and fake.reloads == 0
     assert not (args["private_root"] / ".one-shot-consumed").exists()
     assert not list(args["private_root"].glob("p3-*"))
+
+
+def test_unconfigured_root_wrapper_template_fails_closed_without_service_access(tmp_path):
+    """Execute the actual wrapper template offline: placeholders must refuse.
+
+    This checks the distributed artifact, not just a mock of its verifier.
+    It does not use sudo, systemctl, SSH, network or Oracle.
+    """
+    import subprocess
+
+    wrapper = Path(__file__).resolve().parents[1] / "operator-review" / "router-p3-once.wrapper.py.template"
+    result = subprocess.run(
+        [sys.executable, "-I", str(wrapper)],
+        cwd=tmp_path,
+        env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert "P3_NO_GO_OR_RECOVERY_REQUIRED" in result.stderr
+    assert not (tmp_path / ".one-shot-consumed").exists()

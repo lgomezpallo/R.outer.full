@@ -39,13 +39,12 @@ def test_automatic_trigger_in_manual_workflow_fails_policy():
 def test_reenabled_or_duplicate_remote_condition_fails_policy():
     sources = _baseline()
     source = sources["oracle-deploy.yml"]
-    sources["oracle-deploy.yml"] = source.replace("    if: ${{ false }}", "    if: ${{ true }}", 1)
-    assert any("not unconditionally disabled" in p for p in audit_workflows(sources))
-    sources["oracle-deploy.yml"] = source.replace(
-        "    if: ${{ false }}", "    if: ${{ false }}\n    if: ${{ true }}", 1
-    )
-    assert any("not unconditionally disabled" in p for p in audit_workflows(sources))
-
+    condition = """    if: ${{ github.event_name == 'workflow_dispatch' && contains(fromJSON('["preflight","snapshot","compare","reconcile-check","deploy"]'), inputs.mode) }}"""
+    assert condition in source
+    sources["oracle-deploy.yml"] = source.replace(condition, "    if: ${{ true }}", 1)
+    assert any("invalid manual dispatch gate" in p for p in audit_workflows(sources))
+    sources["oracle-deploy.yml"] = source.replace(condition, condition + "\n" + "    if: ${{ true }}", 1)
+    assert any("invalid manual dispatch gate" in p for p in audit_workflows(sources))
 
 def test_ci_cannot_gain_oracle_secrets_or_ssh():
     sources = _baseline()

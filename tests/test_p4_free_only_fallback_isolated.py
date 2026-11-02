@@ -345,3 +345,44 @@ def test_openrouter_free_server_errors_skip_same_model_retry(monkeypatch, status
     assert registered.state.available
     assert registered.state.model(first).cooldown_until - time() > 40
     assert registered.state.model(second).available
+
+
+@pytest.mark.parametrize("status_code", [500, 502, 503, 504])
+def test_openrouter_opaque_free_router_server_error_does_not_retry(monkeypatch, status_code):
+    """The opaque free router consumes the same free quota as explicit :free IDs.
+
+    A 5xx response must consume only one local attempt, even when the generic
+    retry budget allows more. All transport is simulated; no live API or key.
+    """
+    from time import time
+
+    monkeypatch.setenv("ROUTER_OFFLINE_ONLY", "0")
+    request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+    failure = httpx.HTTPStatusError(
+        "simulated openrouter/free failure",
+        request=request,
+        response=httpx.Response(status_code, request=request),
+    )
+
+    class LocalClient:
+        def __init__(self):
+            self.calls = []
+
+        def complete(self, provider, model, request):
+            self.calls.append(model)
+            raise failure
+
+    client = LocalClient()
+    spec = _provider((
+        _model("openrouter/free", "free", 100),
+        _model("fixture/paid", "paid", 1000),
+        _model("fixture/unknown", "unknown", 1000),
+    ))
+    router = Router(client=client, max_retries=3, catalog=ProviderCatalog(providers=(spec,)))
+    registered = router.add_provider("openrouter", "offline-fixture-key", discover=False)
+    result = router.route(RouteRequest(task="offline fixture", decompose=False))
+
+    assert not result.ok and result.error == "all_attempts_failed"
+    assert client.calls == ["openrouter/free"]
+    assert len(result.attempts) == 1
+    assert registered.state.model("openrouter/free").cooldown_until - time() > 40

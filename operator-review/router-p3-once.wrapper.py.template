@@ -1,0 +1,137 @@
+#!/usr/bin/python3 -I
+"""P3 REVIEW TEMPLATE ONLY — NOT INSTALLED, NOT AUTHORIZED TO RUN.
+
+Copy to /usr/local/sbin/router-p3-once ONLY after the specific operational
+decision in issue #109 and installation by an already authorized operator.
+The owner's current approval requires independent technical review unless
+explicitly amended. This is not an externally verified Oracle/GitHub rule;
+self-audit and automated checks must not be mislabeled independent approval.
+The final installed bytes must be root-owned and pinned by a sudoers sha256
+command digest with NO command-line arguments. Never grant sudo python/bash,
+sudo systemctl, or writable-checkout execution.
+
+Example *policy shape* for authorized sudoers review (NOT ready to install):
+  Cmnd_Alias ROUTER_P3_ONCE = sha256:<REVIEWED_BASE64_DIGEST> /usr/local/sbin/router-p3-once ""
+  <PREEXISTING_AUTHORIZED_OPERATOR> ALL=(root) NOPASSWD: ROUTER_P3_ONCE
+Do not apply this policy without the production authority's final decision.
+Do not use the existing read-only SSH identity for this operation.
+"""
+from __future__ import annotations
+
+import hashlib
+import os
+import re
+import stat
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+# All placeholders are intentionally invalid. An authorized operator must
+# fill and verify the FINAL installed artifact under the terms then in #109.
+APP = Path("/REVIEW_REQUIRED/absolute-app-path")
+RELEASES = Path("/REVIEW_REQUIRED/absolute-releases-path")
+APPROVED_CODE_DIR = Path("/opt/router-p3-approved")
+PRIVATE_ROOT = Path("/var/lib/router-p3-once")
+RELEASE_ATTESTATION = APPROVED_CODE_DIR / "verified-release.sha"
+RELEASE_SHA = "REVIEW_REQUIRED_40_HEX"
+ADAPTER_SHA256 = "REVIEW_REQUIRED_64_HEX"
+RECONCILER_SHA256 = "REVIEW_REQUIRED_64_HEX"
+WINDOW_START_UTC = "REVIEW_REQUIRED_UTC"
+WINDOW_END_UTC = "REVIEW_REQUIRED_UTC"
+
+
+def refuse() -> None:
+    raise RuntimeError("p3_operator_wrapper_no_go")
+
+
+def require_root_owned(path: Path, *, directory: bool, private: bool = False) -> None:
+    if not path.is_absolute() or path.is_symlink():
+        refuse()
+    st = path.stat()
+    if st.st_uid != 0 or (st.st_mode & 0o022):
+        refuse()
+    if directory:
+        if not stat.S_ISDIR(st.st_mode):
+            refuse()
+        if private and (st.st_mode & 0o077):
+            refuse()
+    elif not stat.S_ISREG(st.st_mode):
+        refuse()
+
+
+def verify_installed_artifacts() -> str:
+    if os.geteuid() != 0 or os.getuid() != 0:
+        refuse()
+    if any("REVIEW_REQUIRED" in item for item in (
+        str(APP), str(RELEASES), RELEASE_SHA, ADAPTER_SHA256,
+        RECONCILER_SHA256, WINDOW_START_UTC, WINDOW_END_UTC,
+    )):
+        refuse()
+    if not re.fullmatch(r"[0-9a-f]{40}", RELEASE_SHA):
+        refuse()
+    for digest in (ADAPTER_SHA256, RECONCILER_SHA256):
+        if not re.fullmatch(r"[0-9a-f]{64}", digest):
+            refuse()
+    try:
+        start = datetime.fromisoformat(WINDOW_START_UTC.replace("Z", "+00:00"))
+        end = datetime.fromisoformat(WINDOW_END_UTC.replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        if (start.utcoffset() is None or end.utcoffset() is None
+                or not start <= now <= end
+                or (end - start).total_seconds() > 3600):
+            refuse()
+    except (TypeError, ValueError):
+        refuse()
+
+    # The private state and immutable module tree must be installed by the
+    # authorized operator, never imported from GitHub checkout or /tmp.
+    require_root_owned(APPROVED_CODE_DIR, directory=True, private=True)
+    require_root_owned(PRIVATE_ROOT, directory=True, private=True)
+    require_root_owned(RELEASE_ATTESTATION, directory=False)
+    for name, expected in (
+        ("router_p3_one_shot.py", ADAPTER_SHA256),
+        ("router_execstart_reconcile.py", RECONCILER_SHA256),
+    ):
+        path = APPROVED_CODE_DIR / name
+        require_root_owned(path, directory=False)
+        if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+            refuse()
+    # The attestation must come from an authorized inspection of the actual
+    # Oracle release, not from this wrapper, a PR claim or a supplied SHA.
+    attested = RELEASE_ATTESTATION.read_text(encoding="ascii").strip()
+    if attested != RELEASE_SHA:
+        refuse()
+    if not APP.is_absolute() or not RELEASES.is_absolute():
+        refuse()
+    return attested
+
+
+def main() -> int:
+    try:
+        os.umask(0o077)
+        os.chdir("/")
+        verified_release_sha = verify_installed_artifacts()
+        os.environ.clear()
+        os.environ.update({"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"})
+        sys.dont_write_bytecode = True
+        sys.path.insert(0, str(APPROVED_CODE_DIR))
+        from router_p3_one_shot import LiveSystemd, DROPINS, run_once
+        outcome = run_once(
+            system=LiveSystemd(), app=APP, releases=RELEASES,
+            release_sha=RELEASE_SHA, verified_release_sha=verified_release_sha,
+            private_root=PRIVATE_ROOT, dropin_dir=DROPINS,
+        )
+        if outcome != "switch_and_restoration_verified":
+            refuse()
+        print("P3_OFFLINE_SWITCH_RESTORATION_PASS")
+        return 0
+    except BaseException:
+        # Fail closed. The private backup and one-shot marker are retained.
+        # After any failure an authorized recovery operator must inspect
+        # the real service state; NEVER retry with the same approval.
+        print("P3_NO_GO_OR_RECOVERY_REQUIRED", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

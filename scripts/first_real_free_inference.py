@@ -1,7 +1,8 @@
 """One real, isolated Router inference using a verified OpenRouter :free model.
 
-This script runs only in the GitHub Actions main-branch smoke step. It never
-connects to Oracle, changes service configuration, or enables billing.
+Run in any explicitly authorized isolated Python environment with an
+OPENROUTER_API_KEY. Never connects to Oracle, changes service configuration,
+or enables billing. Does not depend on GitHub Actions or main-branch events.
 """
 from __future__ import annotations
 
@@ -22,7 +23,6 @@ from router.types import RouteRequest
 
 MODEL = "google/gemma-4-26b-a4b-it:free"
 MARKER = "ROUTER_REAL_FREE_OK"
-REPO = "lgomezpallo/R.outer.full"
 
 
 def report(status: str, reason: str | None = None) -> None:
@@ -60,23 +60,14 @@ def generation_cost(key: str, generation_id: str) -> Decimal | None:
 
 
 def main() -> int:
-    if (
-        os.getenv("GITHUB_ACTIONS") != "true"
-        or os.getenv("GITHUB_EVENT_NAME") != "push"
-        or os.getenv("GITHUB_REF") != "refs/heads/main"
-        or os.getenv("GITHUB_REPOSITORY") != REPO
-    ):
-        report("not_run", "isolated_main_actions_only")
-        return 2
-
     key = os.getenv("OPENROUTER_API_KEY", "").strip()
     if not key:
         report("not_run", "missing_openrouter_key")
-        return 0
+        return 2
 
-    # This flag affects only this short-lived CI process, never router.service.
+    # This flag affects only this short-lived process, never router.service.
     os.environ["ROUTER_OFFLINE_ONLY"] = "0"
-    print("LIVE_FREE_ENV=isolated_ci_online_only", flush=True)
+    print("LIVE_FREE_ENV=isolated_process_online_only", flush=True)
     try:
         with tempfile.TemporaryDirectory(prefix="router-first-free-") as work:
             router = Router(

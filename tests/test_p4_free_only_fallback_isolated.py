@@ -256,3 +256,41 @@ def test_offline_only_blocks_injected_client_route_and_probe(monkeypatch):
     assert probe["evidence"] == "probe_blocked:offline_only"
     assert client.calls == []
     assert registered.spec.models[0].evidence == ()
+
+
+def test_explicit_free_models_rank_before_untraceable_openrouter_auto(monkeypatch):
+    """Prefer per-model cooldown and fallback over opaque openrouter/free routing."""
+    from router.selector import rank
+
+    monkeypatch.setenv("ROUTER_OFFLINE_ONLY", "0")
+    explicit_a = "nvidia/nemotron-3-ultra-550b-a55b:free"
+    explicit_b = "google/gemma-4-26b-a4b-it:free"
+    spec = _provider((
+        _model("openrouter/free", "free", 1000),
+        _model(explicit_a, "free", 90),
+        _model(explicit_b, "free", 80),
+        _model("fixture/paid", "paid", 2000),
+        _model("fixture/unknown", "unknown", 2000),
+    ))
+    router = Router(catalog=ProviderCatalog(providers=(spec,)))
+    router.add_provider("openrouter", "offline-fixture-key", discover=False)
+    ranked = [decision.model for decision in rank(router.registry.all(), RouteRequest(task="hola", decompose=False))]
+    assert set(ranked) == {explicit_a, explicit_b, "openrouter/free"}
+    assert ranked[-1] == "openrouter/free"
+    assert all(model.endswith(":free") for model in ranked[:-1])
+
+
+def test_opaque_auto_router_remains_fallback_when_no_explicit_free_is_eligible(monkeypatch):
+    """Do not remove openrouter/free; use it only when no trackable free candidate exists."""
+    from router.selector import rank
+
+    monkeypatch.setenv("ROUTER_OFFLINE_ONLY", "0")
+    spec = _provider((
+        _model("openrouter/free", "free", 70),
+        _model("fixture/paid", "paid", 1000),
+        _model("fixture/unknown", "unknown", 1000),
+    ))
+    router = Router(catalog=ProviderCatalog(providers=(spec,)))
+    router.add_provider("openrouter", "offline-fixture-key", discover=False)
+    ranked = [decision.model for decision in rank(router.registry.all(), RouteRequest(task="hola", decompose=False))]
+    assert ranked == ["openrouter/free"]

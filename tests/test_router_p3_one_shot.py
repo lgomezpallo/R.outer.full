@@ -166,6 +166,44 @@ def test_preflight_failure_never_mutates_or_backs_up(tmp_path, monkeypatch):
     assert not (args["dropin_dir"] / p3.LATE_DROPIN).exists()
 
 
+
+@pytest.mark.parametrize("field", ["effective_exec", "unit_cat", "state"])
+def test_runtime_drift_during_backup_aborts_without_consuming_attempt(tmp_path, monkeypatch, field):
+    """A changed loaded unit must not be overwritten using a stale backup.
+
+    Disk drop-ins can remain identical while another operator reloads a unit
+    or changes its effective command; the second runtime capture must catch it.
+    """
+    from dataclasses import replace
+
+    fake, args = fixture(tmp_path, monkeypatch)
+    original_capture = fake.capture
+    captures = 0
+
+    def drifting_capture():
+        nonlocal captures
+        captures += 1
+        observed = original_capture()
+        if captures == 1:
+            return observed
+        changed = {
+            "effective_exec": b"argv[]=/usr/bin/false ; ignore_errors=no",
+            "unit_cat": b"changed unit from another operator",
+            "state": "inactive",
+        }
+        return replace(observed, **{field: changed[field]})
+
+    monkeypatch.setattr(fake, "capture", drifting_capture)
+    with pytest.raises(one.OperationalBlock, match="preflight_runtime_changed"):
+        one.run_once(**args)
+    assert captures == 2
+    assert fake.restarts == 0 and fake.reloads == 0
+    assert not (args["private_root"] / ".one-shot-consumed").exists()
+    assert not (args["dropin_dir"] / p3.LATE_DROPIN).exists()
+    # A private backup may exist; the service was never changed.
+    assert len(list(args["private_root"].glob("p3-*"))) == 1
+
+
 def test_no_root_privilege_and_no_direct_cli(tmp_path, monkeypatch):
     monkeypatch.setattr(one.os, "geteuid", lambda: 1000)
     with pytest.raises(one.OperationalBlock, match="operator_privilege_unverified"):

@@ -297,6 +297,12 @@ def run_once(*, system: LiveSystemd, app: Path, releases: Path,
         # Detect drift while the private backup was being written, before
         # consuming the only authorized attempt or touching systemd.
         verify_disk_dropin_inventory(before, dropin_dir)
+        # systemd's cached unit and effective ExecStart can change independently
+        # of the on-disk drop-ins (e.g. another operator's daemon-reload or
+        # service restart). Never consume the one-shot approval or mutate the
+        # service if the runtime snapshot drifted while backup was prepared.
+        if system.capture() != before:
+            raise OperationalBlock("preflight_runtime_changed")
         # Commit the one-use authorization only after a verified backup,
         # immediately before the first possible service mutation.
         consume_one_shot(private_root)

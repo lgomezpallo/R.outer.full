@@ -20,7 +20,7 @@ def _provider(provider_id, status="free"):
     else:
         spec = next(item for item in BUILTINS if item.id == provider_id)
         model_id = {"groq": "openai/gpt-oss-20b", "nvidia": "google/gemma-4-31b-it",
-                    "openrouter": "vendor/explicit-zero-pricing"}[provider_id]
+                    "openrouter": "vendor/explicit-zero-pricing:free"}[provider_id]
     model = ModelSpec(model_id, frozenset({"chat", "vision"}), "standard", billing_status=status)
     return RegisteredProvider(replace(spec, models=(model,)), "fake-key", RuntimeState())
 

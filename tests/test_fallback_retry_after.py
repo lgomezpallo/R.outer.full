@@ -131,7 +131,7 @@ def test_429_provider_quota_skips_sibling_models_and_falls_back_to_other_provide
             ModelSpec("llama-3.3-70b-versatile", frozenset({"chat"}), "standard", billing_status="free"),
         )),
         replace(openrouter, models=(
-            ModelSpec("vendor/zero-priced-fixture", frozenset({"chat"}), "standard", billing_status="free"),
+            ModelSpec("vendor/zero-priced-fixture:free", frozenset({"chat"}), "standard", billing_status="free"),
         )),
     ))
     fake = OfflineClient([_http_error(429, "7200"), "other provider ok"])
@@ -141,13 +141,13 @@ def test_429_provider_quota_skips_sibling_models_and_falls_back_to_other_provide
     monkeypatch.setattr(router_module, "rank", lambda *_: [
         Decision("groq", "openai/gpt-oss-20b", 100),
         Decision("groq", "llama-3.3-70b-versatile", 90),
-        Decision("openrouter", "vendor/zero-priced-fixture", 80),
+        Decision("openrouter", "vendor/zero-priced-fixture:free", 80),
     ])
 
     result = router.route(RouteRequest("offline test", decompose=False))
     assert result.ok
     assert fake.calls == [
         ("groq", "openai/gpt-oss-20b"),
-        ("openrouter", "vendor/zero-priced-fixture"),
+        ("openrouter", "vendor/zero-priced-fixture:free"),
     ]
     assert router.registry.all()[0].state.cooldown_until - time() > 7000

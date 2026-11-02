@@ -22,7 +22,7 @@ SURCHARGES = (
     "request", "image", "web_search", "internal_reasoning",
     "input_cache_read", "input_cache_write",
 )
-MODEL = "vendor/offline-price-fixture"
+MODEL = "vendor/offline-price-fixture:free"
 
 
 def _inventory(monkeypatch, pricing):

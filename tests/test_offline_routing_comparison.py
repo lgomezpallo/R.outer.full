@@ -64,14 +64,14 @@ def hypothetical_account_approval(monkeypatch):
 
 def test_equal_scores_have_stable_model_and_provider_tiebreaks(hypothetical_account_approval):
     groq = _registered(_spec("groq", _model("fixture-z"), _model("fixture-a")))
-    openrouter = _registered(_spec("openrouter", _model("fixture-b")))
+    openrouter = _registered(_spec("openrouter", _model("fixture-b:free")))
     request = RouteRequest("hola", decompose=False)
     left = [(d.provider, d.model) for d in rank([openrouter, groq], request)]
     right = [(d.provider, d.model) for d in rank([groq, openrouter], request)]
     assert left == right == [
         ("groq", "fixture-a"),
         ("groq", "fixture-z"),
-        ("openrouter", "fixture-b"),
+        ("openrouter", "fixture-b:free"),
     ]
 
 

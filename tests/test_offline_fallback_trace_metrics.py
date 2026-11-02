@@ -127,17 +127,17 @@ def test_provider_wide_429_skips_sibling_models_and_uses_other_provider(
 ):
     client = ScriptedClient({
         ("groq", "first"): [_http_error(429, retry_after="3600")],
-        ("openrouter", "backup"): ["recovered"],
+        ("openrouter", "backup:free"): ["recovered"],
     })
     router, store = _router(
         tmp_path, client,
         _provider("groq", _model("first", priority=90), _model("never", priority=10), priority=90),
-        _provider("openrouter", _model("backup"), priority=10),
+        _provider("openrouter", _model("backup:free"), priority=10),
         max_retries=3,
     )
     response = router.route(RouteRequest("hola", decompose=False))
     assert response.ok and response.provider == "openrouter"
-    assert client.calls == [("groq", "first"), ("openrouter", "backup")]
+    assert client.calls == [("groq", "first"), ("openrouter", "backup:free")]
     assert router.registry.all()[0].state.available is False
     trace = store.recent_request_traces()[0]
     assert trace["fallback"] is True
@@ -152,17 +152,17 @@ def test_strict_cost_ceiling_is_not_raised_after_failure(
     tmp_path, hypothetical_account_approval,
 ):
     client = ScriptedClient({
-        ("openrouter", "cheap"): [RuntimeError("synthetic failure")],
+        ("openrouter", "cheap:free"): [RuntimeError("synthetic failure")],
     })
     router, store = _router(
         tmp_path, client,
         _provider("groq", _model("expensive", cost=16), priority=90),
-        _provider("openrouter", _model("cheap", cost=5), priority=10),
+        _provider("openrouter", _model("cheap:free", cost=5), priority=10),
     )
     response = router.route(RouteRequest("hola", decompose=False, max_strategic_cost=15))
     assert not response.ok and response.error == "all_attempts_failed"
-    assert client.calls == [("openrouter", "cheap")]
-    assert [(d.provider, d.model) for d in response.decisions] == [("openrouter", "cheap")]
+    assert client.calls == [("openrouter", "cheap:free")]
+    assert [(d.provider, d.model) for d in response.decisions] == [("openrouter", "cheap:free")]
     assert store.recent_request_traces()[0]["fallback"] is False
 
 
@@ -172,17 +172,17 @@ def test_mixed_model_failures_and_cross_provider_fallback_keep_metrics(
     client = ScriptedClient({
         ("groq", "first"): [RuntimeError("synthetic rejection")],
         ("groq", "second"): [httpx.ReadTimeout("synthetic timeout")],
-        ("openrouter", "third"): ["recovered"],
+        ("openrouter", "third:free"): ["recovered"],
     })
     router, store = _router(
         tmp_path, client,
         _provider("groq", _model("first", priority=90), _model("second", priority=20), priority=90),
-        _provider("openrouter", _model("third"), priority=10),
+        _provider("openrouter", _model("third:free"), priority=10),
     )
     response = router.route(RouteRequest("hola", decompose=False))
     assert response.ok and response.provider == "openrouter"
     assert client.calls == [
-        ("groq", "first"), ("groq", "second"), ("openrouter", "third")
+        ("groq", "first"), ("groq", "second"), ("openrouter", "third:free")
     ]
     trace = store.recent_request_traces()[0]
     assert trace["fallback"] and trace["model_fallback"] and trace["provider_fallback"]
@@ -197,7 +197,7 @@ def test_mixed_model_failures_and_cross_provider_fallback_keep_metrics(
     stats = store.recent_model_stats()
     assert stats[("groq", "first")]["failure_count"] == 1
     assert stats[("groq", "second")]["failure_count"] == 1
-    assert stats[("openrouter", "third")]["success_count"] == 1
+    assert stats[("openrouter", "third:free")]["success_count"] == 1
 
 
 def test_openrouter_two_explicit_free_models_recover_from_model_500(
@@ -206,25 +206,25 @@ def test_openrouter_two_explicit_free_models_recover_from_model_500(
     """A single provider can recover from model failure, never from provider quota."""
     from dataclasses import replace
     client = ScriptedClient({
-        ("openrouter", "free-primary"): [_http_error(500)],
-        ("openrouter", "free-backup"): ["offline recovered"],
+        ("openrouter", "free-primary:free"): [_http_error(500)],
+        ("openrouter", "free-backup:free"): ["offline recovered"],
     })
     router, store = _router(
         tmp_path, client,
         _provider(
             "openrouter",
-            _model("free-primary", priority=95),
-            _model("free-backup", priority=60),
+            _model("free-primary:free", priority=95),
+            _model("free-backup:free", priority=60),
             replace(_model("paid-never", priority=50), billing_status="paid"),
             replace(_model("unknown-never", priority=40), billing_status="unknown"),
         ),
         max_retries=0,
     )
     response = router.route(RouteRequest("hola", decompose=False, application_name="offline"))
-    assert response.ok and response.provider == "openrouter" and response.model == "free-backup"
-    assert client.calls == [("openrouter", "free-primary"), ("openrouter", "free-backup")]
+    assert response.ok and response.provider == "openrouter" and response.model == "free-backup:free"
+    assert client.calls == [("openrouter", "free-primary:free"), ("openrouter", "free-backup:free")]
     assert [(d.provider, d.model) for d in response.decisions] == [
-        ("openrouter", "free-primary"), ("openrouter", "free-backup")
+        ("openrouter", "free-primary:free"), ("openrouter", "free-backup:free")
     ]
     trace = store.recent_request_traces(application_name="offline")[0]
     assert trace["model_fallback"] is True and trace["provider_fallback"] is False
@@ -234,15 +234,15 @@ def test_openrouter_provider_wide_429_does_not_retry_other_models_on_same_provid
     tmp_path, hypothetical_account_approval,
 ):
     client = ScriptedClient({
-        ("openrouter", "free-primary"): [_http_error(429)],
-        ("openrouter", "free-backup"): ["MUST_NOT_BE_USED"],
+        ("openrouter", "free-primary:free"): [_http_error(429)],
+        ("openrouter", "free-backup:free"): ["MUST_NOT_BE_USED"],
     })
     router, _ = _router(
         tmp_path, client,
-        _provider("openrouter", _model("free-primary", priority=90), _model("free-backup", priority=30)),
+        _provider("openrouter", _model("free-primary:free", priority=90), _model("free-backup:free", priority=30)),
         max_retries=2,
     )
     response = router.route(RouteRequest("hola", decompose=False))
     assert not response.ok and response.error == "all_attempts_failed"
-    assert client.calls == [("openrouter", "free-primary")]
+    assert client.calls == [("openrouter", "free-primary:free")]
     assert router.registry.all()[0].state.available is False

@@ -1,0 +1,27 @@
+# P4 — OpenRouter free-model eligibility (offline, no production activation)
+
+**Purpose:** distinguish **zero advertised token cost** from **explicitly usable without purchasing credits**. A zero-priced non-`:free` ID can still require a funded account. This is a conservative routing policy, not proof of any user's account status.
+
+Source checked 2026-11-01: [OpenRouter free models](https://openrouter.ai/collections/free-models) states that `:free` variants do not require a credit purchase, whereas other zero-priced models can require a funded account. [OpenRouter free pricing](https://openrouter.ai/pricing) describes 50 requests/day for the free tier (also 20 requests/minute in the free-model collection).
+
+## Selection rule
+
+A model is classified `free` from OpenRouter inventory **only when**:
+- The ID ends with `:free` or is exactly `openrouter/free`.
+- The inventory contains explicit numeric zero prompt and completion prices.
+- Every advertised optional charge is numeric zero, and no unrecognized pricing field is present.
+- No duplicate row for that ID reports a paid or unknown price.
+
+Non-`:free` zero-priced models are `unknown` (not routed). Suffix alone **never** overrides paid, unknown, null or missing prices. Paid and unknown models remain visible in diagnostics but are ineligible for inference.
+
+## Real public model IDs exercised with mock inventory (not real API calls)
+
+- `google/gemma-4-26b-a4b-it:free` — [official model page](https://openrouter.ai/google/gemma-4-26b-a4b-it%3Afree).
+- `nvidia/nemotron-3-ultra-550b-a55b:free` — [official model page](https://openrouter.ai/nvidia/nemotron-3-ultra-550b-a55b%3Afree).
+- `openrouter/free` — [official router page](https://openrouter.ai/openrouter/free/apps), selects an eligible free variant automatically; explicit model IDs are preferable for per-model cooldown and fallback.
+
+Tests use `httpx.MockTransport` and a local fake completion client, with **no credentials, network, billing changes or production deployment**. Live availability and the account's actual billing settings are **not** established. A fresh authenticated inventory and operator authorization would still be needed before enabling live inference.
+
+## Free-quota preservation on HTTP 5xx
+
+OpenRouter's [current free-model policy](https://openrouter.ai/collections/free-models) states that failed requests count toward the 50-request/day free allowance. For any OpenRouter HTTP error response (including **408/409** and **5xx**), or an ambiguous transport failure such as **ReadTimeout** or **RemoteProtocolError** after sending a POST, Router skips another attempt on the **same** `:free` model (and on `openrouter/free`), retains the model cooldown, and permits fallback to another eligible free model when provider-wide blocking (for example HTTP 429) does not prevent it. HTTP 408/409 may arrive after the POST was already processed, so a same-model retry could consume another free request. A lost response cannot prove that the provider did not process the request; this policy conserves limited free quota. If a 503 supplies `Retry-After`, its cooldown is honored. This is a quota-preservation policy for HTTP server errors, not a claim that another model will succeed. It does not change paid/unknown eligibility, provider-wide 429 behavior, non-HTTP transport retries, or production deployment. Parametrized HTTPStatusError tests use no provider credentials or network.

@@ -21,7 +21,7 @@ from router.types import RouteRequest
 
 
 GROQ_MODEL = "vendor/offline-general"
-OPENROUTER_MODEL = "vendor/offline-backup"
+OPENROUTER_MODEL = "vendor/offline-backup:free"
 
 
 def _catalog(*, free=True):

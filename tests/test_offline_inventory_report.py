@@ -34,7 +34,7 @@ def test_four_provider_inventory_keeps_price_discovery_and_eligibility_separate(
         _provider("groq", [("g-free", "free", True), ("g-unknown", "unknown", False)]),
         _provider("nvidia", [("n-paid", "paid", True)]),
         _provider("cloudflare", [("@cf/example/chat", "unknown", True)]),
-        _provider("openrouter", [("o-free", "free", True)]),
+        _provider("openrouter", [("o-free:free", "free", True)]),
     ]
     report = inventory_report(providers)
     assert report["live_discovery_performed"] is False

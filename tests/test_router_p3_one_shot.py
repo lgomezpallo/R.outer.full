@@ -99,6 +99,38 @@ def fixture(tmp_path, monkeypatch):
     return fake, args
 
 
+@pytest.mark.parametrize("mode", [0o777, 0o775, 0o757])
+def test_writable_dropin_directory_aborts_before_one_shot(tmp_path, monkeypatch, mode):
+    """An untrusted writer could replace .conf files before daemon-reload."""
+    fake, args = fixture(tmp_path, monkeypatch)
+    args["dropin_dir"].chmod(mode)
+    with pytest.raises(one.OperationalBlock, match="dropin_directory_unsafe"):
+        one.run_once(**args)
+    assert fake.restarts == 0 and fake.reloads == 0
+    assert not (args["private_root"] / ".one-shot-consumed").exists()
+    assert not list(args["private_root"].glob("p3-*"))
+
+
+def test_symlink_dropin_directory_aborts_before_one_shot(tmp_path, monkeypatch):
+    fake, args = fixture(tmp_path, monkeypatch)
+    link = tmp_path / "alias-router.service.d"
+    link.symlink_to(args["dropin_dir"], target_is_directory=True)
+    args["dropin_dir"] = link
+    with pytest.raises(one.OperationalBlock, match="dropin_directory_unsafe"):
+        one.run_once(**args)
+    assert fake.restarts == 0 and fake.reloads == 0
+    assert not (args["private_root"] / ".one-shot-consumed").exists()
+
+
+def test_live_dropin_directory_rejects_untrusted_non_system_path(tmp_path):
+    """Live systemd must never accept an arbitrary writable checkout path."""
+    directory = tmp_path / "router.service.d"
+    directory.mkdir(mode=0o755)
+    one.verify_dropin_directory(directory, live=False)
+    with pytest.raises(one.OperationalBlock, match="dropin_directory_unsafe"):
+        one.verify_dropin_directory(directory, live=True)
+
+
 def test_one_shot_switch_then_restores_exact_original(tmp_path, monkeypatch):
     fake, args = fixture(tmp_path, monkeypatch)
     original = fake.capture()

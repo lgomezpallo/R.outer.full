@@ -156,6 +156,26 @@ def require_privileged_private_root(root: Path) -> None:
 
 
 
+def verify_dropin_directory(directory: Path, *, live: bool) -> None:
+    """Require a non-symlink, non-writable-by-others systemd drop-in directory.
+
+    A group/world-writable directory could change between preflight and
+    daemon-reload, invalidating even an exact snapshot comparison. The live
+    system must use the fixed root-owned systemd path. Isolated fake-system
+    tests may use a private temporary directory without pretending it is
+    Oracle or root-owned.
+    """
+    try:
+        if directory.is_symlink():
+            raise OperationalBlock("dropin_directory_unsafe")
+        st = directory.stat()
+    except OSError:
+        raise OperationalBlock("dropin_directory_unsafe") from None
+    if (not stat.S_ISDIR(st.st_mode) or st.st_mode & 0o022
+            or (live and (directory != DROPINS or st.st_uid != 0))):
+        raise OperationalBlock("dropin_directory_unsafe")
+
+
 def verify_disk_dropin_inventory(before: Observed, directory: Path) -> None:
     """Reject on-disk .conf drift hidden by systemd's cached DropInPaths.
 
@@ -278,8 +298,7 @@ def run_once(*, system: LiveSystemd, app: Path, releases: Path,
         candidate = verify_preflight(
             before, app=app, releases=releases, release_sha=release_sha,
             verified_release_sha=verified_release_sha)
-        if dropin_dir.is_symlink() or not dropin_dir.is_dir():
-            raise OperationalBlock("dropin_directory_unsafe")
+        verify_dropin_directory(dropin_dir, live=isinstance(system, LiveSystemd))
         if (dropin_dir / p3.LATE_DROPIN).exists() or (
             dropin_dir / p3.LATE_DROPIN).is_symlink():
             raise OperationalBlock("dropin_already_present")

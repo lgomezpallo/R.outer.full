@@ -292,4 +292,15 @@ def rank(providers: list[RegisteredProvider], req: RouteRequest) -> list[Decisio
     # predictable fallback order when providers are registered in a different
     # order. Scores still determine preference; provider/model IDs only break
     # exact ties, without granting eligibility or overriding billing gates.
-    return sorted(decisions, key=lambda d: (-d.score, d.provider, d.model))
+    ordered = sorted(decisions, key=lambda d: (-d.score, d.provider, d.model))
+    # openrouter/free delegates selection to OpenRouter and hides the actual
+    # model from Router's per-model cooldown, metrics and fallback. Keep it
+    # available as a last resort, but exhaust explicitly identified :free
+    # variants first when any are eligible. This changes ordering only:
+    # billing/capability gates above still decide eligibility.
+    if any(d.provider == "openrouter" and d.model.endswith(":free") for d in ordered):
+        ordered.sort(key=lambda d: (
+            d.provider == "openrouter" and d.model == "openrouter/free",
+            -d.score, d.provider, d.model,
+        ))
+    return ordered

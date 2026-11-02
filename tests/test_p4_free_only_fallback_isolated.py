@@ -127,12 +127,12 @@ def test_manual_catalog_free_label_cannot_authorize_non_free_variant(monkeypatch
         ProviderClient._require_billing_eligible(registered, model.id)
 
 
-def test_503_retry_after_on_free_openrouter_model_falls_back_without_paid_dispatch(monkeypatch):
-    """Model-specific 503 cooldown must not disable another :free model.
+@pytest.mark.parametrize("retry_after", ["1200", None])
+def test_503_on_free_openrouter_model_falls_back_without_paid_dispatch(monkeypatch, retry_after):
+    """503 must not spend free daily quota on same-model retries.
 
-    Uses a real HTTPStatusError object but never performs an HTTP request.
-    This differs from a generic RuntimeError failure: Retry-After must be
-    respected and the provider must remain eligible for its other free model.
+    Both with and without Retry-After, a different :free model remains
+    eligible; a server-provided wait is honored when present. No network.
     """
     from time import time
 
@@ -140,7 +140,8 @@ def test_503_retry_after_on_free_openrouter_model_falls_back_without_paid_dispat
     first = "nvidia/nemotron-3-ultra-550b-a55b:free"
     second = "google/gemma-4-26b-a4b-it:free"
     request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
-    response = httpx.Response(503, request=request, headers={"Retry-After": "1200"})
+    headers = {"Retry-After": retry_after} if retry_after else {}
+    response = httpx.Response(503, request=request, headers=headers)
     unavailable = httpx.HTTPStatusError(
         "simulated model unavailable", request=request, response=response
     )
@@ -172,7 +173,7 @@ def test_503_retry_after_on_free_openrouter_model_falls_back_without_paid_dispat
     assert client.calls == [first, second]  # no retry, paid or unknown request
     assert [attempt.ok for attempt in result.attempts] == [False, True]
     assert registered.state.available
-    assert registered.state.model(first).cooldown_until - time() > 1100
+    assert registered.state.model(first).cooldown_until - time() > (1100 if retry_after else 110)
     assert registered.state.model(second).available
 
 

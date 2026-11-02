@@ -21,3 +21,7 @@ Non-`:free` zero-priced models are `unknown` (not routed). Suffix alone **never*
 - `openrouter/free` — [official router page](https://openrouter.ai/openrouter/free/apps), selects an eligible free variant automatically; explicit model IDs are preferable for per-model cooldown and fallback.
 
 Tests use `httpx.MockTransport` and a local fake completion client, with **no credentials, network, billing changes or production deployment**. Live availability and the account's actual billing settings are **not** established. A fresh authenticated inventory and operator authorization would still be needed before enabling live inference.
+
+## Free-quota preservation on HTTP 503
+
+OpenRouter's [current free-model policy](https://openrouter.ai/collections/free-models) states that failed requests count toward the 50-request/day free allowance. For a model-specific HTTP 503, Router therefore skips another attempt on the **same** `:free` model even when the response omits `Retry-After`, retains the model cooldown, and falls back to another eligible free model. If `Retry-After` is present, its cooldown is honored. This does not change paid/unknown eligibility, provider-wide 429 behavior, or production deployment. The parametrized HTTPStatusError test uses no provider credentials or network.

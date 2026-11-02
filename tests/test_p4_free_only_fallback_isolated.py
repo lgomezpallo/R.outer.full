@@ -248,7 +248,7 @@ def test_offline_only_blocks_injected_client_route_and_probe(monkeypatch):
 
     result = router.route(RouteRequest(task="offline fixture", decompose=False))
     assert not result.ok
-    assert result.error == "inference_blocked:offline_only"
+    assert result.error == "no_eligible_provider"  # existing offline API contract
     assert result.attempts == []
 
     probe = router.verify_capability("openrouter", model_id, "chat")

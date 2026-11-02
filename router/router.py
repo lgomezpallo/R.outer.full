@@ -252,12 +252,14 @@ class Router:
                     retryable, provider_wide, error_type, error_code, cooldown = self._classify_failure(exc)
                     # OpenRouter counts failed :free requests against its
                     # limited daily allowance. Retrying the same free model
-                    # after an HTTP 5xx can waste another quota slot. Try the
+                    # after an HTTP 5xx can waste another quota slot. This also
+                    # applies to openrouter/free, the opaque free-model router.
+                    # Try the
                     # next independently eligible model instead, retaining
                     # the failing model's cooldown. Do not change the retry
                     # policy for other providers or non-HTTP transport errors.
                     if (provider.spec.id == "openrouter"
-                            and decision.model.endswith(":free")
+                            and (decision.model.endswith(":free") or decision.model == "openrouter/free")
                             and error_code in {500, 502, 503, 504}):
                         retryable = False
                     attempts.append(Attempt(decision.provider, decision.model, False, latency, error, phase))

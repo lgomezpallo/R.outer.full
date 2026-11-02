@@ -184,6 +184,12 @@ class Router:
         unsupported = completion_transport_error(req)
         if unsupported is not None:
             return RouteResponse(False, None, None, None, [], [], unsupported)
+        # The offline release switch must block dispatch even when a caller
+        # injects a custom client that bypasses ProviderClient's transport guard.
+        # This also prevents simulated/custom capability clients from being
+        # accidentally used as a production escape hatch.
+        if offline_only():
+            return RouteResponse(False, None, None, None, [], [], "inference_blocked:offline_only")
         # Keep direct Python callers as safe as /route: an image cannot be
         # silently dispatched to a text-only model or lose its modality on fallback.
         required = effective_required_capabilities(req)
@@ -322,6 +328,18 @@ class Router:
                 "status": "inconclusive",
                 "latency_ms": 0,
                 "evidence": f"probe_blocked:{blocked}",
+            }
+
+        # Capability probes can be dispatched by injected clients as well.
+        # Offline mode must be enforced before invoking any probe transport.
+        if offline_only():
+            return {
+                "provider": provider_id,
+                "model": model_id,
+                "capability": capability,
+                "status": "inconclusive",
+                "latency_ms": 0,
+                "evidence": "probe_blocked:offline_only",
             }
 
         started = perf_counter()

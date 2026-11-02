@@ -101,6 +101,7 @@ def test_model_fallback_never_attempts_paid_or_unknown(monkeypatch):
             return "fixture-success", {"fixture": True}
 
     spec = _provider((
+        _model("openrouter/free", "free", 1000),  # opaque auto-router must not lead
         _model("nvidia/nemotron-3-ultra-550b-a55b:free", "free", 100),
         _model("google/gemma-4-26b-a4b-it:free", "free", 90),
         _model("fixture/paid", "paid", 1000),

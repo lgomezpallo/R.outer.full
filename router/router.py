@@ -189,7 +189,9 @@ class Router:
         # This also prevents simulated/custom capability clients from being
         # accidentally used as a production escape hatch.
         if offline_only():
-            return RouteResponse(False, None, None, None, [], [], "inference_blocked:offline_only")
+            # Preserve the existing /route offline response contract while
+            # preventing injected clients from dispatching any inference.
+            return RouteResponse(False, None, None, None, [], [], "no_eligible_provider")
         # Keep direct Python callers as safe as /route: an image cannot be
         # silently dispatched to a text-only model or lose its modality on fallback.
         required = effective_required_capabilities(req)

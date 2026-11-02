@@ -196,6 +196,8 @@ def main() -> int:
             # Only model, response and verified charge; no key or raw headers.
             print("LIVE_FREE_RESPONSE=" + json.dumps(answer[:160], ensure_ascii=True), flush=True)
             print("LIVE_FREE_REPORTED_MODEL=" + str(raw.get("model", "unknown"))[:100], flush=True)
+            print("LIVE_FREE_PROVIDER=openrouter", flush=True)
+            print("LIVE_FREE_GENERATION_ID=" + generation_id, flush=True)
             print("LIVE_FREE_GENERATION_COST_USD=0", flush=True)
             report("success")
             return 0

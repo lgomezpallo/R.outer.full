@@ -46,6 +46,10 @@ def test_oracle_jobs_fail_closed_in_offline_freeze(filename, job):
         assert "          RELEASE_SHA: 3377e3088c5249a0662aa05870eba18886d4f4e7" in source
         assert "    environment: router-production" in job_body
         assert approved in source.split("  tests:", 1)[1].split("  oracle-live-smoke:", 1)[0]
+    elif filename == "oracle-deploy.yml":
+        approved = """    if: ${{ github.event_name == 'workflow_dispatch' && contains(fromJSON('["preflight","snapshot","compare","reconcile-check","deploy"]'), inputs.mode) }}"""
+        assert approved in job_header, "Oracle deployment must require an explicit manual mode"
+        assert job_header.count("    if: ") == 1
     else:
         assert "    if: ${{ false }}" in job_header, f"{filename}: Oracle job is enabled"
     assert "ssh -i " in job_body, f"{filename}: review changed remote execution path"

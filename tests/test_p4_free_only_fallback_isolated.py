@@ -433,3 +433,34 @@ def test_openrouter_free_ambiguous_transport_falls_back_without_same_model_retry
     assert registered.state.available
     assert registered.state.model(first).cooldown_until - time() > 40
     assert registered.state.model(second).available
+
+
+@pytest.mark.parametrize("error_class", [httpx.ReadTimeout, httpx.RemoteProtocolError])
+def test_opaque_free_router_ambiguous_transport_never_repeats(monkeypatch, error_class):
+    """Even when no other free model exists, an opaque free request is sent once."""
+    monkeypatch.setenv("ROUTER_OFFLINE_ONLY", "0")
+    request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+    ambiguous = error_class("simulated response lost", request=request)
+
+    class LocalClient:
+        def __init__(self):
+            self.calls = []
+
+        def complete(self, provider, model, request):
+            self.calls.append(model)
+            raise ambiguous
+
+    spec = _provider((
+        _model("openrouter/free", "free", 100),
+        _model("fixture/paid", "paid", 1000),
+        _model("fixture/unknown", "unknown", 1000),
+    ))
+    client = LocalClient()
+    router = Router(client=client, max_retries=3, catalog=ProviderCatalog(providers=(spec,)))
+    router.add_provider("openrouter", "offline-fixture-key", discover=False)
+    result = router.route(RouteRequest(task="offline fixture", decompose=False))
+
+    assert not result.ok
+    assert result.error == "all_attempts_failed"
+    assert client.calls == ["openrouter/free"]
+    assert len(result.attempts) == 1

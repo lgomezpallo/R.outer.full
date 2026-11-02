@@ -386,3 +386,50 @@ def test_openrouter_opaque_free_router_server_error_does_not_retry(monkeypatch, 
     assert client.calls == ["openrouter/free"]
     assert len(result.attempts) == 1
     assert registered.state.model("openrouter/free").cooldown_until - time() > 40
+
+
+@pytest.mark.parametrize("error_class", [httpx.ReadTimeout, httpx.RemoteProtocolError])
+def test_openrouter_free_ambiguous_transport_falls_back_without_same_model_retry(monkeypatch, error_class):
+    """A POST may have reached OpenRouter before the response is lost.
+
+    Repeating the same :free ID could consume another daily free request.
+    Use a different explicitly free model; paid/unknown must never dispatch.
+    All requests here are simulated and require no credentials or network.
+    """
+    from time import time
+
+    monkeypatch.setenv("ROUTER_OFFLINE_ONLY", "0")
+    first = "nvidia/nemotron-3-ultra-550b-a55b:free"
+    second = "google/gemma-4-26b-a4b-it:free"
+    request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+    ambiguous = error_class("simulated response lost after POST", request=request)
+
+    class LocalClient:
+        def __init__(self):
+            self.calls = []
+
+        def complete(self, provider, model, request):
+            self.calls.append(model)
+            if model == first:
+                raise ambiguous
+            if model == second:
+                return "free-fallback-ok", {"fixture": True}
+            raise AssertionError("paid_or_unknown_dispatched")
+
+    spec = _provider((
+        _model(first, "free", 100),
+        _model(second, "free", 90),
+        _model("fixture/paid", "paid", 1000),
+        _model("fixture/unknown", "unknown", 1000),
+    ))
+    client = LocalClient()
+    router = Router(client=client, max_retries=3, catalog=ProviderCatalog(providers=(spec,)))
+    registered = router.add_provider("openrouter", "offline-fixture-key", discover=False)
+    result = router.route(RouteRequest(task="offline fixture", decompose=False))
+
+    assert result.ok and result.model == second
+    assert client.calls == [first, second]
+    assert [attempt.ok for attempt in result.attempts] == [False, True]
+    assert registered.state.available
+    assert registered.state.model(first).cooldown_until - time() > 40
+    assert registered.state.model(second).available

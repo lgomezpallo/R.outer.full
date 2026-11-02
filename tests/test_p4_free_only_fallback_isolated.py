@@ -218,3 +218,41 @@ def test_failed_openrouter_refresh_revokes_stale_free_snapshot_without_dispatch(
     assert current.spec.models[0].billing_status == "free"
     assert current.spec.models[0].discovered_in_last_snapshot
     assert current.spec.last_inventory_source == "client_discover_inventory"
+
+
+def test_offline_only_blocks_injected_client_route_and_probe(monkeypatch):
+    """Offline-only must block even custom clients, not only ProviderClient.
+
+    A production route/probe must not be able to bypass the release offline
+    switch by injecting an alternate client implementation. No network/keys.
+    """
+    monkeypatch.setenv("ROUTER_OFFLINE_ONLY", "1")
+    model_id = "google/gemma-4-26b-a4b-it:free"
+
+    class InjectedClient:
+        def __init__(self):
+            self.calls = []
+
+        def complete(self, provider, model, request):
+            self.calls.append(("complete", model))
+            raise AssertionError("offline_route_dispatched")
+
+        def probe_capability(self, provider, model, capability):
+            self.calls.append(("probe", model))
+            raise AssertionError("offline_probe_dispatched")
+
+    client = InjectedClient()
+    catalog = ProviderCatalog(providers=(_provider((_model(model_id, "free", 100),)),))
+    router = Router(client=client, catalog=catalog)
+    registered = router.add_provider("openrouter", "not-a-real-key", discover=False)
+
+    result = router.route(RouteRequest(task="offline fixture", decompose=False))
+    assert not result.ok
+    assert result.error == "inference_blocked:offline_only"
+    assert result.attempts == []
+
+    probe = router.verify_capability("openrouter", model_id, "chat")
+    assert probe["status"] == "inconclusive"
+    assert probe["evidence"] == "probe_blocked:offline_only"
+    assert client.calls == []
+    assert registered.spec.models[0].evidence == ()

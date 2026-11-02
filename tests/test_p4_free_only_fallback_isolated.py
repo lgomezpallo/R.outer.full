@@ -297,7 +297,7 @@ def test_opaque_auto_router_remains_fallback_when_no_explicit_free_is_eligible(m
     assert ranked == ["openrouter/free"]
 
 
-@pytest.mark.parametrize("status_code", [500, 502, 504])
+@pytest.mark.parametrize("status_code", [408, 409, 500, 502, 504])
 def test_openrouter_free_server_errors_skip_same_model_retry(monkeypatch, status_code):
     """Each failed :free HTTP request may consume quota; prefer another free ID.
 
@@ -347,11 +347,11 @@ def test_openrouter_free_server_errors_skip_same_model_retry(monkeypatch, status
     assert registered.state.model(second).available
 
 
-@pytest.mark.parametrize("status_code", [500, 502, 503, 504])
+@pytest.mark.parametrize("status_code", [408, 409, 500, 502, 503, 504])
 def test_openrouter_opaque_free_router_server_error_does_not_retry(monkeypatch, status_code):
     """The opaque free router consumes the same free quota as explicit :free IDs.
 
-    A 5xx response must consume only one local attempt, even when the generic
+    An HTTP error response must consume only one local attempt, even when the generic
     retry budget allows more. All transport is simulated; no live API or key.
     """
     from time import time
